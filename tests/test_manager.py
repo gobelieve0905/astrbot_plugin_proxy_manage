@@ -90,7 +90,11 @@ class TestConfigurationRules(unittest.TestCase):
 
     def test_runtime_apply_must_verify_groups_and_rules(self):
         manager = self._manager_for_runtime()
-        response = self.module.httpx.Response(200, json={"mode": "rule", "mixed-port": 7890, "proxies": {}})
+        response = self.module.httpx.Response(
+            200,
+            json={"mode": "rule", "mixed-port": 7890, "proxies": {}},
+            request=self.module.httpx.Request("GET", "http://mihomo:9090/configs"),
+        )
         client = AsyncMock()
         client.__aenter__.return_value = client
         client.put.return_value = response
