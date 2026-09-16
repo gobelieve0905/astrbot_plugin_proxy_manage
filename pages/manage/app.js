@@ -97,7 +97,7 @@ function bind(){
   $('confirm-import')?.addEventListener('click',confirmImport)
   document.querySelectorAll('[data-refresh]').forEach(button=>button.addEventListener('click',()=>refreshSubscription(button.dataset.refresh)))
   document.querySelectorAll('[data-test]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{const result=await api.apiPost('node-probe',{node_id:button.dataset.test});state.health[result.node_id]=result.health;render();note('节点测速完成')}catch(error){note(error.message,true)}finally{button.disabled=false}}))
-  $('test-all')?.addEventListener('click',async()=>{const button=$('test-all');button.disabled=true;note('正在批量测速...');try{const result=await api.apiPost('nodes-probe',{node_ids:state.nodes.map(node=>node.id)});state.health=result.health;render();note(`已完成 ${result.tested} 个节点测速`)}catch(error){note(error.message,true)}finally{button.disabled=false}})
+  $('test-all')?.addEventListener('click',async()=>{const button=$('test-all');button.disabled=true;note('正在批量测速...');try{const result=await api.apiPost('nodes-probe',{node_ids:state.nodes.map(node=>node.id)});state.health=result.health;render();note(`测速完成：${result.succeeded} 个可用，${result.failed} 个失败`)}catch(error){note(error.message,true)}finally{button.disabled=false}})
   document.querySelectorAll('[data-platform]').forEach(select=>select.addEventListener('change',()=>{state.platforms[select.dataset.platform]={name:select.dataset.platform,group_id:select.value,enabled:true}}))
   document.querySelectorAll('[data-template]').forEach(button=>button.addEventListener('click',()=>{
     const template=state.templates[button.dataset.template],id=`${button.dataset.template}-${Date.now()}`

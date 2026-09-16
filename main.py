@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hashlib
 import json
 import re
@@ -72,6 +73,12 @@ def ident(value: object) -> str:
     return re.sub(r'[^a-zA-Z0-9_-]','-',str(value or '').strip())[:64]
 
 
+def safe_error(value: object) -> str:
+    """Keep diagnostics useful without persisting subscription credentials or URLs."""
+    text=str(value or '')[:300]
+    return re.sub(r'(?i)(https?|socks5h?)://[^\s]+', lambda m: m.group(1)+'://[redacted]', text)
+
+
 def region_of(name: str) -> str:
     lowered=name.lower()
     for code,pattern in REGIONS:
@@ -80,7 +87,7 @@ def region_of(name: str) -> str:
     return '其他'
 
 
-@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.3')
+@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.4')
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -280,6 +287,8 @@ class ProxyManager(Star):
         if self.path.exists(): self.backup.write_text(self.path.read_text(encoding='utf-8'),encoding='utf-8')
         temp=self.path.with_suffix('.tmp')
         temp.write_text(json.dumps(normalized,ensure_ascii=False,indent=2),encoding='utf-8')
+        try: temp.chmod(0o600)
+        except OSError: pass
         temp.replace(self.path); self.state=normalized
 
     def persist_health(self):
@@ -475,7 +484,7 @@ class ProxyManager(Star):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.3'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.4'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -497,20 +506,24 @@ class ProxyManager(Star):
         self.state['nodes']=[node for node in self.state['nodes'] if node['id'] not in old]+nodes
         subscription['node_ids']=[node['id'] for node in nodes]
 
+    @staticmethod
+    def _stable_node_id(subscription_id:str, endpoint:str) -> str:
+        return subscription_id+'-'+hashlib.sha256(endpoint.strip().encode()).hexdigest()[:16]
+
     def _record_subscription_error(self,subscription:dict,message:str):
         now=int(time.time())
-        subscription['last_error']=str(message)[:300]
+        subscription['last_error']=safe_error(message)
         subscription['consecutive_errors']=int(subscription.get('consecutive_errors',0))+1
-        subscription['errors']=(subscription.get('errors',[])+[{'at':now,'message':str(message)[:300]}])[-20:]
+        subscription['errors']=(subscription.get('errors',[])+[{'at':now,'message':safe_error(message)}])[-20:]
         interval=max(int(subscription.get('interval',60) or 60),5)
         subscription['next_refresh_at']=now+min(max(interval,300),3600)
 
     async def _refresh_subscription(self,subscription_id:str):
         async with self.refresh_lock:
-            fetch_target=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
-            if not fetch_target: raise ValueError('订阅不存在')
+            subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
+            if not subscription: raise ValueError('订阅不存在')
             async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(fetch_target['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.3'})
+                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.4'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -519,8 +532,11 @@ class ProxyManager(Star):
             async with self.lock:
                 subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
                 if not subscription: raise ValueError('订阅已在刷新时被删除')
-                previous=self.state
+                previous=copy.deepcopy(self.state)
                 try:
+                    for node in nodes:
+                        node['id']=self._stable_node_id(subscription_id,node['endpoint'])
+                        node['subscription_id']=subscription_id
                     self._replace_subscription_nodes(subscription,nodes)
                     now=int(time.time()); traffic=self._traffic_header(response.headers)
                     subscription.update({'updated_at':now,'upload':max(0,int(traffic.get('upload',subscription.get('upload',0)) or 0)),
@@ -548,7 +564,7 @@ class ProxyManager(Star):
             async with self.lock:
                 self._record_subscription_error(subscription,str(last_error))
                 await self.persist(self.state)
-        self.event({'action':'subscription_refresh','subscription_id':subscription_id,'result':'failed','message':str(last_error)[:200]})
+        self.event({'action':'subscription_refresh','subscription_id':subscription_id,'result':'failed','message':safe_error(last_error)[:200]})
         raise last_error
 
     async def subscription_refresh(self):
@@ -564,7 +580,7 @@ class ProxyManager(Star):
             if not preview: raise ValueError('导入预览已过期，请重新预览')
             imported=[]
             async with self.lock:
-                previous=self.state
+                previous=copy.deepcopy(self.state)
                 try:
                     for item in preview['items']:
                         if not item['nodes']: continue
@@ -579,7 +595,9 @@ class ProxyManager(Star):
                                           'last_error':'','consecutive_errors':0,'errors':[]}
                             self.state['subscriptions'].append(subscription)
                         subscription.update({'name':item['name'],'group':item['group'],'interval':item['interval'],'enabled':True})
-                        for node in item['nodes']: node['subscription_id']=subscription['id']
+                        for node in item['nodes']:
+                            node['subscription_id']=subscription['id']
+                            node['id']=self._stable_node_id(subscription['id'],node['endpoint'])
                         self._replace_subscription_nodes(subscription,item['nodes'])
                         now=int(time.time()); interval=int(item['interval'])
                         subscription['updated_at']=now
@@ -617,7 +635,7 @@ class ProxyManager(Star):
             if node['kind']=='mihomo':
                 control,headers=self._control(); timeout=max(1,min(int(payload.get('timeout',5) or 5),15))
                 async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=timeout,trust_env=False) as client:
-                    response=await client.get('/proxies/'+quote(node['name'],safe=''),params={'url':target,'timeout':timeout*1000})
+                    response=await client.get('/proxies/'+quote(node['name'],safe='')+'/delay',params={'url':target,'timeout':timeout*1000})
                 response.raise_for_status(); data=response.json()
                 if not isinstance(data.get('delay'),int): raise ValueError('外部控制接口未返回延迟')
                 latency=int(data['delay'])
@@ -643,10 +661,14 @@ class ProxyManager(Star):
             semaphore=asyncio.Semaphore(5)
             async def test(node):
                 async with semaphore:
-                    try: await self.node_probe({'node_id':node['id'],'url':payload.get('url','https://www.gstatic.com/generate_204'),'timeout':payload.get('timeout',5)})
+                    try: await self._probe_node({'node_id':node['id'],'url':payload.get('url','https://www.gstatic.com/generate_204'),'timeout':payload.get('timeout',5)})
                     except Exception: pass
             await asyncio.gather(*(test(node) for node in nodes[:100]))
-            return json_response({'health':self.health,'tested':min(len(nodes),100)})
+            tested=min(len(nodes),100)
+            results=[self.health.get(node['id'],{}) for node in nodes[:tested]]
+            return json_response({'health':self.health,'tested':tested,
+                                  'succeeded':sum(item.get('status')=='ok' for item in results),
+                                  'failed':sum(item.get('status') in {'error','timeout'} for item in results)})
         except (ValueError,TypeError) as exc: return error_response(str(exc))
 
     async def control_status(self):
@@ -680,7 +702,7 @@ class ProxyManager(Star):
     async def initialize(self):
         if self.auto_task and not self.auto_task.done(): self.auto_task.cancel()
         self.auto_task=asyncio.create_task(self._auto_loop())
-        logger.info('代理管理中心 0.2.3 已加载')
+        logger.info('代理管理中心 0.2.4 已加载')
 
     async def terminate(self):
         if self.auto_task:
