@@ -81,7 +81,40 @@ class TestConfigurationRules(unittest.TestCase):
         manager.events = []
         manager._test_dir = tempfile.TemporaryDirectory()
         manager.events_path = Path(manager._test_dir.name) / "events.jsonl"
+        manager.health = {}
+        manager.health_path = Path(manager._test_dir.name) / "health.json"
         return manager
+
+    def test_kernel_not_configured_is_explicit(self):
+        manager = self._manager_for_runtime()
+        manager.state["control"] = {"enabled": False, "url": "", "secret": "", "timeout": 8}
+        status = asyncio.run(manager._kernel_status())
+        self.assertEqual(status["state"], "not_configured")
+        result = asyncio.run(manager._probe_node({"node_id": "hk-1"}))
+        self.assertTrue(result["skipped"])
+        self.assertEqual(manager.health["hk-1"]["status"], "pending")
+
+    def test_kernel_status_distinguishes_version_and_runtime_states(self):
+        manager = self._manager_for_runtime()
+        request = self.module.httpx.Request("GET", "http://mihomo:9090/version")
+        def response(payload, status=200):
+            return self.module.httpx.Response(status, json=payload, request=request)
+        client = AsyncMock(); client.__aenter__.return_value = client
+        client.get = AsyncMock(return_value=response({"meta": False, "version": "1.18.0"}))
+        with patch.object(self.module.httpx, "AsyncClient", return_value=client):
+            self.assertEqual(asyncio.run(manager._kernel_status())["state"], "version_unsupported")
+        client.get = AsyncMock(side_effect=[
+            response({"meta": True, "version": "1.19.0"}),
+            response({"mode": "global"}), response({"proxies": {}}), response({"rules": []}),
+        ])
+        with patch.object(self.module.httpx, "AsyncClient", return_value=client):
+            self.assertEqual(asyncio.run(manager._kernel_status())["state"], "config_not_applied")
+        client.get = AsyncMock(side_effect=[
+            response({"meta": True, "version": "1.19.0"}),
+            response({"mode": "rule"}), response({"proxies": {}}), response({"rules": []}),
+        ])
+        with patch.object(self.module.httpx, "AsyncClient", return_value=client):
+            self.assertEqual(asyncio.run(manager._kernel_status())["state"], "runtime_inconsistent")
 
     def test_runtime_groups_must_follow_selected_node_members(self):
         document = self._manager_for_runtime()._runtime_document()

@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id)
 const api = window.AstrBotPluginPage
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台策略',control:'控制接口',logs:'连接日志'}
-let state, original, tab='overview', controlResult=null, importPreview=null, importing=false
+let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importing=false
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 function note(text,error=false){ $('notice').textContent=text; $('notice').hidden=!text; $('notice').className=error?'error':'' }
@@ -15,7 +15,7 @@ function traffic(item){
 }
 function expiry(value){ if(!value)return '无到期信息'; const days=Math.ceil((value*1000-Date.now())/86400000); return `${new Date(value*1000).toLocaleDateString()}（${days>=0?days+' 天':'已到期'}）` }
 function health(id){ return state.health?.[id]||{status:'unknown',latency_ms:null,error:'',checked_at:0} }
-function statusLabel(item){ return {ok:'可用',error:'异常',timeout:'超时',unknown:'未检测'}[item.status]||'未检测' }
+function statusLabel(item){ return {ok:'可用',error:'异常',timeout:'超时',pending:'待接入内核',unknown:'未检测'}[item.status]||'未检测' }
 function nextRun(item){ if(!item.enabled||!item.interval)return '手动'; return item.next_refresh_at<=Date.now()/1000?'即将刷新':time(item.next_refresh_at) }
 
 function render(){
@@ -23,7 +23,9 @@ function render(){
   if(tab==='overview'){
     const values=Object.values(state.health||{})
     const ok=values.filter(item=>item.status==='ok').length, bad=values.filter(item=>['error','timeout'].includes(item.status)).length
-    html=`<div class="hero"><b>当前配置</b><strong>${esc(state.name)}</strong><span class="online">● 运行中</span></div>
+    const kernelText={not_configured:'未配置',connection_failed:'连接失败',auth_failed:'认证失败',version_unsupported:'版本不支持',config_not_applied:'配置未应用',runtime_inconsistent:'运行配置不一致',connected:'已连接'}[kernelStatus.state]||'未检查'
+    const kernelClass=kernelStatus.state==='connected'?'online':'error'
+    html=`<div class="hero"><b>当前配置</b><strong>${esc(state.name)}</strong><span class="${kernelClass}">● 内核：${kernelText}</span><small>${esc(kernelStatus.message||'')}</small></div>
       <div class="cards">${[['subscriptions','订阅'],['nodes','节点'],['groups','代理组'],['routes','规则']].map(([key,label])=>`<article><b>${state[key].length}</b><span>${label}</span></article>`).join('')}</div>
       <div class="cards"><article><b>${ok}</b><span>可用节点</span></article><article><b>${bad}</b><span>异常节点</span></article><article><b>${state.subscriptions.filter(item=>item.enabled&&item.interval).length}</b><span>自动订阅</span></article><article><b>${state.events.length}</b><span>最近事件</span></article></div>
       <section class="panel"><h2>分流预览</h2><div class="inline"><input id="host" placeholder="api.telegram.org"><button id="preview">查询</button></div><pre id="result">输入域名查看命中的代理组和节点。</pre></section>`
@@ -97,7 +99,7 @@ function bind(){
   $('confirm-import')?.addEventListener('click',confirmImport)
   document.querySelectorAll('[data-refresh]').forEach(button=>button.addEventListener('click',()=>refreshSubscription(button.dataset.refresh)))
   document.querySelectorAll('[data-test]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{const result=await api.apiPost('node-probe',{node_id:button.dataset.test});state.health[result.node_id]=result.health;render();note('节点测速完成')}catch(error){note(error.message,true)}finally{button.disabled=false}}))
-  $('test-all')?.addEventListener('click',async()=>{const button=$('test-all');button.disabled=true;note('正在批量测速...');try{const result=await api.apiPost('nodes-probe',{node_ids:state.nodes.map(node=>node.id)});state.health=result.health;render();note(`测速完成：${result.succeeded} 个可用，${result.failed} 个失败`)}catch(error){note(error.message,true)}finally{button.disabled=false}})
+  $('test-all')?.addEventListener('click',async()=>{const button=$('test-all');button.disabled=true;note('正在批量测速...');try{const result=await api.apiPost('nodes-probe',{node_ids:state.nodes.map(node=>node.id)});state.health=result.health;render();note(`测速完成：${result.succeeded} 个可用，${result.failed} 个失败，${result.skipped||0} 个未执行`)}catch(error){note(error.message,true)}finally{button.disabled=false}})
   document.querySelectorAll('[data-platform]').forEach(select=>select.addEventListener('change',()=>{state.platforms[select.dataset.platform]={name:select.dataset.platform,group_id:select.value,enabled:true}}))
   document.querySelectorAll('[data-template]').forEach(button=>button.addEventListener('click',()=>{
     const template=state.templates[button.dataset.template],id=`${button.dataset.template}-${Date.now()}`
@@ -128,7 +130,7 @@ async function refreshSubscription(id){
 async function checkControl(){
   try{ await saveChanges();controlResult=await api.apiGet('control-status');render();note('控制接口连接成功') }catch(error){note(error.message,true)}
 }
-async function load(){ try{ state=await api.apiGet('state');original=structuredClone(state);controlResult=null;importPreview=null;render() }catch(error){note(error.message,true)} }
+async function load(){ try{ state=await api.apiGet('state');kernelStatus=await api.apiGet('kernel-status');original=structuredClone(state);controlResult=null;importPreview=null;render() }catch(error){note(error.message,true)} }
 
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render()}))
 $('reload').addEventListener('click',load)

@@ -87,7 +87,7 @@ def region_of(name: str) -> str:
     return '其他'
 
 
-@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.5')
+@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.6')
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -268,6 +268,7 @@ class ProxyManager(Star):
             ('control-status',self.control_status,['GET']), ('control-select',self.control_select,['POST']),
             ('node-probe',self.node_probe,['POST']), ('nodes-probe',self.nodes_probe,['POST']),
             ('runtime-config',self.runtime_config,['GET']), ('runtime-apply',self.runtime_apply,['POST']),
+            ('kernel-status',self.kernel_status,['GET']),
         )
         for name,handler,methods in routes:
             self.context.register_web_api(base+'/'+name,handler,methods,'代理管理中心')
@@ -485,7 +486,7 @@ class ProxyManager(Star):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.5'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.6'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -524,7 +525,7 @@ class ProxyManager(Star):
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
             async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.5'})
+                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.6'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -616,6 +617,43 @@ class ProxyManager(Star):
         if not control['enabled'] or not control['url']: raise ValueError('Mihomo 协议测速需要先启用外部控制接口')
         return control,({'Authorization':'Bearer '+control['secret']} if control['secret'] else {})
 
+    async def _kernel_status(self) -> dict:
+        control=self.state['control']
+        if not control['enabled'] or not control['url']:
+            return {'state':'not_configured','ready':False,'message':'尚未配置 Mihomo 控制接口'}
+        try:
+            headers={'Authorization':'Bearer '+control['secret']} if control['secret'] else {}
+            async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
+                version_response=await client.get('/version'); version_response.raise_for_status()
+                version=version_response.json()
+                raw_version=str(version.get('version',''))
+                match=re.search(r'(\d+)\.(\d+)\.(\d+)',raw_version)
+                if not version.get('meta') or not match or tuple(map(int,match.groups())) < (1,19,0):
+                    return {'state':'version_unsupported','ready':False,'message':'需要 Mihomo Meta 1.19.0 或更高版本','version':raw_version}
+                configs=await client.get('/configs'); configs.raise_for_status(); runtime=configs.json()
+                proxies_response=await client.get('/proxies'); proxies_response.raise_for_status(); proxies=proxies_response.json().get('proxies',{})
+                rules_response=await client.get('/rules'); rules_response.raise_for_status(); runtime_rules=rules_response.json().get('rules',[])
+            if runtime.get('mode')!='rule':
+                return {'state':'config_not_applied','ready':True,'message':'Mihomo 已连接，但插件配置尚未应用','version':raw_version}
+            try:
+                expected=self._runtime_document()
+            except ValueError:
+                expected=None
+            if expected:
+                names={group['name'] for group in expected['proxy-groups']}
+                if not isinstance(proxies,dict) or not names.issubset(proxies) or len(runtime_rules)<len(expected['rules']):
+                    return {'state':'runtime_inconsistent','ready':True,'message':'运行配置与插件配置不一致','version':raw_version}
+            return {'state':'connected','ready':True,'message':'Mihomo 已连接且运行配置已核对','version':raw_version}
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in {401,403}:
+                return {'state':'auth_failed','ready':False,'message':'Mihomo 控制接口认证失败'}
+            return {'state':'connection_failed','ready':False,'message':'Mihomo 控制接口请求失败'}
+        except (httpx.HTTPError,OSError,ValueError,TypeError):
+            return {'state':'connection_failed','ready':False,'message':'无法连接 Mihomo 控制接口'}
+
+    async def kernel_status(self):
+        return json_response(await self._kernel_status())
+
     def _runtime_document(self) -> dict:
         """Build the controlled Mihomo fragment from plugin intent.
 
@@ -681,6 +719,9 @@ class ProxyManager(Star):
 
     async def runtime_apply(self):
         try:
+            kernel=await self._kernel_status()
+            if kernel['state'] in {'not_configured','connection_failed','auth_failed','version_unsupported'}:
+                raise ValueError('无法应用配置：'+kernel['message'])
             document=self._runtime_document(); control,headers=self._control()
             import yaml
             payload={'path':'/config.yaml','payload':yaml.safe_dump(document,allow_unicode=True,sort_keys=False)}
@@ -718,6 +759,11 @@ class ProxyManager(Star):
             node=next((item for item in self.state['nodes'] if item['id']==node_id and item['enabled']),None)
             if not node: raise ValueError('节点不存在或未启用')
             if not safe_url(target): raise ValueError('测速目标只允许 HTTP 或 HTTPS 地址')
+            if node['kind']=='mihomo' and urlparse(node['endpoint']).scheme not in {'http','https','socks5','socks5h'}:
+                kernel=await self._kernel_status()
+                if kernel['state']!='connected':
+                    self._set_health(node,'pending',None,kernel['message'])
+                    return json_response({'node_id':node_id,'health':self.health[node_id],'skipped':True,'kernel':kernel})
             started=time.monotonic()
             if node['kind']=='mihomo' and urlparse(node['endpoint']).scheme not in {'http','https','socks5','socks5h'}:
                 # Native Mihomo protocol URIs are measured by the running core when a
@@ -758,7 +804,8 @@ class ProxyManager(Star):
             results=[self.health.get(node['id'],{}) for node in nodes[:tested]]
             return json_response({'health':self.health,'tested':tested,
                                   'succeeded':sum(item.get('status')=='ok' for item in results),
-                                  'failed':sum(item.get('status') in {'error','timeout'} for item in results)})
+                                  'failed':sum(item.get('status') in {'error','timeout'} for item in results),
+                                  'skipped':sum(item.get('status')=='pending' for item in results)})
         except (ValueError,TypeError) as exc: return error_response(str(exc))
 
     async def control_status(self):
@@ -792,7 +839,7 @@ class ProxyManager(Star):
     async def initialize(self):
         if self.auto_task and not self.auto_task.done(): self.auto_task.cancel()
         self.auto_task=asyncio.create_task(self._auto_loop())
-        logger.info('代理管理中心 0.2.5 已加载')
+        logger.info('代理管理中心 0.2.6 已加载')
 
     async def terminate(self):
         if self.auto_task:
