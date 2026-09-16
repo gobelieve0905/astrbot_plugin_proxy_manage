@@ -1,1 +1,35 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>代理管理中心</title><link rel="stylesheet" href="./style.css"></head><body><aside><div class="brand">◈ <b>代理中心</b><small>CLASH VERGE · 0.2.0</small></div><nav><button data-tab="overview">概览</button><button data-tab="nodes">代理节点</button><button data-tab="groups">代理组</button><button data-tab="routes">分流规则</button><button data-tab="platforms">平台策略</button><button data-tab="logs">连接日志</button></nav><button id="reload">↻ 刷新状态</button></aside><main><header><div><span id="crumb">概览</span><h1 id="title">代理中心</h1><p class="muted">为 AstrBot 的不同平台选择独立出口，其他请求保持直连。</p></div><div><button id="rollback">恢复上一版</button><button id="save" class="primary">预览并保存</button></div></header><div id="notice" hidden></div><section id="content"></section></main><dialog id="diff"><h2>确认配置变更</h2><pre id="diff-text"></pre><button id="cancel">取消</button><button id="confirm" class="primary">确认保存</button></dialog><script type="module" src="./app.js"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>代理管理中心</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <aside>
+    <div class="brand"><b>代理中心</b><small>CLASH VERGE · 0.2.1</small></div>
+    <nav>
+      <button data-tab="overview">概览</button>
+      <button data-tab="subscriptions">订阅管理</button>
+      <button data-tab="nodes">代理节点</button>
+      <button data-tab="groups">代理组</button>
+      <button data-tab="routes">分流规则</button>
+      <button data-tab="platforms">平台策略</button>
+      <button data-tab="control">控制接口</button>
+      <button data-tab="logs">连接日志</button>
+    </nav>
+    <button id="reload">刷新状态</button>
+  </aside>
+  <main>
+    <header>
+      <div><span id="crumb">概览</span><h1>代理中心</h1><p class="muted">为不同平台选择独立出口，其他请求保持直连。</p></div>
+      <div class="actions"><button id="rollback">恢复上一版</button><button id="save" class="primary">预览并保存</button></div>
+    </header>
+    <div id="notice" hidden></div>
+    <section id="content"></section>
+  </main>
+  <dialog id="diff"><h2>确认配置变更</h2><pre id="diff-text"></pre><div class="dialog-actions"><button id="cancel">取消</button><button id="confirm" class="primary">确认保存</button></div></dialog>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
