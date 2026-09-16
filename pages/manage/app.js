@@ -15,7 +15,7 @@ function traffic(item){
 }
 function expiry(value){ if(!value)return '无到期信息'; const days=Math.ceil((value*1000-Date.now())/86400000); return `${new Date(value*1000).toLocaleDateString()}（${days>=0?days+' 天':'已到期'}）` }
 function health(id){ return state.health?.[id]||{status:'unknown',latency_ms:null,error:'',checked_at:0} }
-function statusLabel(item){ return {ok:'可用',error:'异常',timeout:'超时',pending:'待接入内核',unknown:'未检测'}[item.status]||'未检测' }
+function statusLabel(item){ return {ok:'可用',error:'异常',timeout:'超时',pending:'待接入内核',unknown:'未检测',invalid:'引用失效'}[item.status]||'未检测' }
 function nextRun(item){ if(!item.enabled||!item.interval)return '手动'; return item.next_refresh_at<=Date.now()/1000?'即将刷新':time(item.next_refresh_at) }
 
 function render(){
@@ -43,7 +43,7 @@ function render(){
     html=`<section class="panel"><div class="bar"><h2>代理节点</h2><div class="actions"><button id="add">新增节点</button><button id="test-all">批量测速</button></div></div>
       ${state.nodes.map((node,index)=>{const item=health(node.id);return `<div class="node-card" data-i="${index}">
         <div class="table"><input data-k="name" value="${esc(node.display_name||node.name)}"><span class="chip">${esc(node.protocol||node.kind)} · ${esc(node.engine||'')}</span><input data-k="endpoint" value="${esc(node.endpoint)}" placeholder="完整连接 URI 或 HTTP/SOCKS 地址"><label><input type="checkbox" data-k="excluded" ${node.excluded?'checked':''}>排除测速/组选优</label><button data-del="nodes">删除</button></div>
-        <div class="node-meta"><span class="chip ${item.status}">${statusLabel(item)}</span><b>${item.latency_ms??'--'}</b><span>ms</span><span>${time(item.checked_at)}</span><span>${esc(node.subscription_id?'订阅：'+node.subscription_id:'手动节点')}</span><button data-test="${esc(node.id)}">测速</button></div>
+        <div class="node-meta"><span class="chip ${node.invalid_reference?'invalid':item.status}">${node.invalid_reference?'引用失效':statusLabel(item)}</span><b>${item.latency_ms??'--'}</b><span>ms</span><span>${time(item.checked_at)}</span><span>${esc(node.subscription_id?'订阅：'+node.subscription_id:'手动节点')}</span><button data-test="${esc(node.id)}" ${node.invalid_reference?'disabled':''}>测速</button></div>
         ${item.error?`<div class="node-error">${esc(item.error)}</div>`:''}</div>`}).join('')||'<p class="muted">暂无节点。</p>'}</section>`
   } else if(tab==='groups'){
     html=`<section class="panel"><div class="bar"><h2>代理组</h2><button id="add">新增代理组</button></div>

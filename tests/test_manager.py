@@ -146,6 +146,22 @@ class TestConfigurationRules(unittest.TestCase):
         with self.assertRaises(ValueError):
             manager.resolve('hk')
 
+    def test_legacy_ids_migrate_group_and_selection(self):
+        manager = self._manager_for_runtime()
+        normalized = manager._normalize({'nodes':[{'id':'old-1','name':'重复','kind':'mihomo','endpoint':'anytls://a','subscription_id':'sub-a','enabled':True}], 'groups':[{'id':'g','name':'G','mode':'select','node_ids':['old-1'],'selected':'old-1'}]})
+        new_id = manager._stable_node_id('sub-a','anytls://a')
+        self.assertEqual(normalized['nodes'][0]['id'], new_id)
+        self.assertEqual(normalized['groups'][0]['node_ids'], [new_id])
+        self.assertEqual(normalized['groups'][0]['selected'], new_id)
+
+    def test_same_display_name_from_two_subscriptions_has_distinct_ids(self):
+        manager = self._manager_for_runtime()
+        text = 'anytls://a@example.com:443#香港'
+        first, _ = manager._parse_subscription(text, 'sub-a')
+        second, _ = manager._parse_subscription(text, 'sub-b')
+        self.assertEqual(first[0]['display_name'], second[0]['display_name'])
+        self.assertNotEqual(first[0]['id'], second[0]['id'])
+
     def test_runtime_apply_must_verify_groups_and_rules(self):
         manager = self._manager_for_runtime()
         response = self.module.httpx.Response(

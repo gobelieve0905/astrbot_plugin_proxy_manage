@@ -87,7 +87,7 @@ def region_of(name: str) -> str:
     return '其他'
 
 
-@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.8')
+@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.9')
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -99,7 +99,10 @@ class ProxyManager(Star):
         self.health_path=self.data_dir/'health.json'
         self.events_path=self.data_dir/'events.jsonl'
         self.lock=asyncio.Lock(); self.refresh_lock=asyncio.Lock()
-        self.state=self._load(); self.health=self._load_health(); self.events=self._load_events()
+        self.state=self._load(); self.health=self._load_health()
+        for old_id,new_id in getattr(self,'_id_aliases',{}).items():
+            if old_id != new_id and old_id in self.health and new_id not in self.health: self.health[new_id]=self.health.pop(old_id)
+        self.events=self._load_events()
         self.previews={}; self.auto_task=None
         self._register_routes()
 
@@ -113,21 +116,25 @@ class ProxyManager(Star):
 
     def _normalize(self, raw: object) -> dict:
         source=raw if isinstance(raw,dict) else {}
-        nodes=[]
+        nodes=[]; self._id_aliases={}
         values=source.get('nodes',[]) if isinstance(source.get('nodes',[]),list) else []
         for item in values:
             if not isinstance(item,dict) or not ident(item.get('id')):
                 continue
             endpoint=str(item.get('endpoint','')).strip()
             protocol=str(item.get('protocol') or item.get('kind','http')).lower()
+            old_id=ident(item['id']); endpoint=str(item.get('endpoint','')).strip(); subscription_id=ident(item.get('subscription_id'))
+            node_id=self._stable_node_id(subscription_id,endpoint) if subscription_id and endpoint else old_id
+            self._id_aliases[old_id]=node_id
             nodes.append({
-                'id':ident(item['id']), 'name':str(item.get('name',item.get('display_name',item['id'])))[:120],
+                'id':node_id, 'name':str(item.get('name',item.get('display_name',item['id'])))[:120],
                 'display_name':str(item.get('display_name',item.get('name',item['id'])))[:120],
                 'protocol':protocol[:24], 'engine':str(item.get('engine') or ('mihomo' if protocol in ADVANCED_SCHEMES else 'direct-http'))[:24],
                 'kind':str(item.get('kind') or ('mihomo' if protocol in ADVANCED_SCHEMES else protocol))[:24],
                 'endpoint':endpoint, 'connection':copy.deepcopy(item.get('connection')) if isinstance(item.get('connection'),dict) else {},
-                'subscription_id':ident(item.get('subscription_id')), 'enabled':bool(item.get('enabled',True)),
+                'subscription_id':subscription_id, 'enabled':bool(item.get('enabled',True)),
                 'excluded':bool(item.get('excluded',False)), 'exclusion_reason':str(item.get('exclusion_reason',''))[:160],
+                'invalid_reference':bool(item.get('invalid_reference',False)),
             })
 
         group_values=source.get('groups') if isinstance(source.get('groups'),list) else []
@@ -142,7 +149,7 @@ class ProxyManager(Star):
                     nodes.append({'id':node_id,'name':str(item.get('name',item_id))[:120],'display_name':str(item.get('name',item_id))[:120],
                                   'protocol':protocol,'engine': 'mihomo' if protocol in ADVANCED_SCHEMES else 'direct-http',
                                   'kind':str(item.get('kind') or protocol)[:24], 'endpoint':endpoint,'connection':{},
-                                  'subscription_id':'','enabled':True,'excluded':False,'exclusion_reason':''})
+                                  'subscription_id':'','enabled':True,'excluded':False,'exclusion_reason':'','invalid_reference':False})
                 group_values.append({'id':item_id,'name':item.get('name',item_id),
                                      'mode':'direct' if item.get('kind')=='direct' else 'select',
                                      'node_ids':[node_id] if item.get('endpoint') else [],
@@ -154,8 +161,8 @@ class ProxyManager(Star):
             groups.append({
                 'id':ident(item['id']), 'name':str(item.get('name',item['id']))[:80],
                 'mode':item.get('mode') if item.get('mode') in MODES else 'select',
-                'node_ids':[ident(value) for value in item.get('node_ids',[]) if ident(value)],
-                'selected':ident(item.get('selected')), 'enabled':bool(item.get('enabled',True)),
+                'node_ids':[self._id_aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value)],
+                'selected':self._id_aliases.get(ident(item.get('selected')),ident(item.get('selected'))), 'enabled':bool(item.get('enabled',True)),
             })
         if not any(group['id']=='direct' for group in groups): groups.insert(0,dict(DIRECT))
         group_ids={group['id'] for group in groups}
@@ -453,7 +460,7 @@ class ProxyManager(Star):
                     nodes.append({'id':f'{subscription_id}-{index+1}','name':str(item.get('name',f'{subscription_id}-{index+1}'))[:120],
                                   'display_name':str(item.get('name',f'{subscription_id}-{index+1}'))[:120], 'protocol':scheme,
                                   'engine':'direct-http','kind':scheme,'endpoint':endpoint,'connection':copy.deepcopy(item),
-                                  'subscription_id':subscription_id,'enabled':True,'excluded':False,'exclusion_reason':''})
+                                  'subscription_id':subscription_id,'enabled':True,'excluded':False,'exclusion_reason':'','invalid_reference':False})
         for index,line in enumerate(decoded.splitlines()):
             value=line.strip(); scheme=value.split('://',1)[0].lower() if '://' in value else ''
             if scheme: discovered.add(scheme)
@@ -473,7 +480,7 @@ class ProxyManager(Star):
                 nodes.append({'id':node_id,'name':name[:120],'display_name':name[:120],'protocol':protocol,
                               'engine':'direct-http' if kind != 'mihomo' else 'mihomo','kind':kind,'endpoint':value,
                               'connection':{'uri':value},'subscription_id':subscription_id,'enabled':True,
-                              'excluded':False,'exclusion_reason':''})
+                              'excluded':False,'exclusion_reason':'','invalid_reference':False})
         for node in nodes: node['region']=region_of(node['name'])
         return nodes,discovered
 
@@ -517,7 +524,7 @@ class ProxyManager(Star):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.8'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.9'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -535,8 +542,11 @@ class ProxyManager(Star):
             return error_response(str(exc) if isinstance(exc,ValueError) else '订阅预览请求失败')
 
     def _replace_subscription_nodes(self,subscription:dict,nodes:list[dict]):
-        old=set(subscription['node_ids'])
-        self.state['nodes']=[node for node in self.state['nodes'] if node['id'] not in old]+nodes
+        old=set(subscription['node_ids']); incoming={node['id'] for node in nodes}
+        for node in self.state['nodes']:
+            if node['id'] in old and node['id'] not in incoming:
+                node['enabled']=False; node['invalid_reference']=True; node['exclusion_reason']='订阅已删除或节点参数已变更'
+        self.state['nodes']=[node for node in self.state['nodes'] if node['id'] not in incoming]+nodes
         subscription['node_ids']=[node['id'] for node in nodes]
 
     @staticmethod
@@ -556,7 +566,7 @@ class ProxyManager(Star):
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
             async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.8'})
+                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.9'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -878,7 +888,7 @@ class ProxyManager(Star):
     async def initialize(self):
         if self.auto_task and not self.auto_task.done(): self.auto_task.cancel()
         self.auto_task=asyncio.create_task(self._auto_loop())
-        logger.info('代理管理中心 0.2.8 已加载')
+        logger.info('代理管理中心 0.2.9 已加载')
 
     async def terminate(self):
         if self.auto_task:
