@@ -1,348 +1,147 @@
-"""AstrBot Proxy Manager: safe, provider-neutral egress management."""
+"""Clash Verge 风格的 AstrBot 代理管理中心。"""
 from __future__ import annotations
-
-import asyncio
-import json
-import re
-import time
+import asyncio, json, re, time
 from urllib.parse import urlparse
-
 import httpx
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.api.web import error_response, json_response, request
 
-DEFAULT = {
-    "profiles": [{"id": "direct", "name": "直连", "kind": "direct", "enabled": True}],
-    "routes": [],
-    "nodes": [],
-}
-
-PLATFORM_TEMPLATES = {
-    "telegram": {"name": "Telegram", "hosts": ["api.telegram.org"]},
-    "meta": {"name": "Meta", "hosts": ["graph.facebook.com", "graph-video.facebook.com"]},
-    "github": {"name": "GitHub", "hosts": ["api.github.com", "github.com", "raw.githubusercontent.com"]},
-}
-
-
-def _safe_url(value: str, *, allow_credentials: bool = False) -> bool:
+DIRECT = {"id":"direct","name":"直连","mode":"direct","node_ids":[],"selected":"","enabled":True}
+TEMPLATES = {"telegram":{"name":"Telegram","hosts":["api.telegram.org"]},"meta":{"name":"Meta","hosts":["graph.facebook.com","graph-video.facebook.com"]},"github":{"name":"GitHub","hosts":["api.github.com","github.com","raw.githubusercontent.com"]}}
+KINDS={"http","https","socks5","socks5h","mihomo"}; MODES={"direct","select","url-test","fallback"}; MATCHES={"exact","suffix"}
+def safe_url(v, credentials=False):
     try:
-        parsed = urlparse(value)
-        _ = parsed.port
-        hostname = parsed.hostname
-    except (TypeError, ValueError):
-        return False
-    return (
-        parsed.scheme in {"http", "https", "socks5", "socks5h"}
-        and bool(hostname)
-        and (allow_credentials or (not parsed.username and not parsed.password))
-    )
+        p=urlparse(v); _=p.port
+    except (TypeError,ValueError): return False
+    return p.scheme in {"http","https","socks5","socks5h"} and bool(p.hostname) and (credentials or not p.username and not p.password)
+def safe_host(v):
+    h=str(v or '').strip().lower().rstrip('.')
+    if not h or len(h)>253 or any(c.isspace() for c in h) or not re.fullmatch(r'(?:\*\.)?[a-z0-9.-]+',h) or '..' in h: raise ValueError('请输入有效域名')
+    return h
+def ident(v): return re.sub(r'[^a-zA-Z0-9_-]','-',str(v or '').strip())[:64]
 
-
-def _safe_host(value: object) -> str:
-    host = str(value or "").strip().lower().rstrip(".")
-    if not host or len(host) > 253 or any(char.isspace() for char in host):
-        raise ValueError("请输入有效域名")
-    if not re.fullmatch(r"(?:\*\.)?[a-z0-9.-]+", host) or ".." in host:
-        raise ValueError("域名只能包含字母、数字、点、短横线或通配符")
-    return host
-
-
-@register("astrbot_plugin_proxy_manage", "gobelieve", "可视化管理 AstrBot 代理出口", "0.1.2")
+@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.0')
 class ProxyManager(Star):
-    def __init__(self, context: Context, config: AstrBotConfig):
-        super().__init__(context)
-        self.context = context
-        self.config = config
-        self.data_dir = StarTools.get_data_dir("astrbot_plugin_proxy_manage")
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.path = self.data_dir / "config.json"
-        self.event_path = self.data_dir / "events.jsonl"
-        self.lock = asyncio.Lock()
-        self.state = self._load()
-        self.events: list[dict] = self._load_events()
-        self._register_routes()
-
-    def _load(self) -> dict:
-        try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-            return self._normalize(raw)
-        except (OSError, ValueError):
-            try:
-                raw = json.loads(self.config.get("config_json", "{}"))
-            except (TypeError, ValueError):
-                raw = {}
-            return self._normalize(raw)
-
-    def _normalize(self, raw: object) -> dict:
-        source = raw if isinstance(raw, dict) else {}
-        profiles = []
-        profile_values = source.get("profiles", DEFAULT["profiles"])
-        if not isinstance(profile_values, list):
-            profile_values = []
-        for item in profile_values:
-            if not isinstance(item, dict) or not item.get("id"):
-                continue
-            kind = item.get("kind", "direct")
-            if kind not in {"direct", "http", "socks5", "mihomo"}:
-                continue
-            profile_id = str(item["id"]).strip()[:64]
-            if not profile_id or any(p["id"] == profile_id for p in profiles):
-                continue
-            profiles.append({
-                "id": profile_id, "name": str(item.get("name", profile_id))[:80],
-                "kind": kind, "node_id": str(item.get("node_id", ""))[:64],
-                "endpoint": str(item.get("endpoint", ""))[:300],
-                "enabled": bool(item.get("enabled", True)),
-                "fail_closed": bool(item.get("fail_closed", kind != "direct")),
-            })
-        if not any(p["id"] == "direct" for p in profiles):
-            profiles.insert(0, dict(DEFAULT["profiles"][0]))
-        profile_ids = {p["id"] for p in profiles}
-        routes = []
-        route_values = source.get("routes", [])
-        if isinstance(route_values, list):
-            for item in route_values:
-                if not isinstance(item, dict) or item.get("profile_id") not in profile_ids:
-                    continue
-                try:
-                    host = _safe_host(item.get("host"))
-                except ValueError:
-                    continue
-                routes.append({
-                    "host": host,
-                    "profile_id": str(item["profile_id"])[:64],
-                    "match": item.get("match") if item.get("match") in {"exact", "suffix"} else "exact",
-                    "enabled": bool(item.get("enabled", True)),
-                })
-        nodes = []
-        node_values = source.get("nodes", [])
-        if isinstance(node_values, list):
-            for item in node_values:
-                endpoint = str(item.get("endpoint", "")) if isinstance(item, dict) else ""
-                if not isinstance(item, dict) or not item.get("id") or not _safe_url(endpoint, allow_credentials=True):
-                    continue
-                nodes.append({
-                    "id": str(item["id"])[:64],
-                    "name": str(item.get("name", item["id"]))[:80],
-                    "kind": str(item.get("kind", "unknown"))[:32],
-                    "endpoint": endpoint[:300],
-                    "profile_id": str(item.get("profile_id", ""))[:64],
-                    "enabled": bool(item.get("enabled", True)),
-                })
-        return {"profiles": profiles, "routes": routes, "nodes": nodes}
-
-    def _load_events(self) -> list[dict]:
-        if not self.event_path.exists():
-            return []
-        try:
-            lines = self.event_path.read_text(encoding="utf-8").splitlines()[-100:]
-            return [json.loads(line) for line in lines if line]
-        except (OSError, ValueError):
-            return []
-
-    def _register_routes(self):
-        base = "/astrbot_plugin_proxy_manage"
-        for suffix, handler, methods in (
-            ("state", self.page_state, ["GET"]),
-            ("save", self.page_save, ["POST"]),
-            ("preview", self.page_preview, ["POST"]),
-            ("probe", self.page_probe, ["POST"]),
-            ("events", self.page_events, ["GET"]),
-            ("templates", self.page_templates, ["GET"]),
-        ):
-            self.context.register_web_api(base + "/" + suffix, handler, methods, "代理管理中心")
-
-    def _validate_state(self, value: object) -> dict:
-        state = self._normalize(value)
-        if not isinstance(value, dict) or not isinstance(value.get("profiles"), list):
-            raise ValueError("策略配置必须是对象，并包含 profiles 数组")
-        raw_profiles = value["profiles"]
-        for profile in raw_profiles:
-            if not isinstance(profile, dict):
-                raise ValueError("策略配置格式无效")
-            if profile.get("kind", "direct") not in {"direct", "http", "socks5", "mihomo"}:
-                raise ValueError("不支持的策略类型：" + str(profile.get("kind")))
-        ids = set()
-        for profile in state["profiles"]:
-            if profile["id"] in ids:
-                raise ValueError("策略 ID 重复：" + profile["id"])
-            ids.add(profile["id"])
-            if profile["kind"] != "direct" and not profile["endpoint"]:
-                raise ValueError("非直连策略必须配置代理入口：" + profile["id"])
-            if profile["endpoint"] and not _safe_url(profile["endpoint"], allow_credentials=True):
-                raise ValueError("策略代理入口无效：" + profile["id"])
-        raw_routes = value.get("routes", [])
-        if not isinstance(raw_routes, list):
-            raise ValueError("分流规则配置格式无效")
-        for route in raw_routes:
-            if not isinstance(route, dict):
-                raise ValueError("分流规则配置格式无效")
-            if route.get("match", "exact") not in {"exact", "suffix"}:
-                raise ValueError("不支持的匹配方式：" + str(route.get("match")))
-        seen = set()
-        for route in state["routes"]:
-            key = (route["host"], route["match"])
-            if key in seen:
-                raise ValueError("分流规则重复：" + route["host"])
+    def __init__(self, context:Context, config:AstrBotConfig):
+        super().__init__(context); self.context=context; self.config=config; self.data_dir=StarTools.get_data_dir('astrbot_plugin_proxy_manage'); self.data_dir.mkdir(parents=True,exist_ok=True); self.path=self.data_dir/'config.json'; self.backup=self.data_dir/'config.previous.json'; self.events_path=self.data_dir/'events.jsonl'; self.lock=asyncio.Lock(); self.state=self._load(); self.events=self._events(); self._routes()
+    def _load(self):
+        try: raw=json.loads(self.path.read_text())
+        except (OSError,ValueError):
+            try: raw=json.loads(self.config.get('config_json','{}'))
+            except (TypeError,ValueError): raw={}
+        return self._normalize(raw)
+    def _normalize(self, raw):
+        s=raw if isinstance(raw,dict) else {}; nodes=[]
+        for x in s.get('nodes',[]) if isinstance(s.get('nodes',[]),list) else []:
+            if isinstance(x,dict) and ident(x.get('id')): nodes.append({'id':ident(x['id']),'name':str(x.get('name',x['id']))[:80],'kind':str(x.get('kind','http')),'endpoint':str(x.get('endpoint',''))[:300],'enabled':bool(x.get('enabled',True))})
+        groups=s.get('groups') if isinstance(s.get('groups'),list) else []
+        if not groups:
+            for x in s.get('profiles',[]) if isinstance(s.get('profiles',[]),list) else []:
+                if isinstance(x,dict) and x.get('id'):
+                    i=ident(x['id']); n='legacy-'+i
+                    if x.get('endpoint'): nodes.append({'id':n,'name':str(x.get('name',i))[:80],'kind':x.get('kind','http'),'endpoint':x['endpoint'],'enabled':True})
+                    groups.append({'id':i,'name':x.get('name',i),'mode':'direct' if x.get('kind')=='direct' else 'select','node_ids':[] if not x.get('endpoint') else [n],'selected':n if x.get('endpoint') else ''})
+        out=[]
+        for x in groups:
+            if isinstance(x,dict) and ident(x.get('id')): out.append({'id':ident(x['id']),'name':str(x.get('name',x['id']))[:80],'mode':x.get('mode') if x.get('mode') in MODES else 'select','node_ids':[ident(i) for i in x.get('node_ids',[]) if ident(i)],'selected':ident(x.get('selected')),'enabled':bool(x.get('enabled',True))})
+        if not any(x['id']=='direct' for x in out): out.insert(0,dict(DIRECT))
+        gids={x['id'] for x in out}; routes=[]
+        for i,x in enumerate(s.get('routes',[]) if isinstance(s.get('routes',[]),list) else []):
+            if isinstance(x,dict) and ident(x.get('target') or x.get('profile_id')) in gids:
+                try: h=safe_host(x.get('host'))
+                except ValueError: continue
+                routes.append({'id':ident(x.get('id')) or f'rule-{i+1}','host':h,'match':x.get('match') if x.get('match') in MATCHES else 'exact','target':ident(x.get('target') or x.get('profile_id')),'priority':int(x.get('priority',100)),'enabled':bool(x.get('enabled',True))})
+        platforms={}
+        for k,x in s.get('platforms',{}).items() if isinstance(s.get('platforms'),dict) else []:
+            if isinstance(x,dict): platforms[ident(k)]={'name':str(x.get('name',k))[:80],'group_id':ident(x.get('group_id')) or 'direct','enabled':bool(x.get('enabled',True))}
+        return {'version':2,'name':str(s.get('name','默认配置'))[:80],'nodes':nodes,'groups':out,'routes':sorted(routes,key=lambda x:x['priority']),'platforms':platforms}
+    def _validate(self,v):
+        if not isinstance(v,dict): raise ValueError('配置格式无效')
+        for k in ('nodes','groups','routes'):
+            if not isinstance(v.get(k),list): raise ValueError(k+' 必须是数组')
+        s=self._normalize(v); nids=set(); gids=set()
+        for n in s['nodes']:
+            if n['id'] in nids: raise ValueError('节点 ID 重复：'+n['id'])
+            nids.add(n['id'])
+            if n['kind'] not in KINDS or not safe_url(n['endpoint'],True): raise ValueError('节点入口无效：'+n['id'])
+        for g in s['groups']:
+            if g['id'] in gids: raise ValueError('代理组 ID 重复：'+g['id'])
+            gids.add(g['id']); missing=set(g['node_ids'])-nids
+            if missing: raise ValueError('代理组引用不存在节点：'+next(iter(missing)))
+            if g['mode']!='direct' and not g['node_ids']: raise ValueError('代理组至少需要一个节点：'+g['id'])
+            if g['selected'] and g['selected'] not in g['node_ids']: raise ValueError('代理组当前节点无效：'+g['id'])
+        seen=set()
+        for r in s['routes']:
+            if r['target'] not in gids: raise ValueError('规则引用不存在代理组：'+r['target'])
+            key=(r['host'],r['match'],r['priority'])
+            if key in seen: raise ValueError('相同优先级存在重复规则：'+r['host'])
             seen.add(key)
-            if route["profile_id"] not in ids:
-                raise ValueError("分流规则引用了不存在的策略：" + route["profile_id"])
-        for left in state["routes"]:
-            for right in state["routes"]:
-                if left is right or not left.get("enabled", True) or not right.get("enabled", True):
-                    continue
-                left_host = left["host"].removeprefix("*.")
-                right_host = right["host"].removeprefix("*.")
-                covered = left_host == right_host or left_host.endswith("." + right_host) or right_host.endswith("." + left_host)
-                if covered and (left["match"] == "suffix" or right["match"] == "suffix"):
-                    raise ValueError("后缀规则存在覆盖冲突：{} 与 {}".format(left["host"], right["host"]))
-        return state
-
-    def _snapshot(self) -> dict:
-        profiles = []
-        for p in self.state["profiles"]:
-            item = dict(p)
-            if item.get("endpoint"):
-                item["endpoint"] = urlparse(item["endpoint"]).scheme + "://[configured]"
-            profiles.append(item)
-        nodes = []
-        for node in self.state["nodes"]:
-            item = dict(node)
-            item["endpoint"] = urlparse(item["endpoint"]).scheme + "://[configured]"
-            nodes.append(item)
-        return {
-            "profiles": profiles,
-            "routes": self.state["routes"],
-            "nodes": nodes,
-            "events": self.events[-50:],
-        }
-
-    async def _persist(self, state: dict):
-        text = json.dumps(self._normalize(state), ensure_ascii=False, indent=2)
-        temp = self.path.with_suffix(".tmp")
-        temp.write_text(text, encoding="utf-8")
-        temp.replace(self.path)
-        self.state = self._normalize(state)
-
-    def _event(self, event: dict):
-        safe = {"at": int(time.time()), **event}
-        self.events = (self.events + [safe])[-100:]
+        for k,x in s['platforms'].items():
+            if x['group_id'] not in gids: raise ValueError('平台引用不存在代理组：'+k)
+        return s
+    def _events(self):
+        try: return [json.loads(x) for x in self.events_path.read_text().splitlines()[-100:] if x]
+        except (OSError,ValueError): return []
+    def _routes(self):
+        b='/astrbot_plugin_proxy_manage'
+        for n,h,m in [('state',self.state_page,['GET']),('save',self.save,['POST']),('preview',self.preview,['POST']),('probe',self.probe,['POST']),('events',self.events_page,['GET']),('templates',self.templates,['GET']),('rollback',self.rollback,['POST'])]: self.context.register_web_api(b+'/'+n,h,m,'代理管理中心')
+    def snapshot(self):
+        x=json.loads(json.dumps(self.state))
+        for n in x['nodes']:
+            if n['endpoint']: n['endpoint']=urlparse(n['endpoint']).scheme+'://[configured]'
+        x['events']=self.events[-50:]; x['templates']=TEMPLATES; return x
+    async def persist(self,s):
+        if self.path.exists(): self.backup.write_text(self.path.read_text())
+        t=self.path.with_suffix('.tmp'); t.write_text(json.dumps(s,ensure_ascii=False,indent=2)); t.replace(self.path); self.state=s
+    def event(self,x):
+        e={'at':int(time.time()),**x}; self.events=(self.events+[e])[-100:]
         try:
-            with self.event_path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(safe, ensure_ascii=False) + "\n")
-        except OSError:
-            logger.warning("代理中心事件写入失败")
-
-    async def page_state(self):
-        return json_response(self._snapshot())
-
-    async def page_events(self):
-        return json_response({"events": self.events[-100:]})
-
-    async def page_templates(self):
-        return json_response({"templates": PLATFORM_TEMPLATES})
-
-    async def page_save(self):
+            with self.events_path.open('a') as f: f.write(json.dumps(e,ensure_ascii=False)+'\n')
+        except OSError: logger.warning('代理中心事件写入失败')
+    async def state_page(self): return json_response(self.snapshot())
+    async def events_page(self): return json_response({'events':self.events[-100:]})
+    async def templates(self): return json_response({'templates':TEMPLATES})
+    async def save(self):
         try:
-            payload = await request.json()
-            if not isinstance(payload, dict):
-                raise ValueError("配置格式无效")
-            # The UI receives a redacted endpoint. Preserve the stored value when it is unchanged.
-            previous = {p["id"]: p for p in self.state["profiles"]}
-            incoming_profiles = payload.get("profiles", [])
-            if not isinstance(incoming_profiles, list):
-                raise ValueError("策略配置格式无效")
-            for profile in incoming_profiles:
-                if not isinstance(profile, dict):
-                    raise ValueError("策略配置格式无效")
-                old = previous.get(profile.get("id"))
-                endpoint = profile.get("endpoint", "")
-                if old and isinstance(endpoint, str) and endpoint.endswith("://[configured]"):
-                    profile["endpoint"] = old.get("endpoint", "")
-            candidate = self._validate_state(payload)
-            if candidate == self.state:
-                return json_response(self._snapshot())
-            async with self.lock:
-                previous_state = self.state
-                try:
-                    await self._persist(candidate)
-                except Exception:
-                    self.state = previous_state
-                    raise
-                self._event({"action": "save", "result": "ok", "message": "配置已保存"})
-            return json_response(self._snapshot())
-        except (ValueError, TypeError) as exc:
-            return error_response(str(exc))
-        except OSError:
-            return error_response("配置保存失败", status_code=500)
-
-    async def page_preview(self):
+            p=await request.json(); old={n['id']:n for n in self.state['nodes']}
+            for n in p.get('nodes',[]):
+                if n.get('id') in old and str(n.get('endpoint','')).endswith('://[configured]'): n['endpoint']=old[n['id']]['endpoint']
+            c=self._validate(p)
+            async with self.lock: await self.persist(c); self.event({'action':'save','result':'ok'})
+            return json_response(self.snapshot())
+        except (ValueError,TypeError) as e: return error_response(str(e))
+        except OSError: return error_response('配置保存失败，已保留上一版配置',500)
+    async def rollback(self):
         try:
-            payload = await request.json()
-            host = _safe_host(payload.get("host"))
-
-            def matches(route):
-                route_host = route["host"].removeprefix("*.")
-                return route["host"] == host or (
-                    route.get("match") == "suffix" and host.endswith("." + route_host)
-                )
-
-            route = next(
-                (r for r in self.state["routes"] if r.get("enabled", True) and matches(r)),
-                None,
-            )
-            profile_id = route["profile_id"] if route else "direct"
-            profile = next((p for p in self.state["profiles"] if p["id"] == profile_id), None)
-            return json_response({
-                "host": host,
-                "matched": route,
-                "profile": profile or {"id": "direct", "kind": "direct"},
-                "fail_closed": bool(profile and profile.get("fail_closed")),
-            })
-        except (ValueError, TypeError) as exc:
-            return error_response(str(exc))
-
-    async def page_probe(self):
-        profile_id = "direct"
+            if not self.backup.exists(): raise ValueError('没有可恢复的上一版配置')
+            c=self._validate(json.loads(self.backup.read_text())); await self.persist(c); return json_response(self.snapshot())
+        except (OSError,ValueError,TypeError) as e: return error_response(str(e))
+    def resolve(self,gid):
+        g=next((x for x in self.state['groups'] if x['id']==gid and x['enabled']),None)
+        if not g: raise ValueError('代理组不存在或未启用')
+        if g['mode']=='direct': return g,None
+        ns=[n for n in self.state['nodes'] if n['id'] in g['node_ids'] and n['enabled']]
+        if not ns: raise ValueError('代理组没有可用节点')
+        return g,next((n for n in ns if n['id']==g['selected']),ns[0])
+    async def preview(self):
         try:
-            payload = await request.json()
-            profile_id = str(payload.get("profile_id", "direct"))
-            profile = next((p for p in self.state["profiles"] if p["id"] == profile_id), None)
-            if not profile or not profile.get("enabled", True):
-                raise ValueError("代理策略不存在")
-            target = str(payload.get("url", "https://www.gstatic.com/generate_204"))
-            if not _safe_url(target) or urlparse(target).scheme not in {"http", "https"}:
-                raise ValueError("诊断目标只允许 HTTP 或 HTTPS 地址")
-            proxy = None if profile["kind"] == "direct" else profile.get("endpoint")
-            if profile["kind"] != "direct" and not _safe_url(proxy or "", allow_credentials=True):
-                raise ValueError("该策略尚未配置有效代理入口")
-            started = time.monotonic()
-            result = {"profile_id": profile_id, "url": target, "stages": []}
-            result["stages"].append({"name": "策略解析", "ok": True})
-            async with httpx.AsyncClient(proxy=proxy, trust_env=False, follow_redirects=False, timeout=12) as client:
-                response = await client.get(target)
-            result["stages"].extend([
-                {"name": "TCP/TLS/HTTP", "ok": True, "status": response.status_code},
-                {"name": "完成", "ok": True, "elapsed_ms": round((time.monotonic() - started) * 1000)},
-            ])
-            self._event({"action": "probe", "profile_id": profile_id, "result": "ok", "status": response.status_code})
-            return json_response(result)
-        except (ValueError, httpx.HTTPError) as exc:
-            self._event({
-                "action": "probe",
-                "profile_id": profile_id,
-                "result": "failed",
-                "error_type": type(exc).__name__,
-            })
-            return error_response("连通性检测失败，请检查策略、节点和目标站点")
-
-    async def initialize(self):
-        logger.info("代理管理中心已加载")
-
-    async def terminate(self):
-        pass
-
-    async def on_message(self, event: AstrMessageEvent):
-        return
+            h=safe_host((await request.json()).get('host'))
+            rs = [r for r in self.state['routes'] if r['enabled'] and (
+                (r['match'] == 'exact' and r['host'].removeprefix('*.') == h) or
+                (r['match'] == 'suffix' and (h == r['host'].removeprefix('*.') or h.endswith('.' + r['host'].removeprefix('*.'))))
+            )]
+            r=min(rs,key=lambda x:x['priority'],default=None); g,n=self.resolve(r['target'] if r else 'direct'); return json_response({'host':h,'matched':r,'group':g,'node':n and {'id':n['id'],'name':n['name'],'kind':n['kind']}})
+        except (ValueError,TypeError) as e: return error_response(str(e))
+    async def probe(self):
+        try:
+            p=await request.json(); g,n=self.resolve(str(p.get('group_id','direct'))); u=str(p.get('url','https://www.gstatic.com/generate_204'))
+            if not safe_url(u): raise ValueError('诊断目标只允许 HTTP 或 HTTPS 地址')
+            st=time.monotonic()
+            async with httpx.AsyncClient(proxy=n and n['endpoint'],trust_env=False,timeout=12) as c: r=await c.get(u)
+            out={'group_id':g['id'],'group':g['name'],'node':n and n['name'] or 'DIRECT','status':r.status_code,'elapsed_ms':round((time.monotonic()-st)*1000)}; self.event({'action':'probe','result':'ok',**out}); return json_response(out)
+        except (ValueError,httpx.HTTPError): return error_response('连通性检测失败，请检查代理组、节点和目标站点')
+    async def initialize(self): logger.info('代理管理中心 0.2.0 已加载')
+    async def terminate(self): pass
+    async def on_message(self,event:AstrMessageEvent): return
