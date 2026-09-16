@@ -632,12 +632,15 @@ class ProxyManager(Star):
             if not node: raise ValueError('节点不存在或未启用')
             if not safe_url(target): raise ValueError('测速目标只允许 HTTP 或 HTTPS 地址')
             started=time.monotonic()
-            if node['kind']=='mihomo':
+            if node['kind']=='mihomo' and urlparse(node['endpoint']).scheme not in {'http','https','socks5','socks5h'}:
+                # Native Mihomo protocol URIs are measured by the running core when a
+                # controller is configured. HTTP/SOCKS-compatible entries can be tested
+                # directly and must not be blocked by the optional controller setting.
                 control,headers=self._control(); timeout=max(1,min(int(payload.get('timeout',5) or 5),15))
                 async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=timeout,trust_env=False) as client:
                     response=await client.get('/proxies/'+quote(node['name'],safe='')+'/delay',params={'url':target,'timeout':timeout*1000})
                 response.raise_for_status(); data=response.json()
-                if not isinstance(data.get('delay'),int): raise ValueError('外部控制接口未返回延迟')
+                if not isinstance(data.get('delay'),int): raise ValueError('Mihomo 控制接口未返回延迟')
                 latency=int(data['delay'])
             else:
                 async with httpx.AsyncClient(proxy=node['endpoint'],trust_env=False,follow_redirects=False,timeout=10) as client:
