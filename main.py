@@ -642,7 +642,14 @@ class ProxyManager(Star):
             if group['id']=='direct':
                 continue
             mode={'select':'select','url-test':'url-test','fallback':'fallback'}.get(group['mode'],'select')
-            item={'name':group['name'],'type':mode,'use':provider_ids or [],'proxies':['DIRECT']}
+            selected_nodes={node['id']:node for node in self.state['nodes'] if node['enabled']}
+            selected_subscriptions={selected_nodes[node_id]['subscription_id'] for node_id in group['node_ids']
+                                    if node_id in selected_nodes and selected_nodes[node_id].get('subscription_id')}
+            group_providers=['provider-'+ident(sub_id) for sub_id in selected_subscriptions
+                             if 'provider-'+ident(sub_id) in providers]
+            if not group_providers:
+                raise ValueError('代理组没有可应用的订阅节点：'+group['name'])
+            item={'name':group['name'],'type':mode,'use':group_providers}
             if group['mode'] in {'url-test','fallback'}:
                 item.update({'url':'https://www.gstatic.com/generate_204','interval':300,'tolerance':50})
             groups.append(item)
@@ -680,8 +687,15 @@ class ProxyManager(Star):
             async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
                 response=await client.put('/configs?force=true',json=payload); response.raise_for_status()
                 running=await client.get('/configs'); running.raise_for_status(); runtime=running.json()
+                proxies_response=await client.get('/proxies'); proxies_response.raise_for_status(); proxies=proxies_response.json().get('proxies',{})
+                rules_response=await client.get('/rules'); rules_response.raise_for_status(); runtime_rules=rules_response.json().get('rules',[])
             if not isinstance(runtime,dict) or runtime.get('mode')!='rule':
                 raise ValueError('Mihomo 已响应，但运行配置未切换到 rule 模式')
+            expected_names={group['name'] for group in document['proxy-groups']}
+            if not isinstance(proxies,dict) or not expected_names.issubset(proxies):
+                raise ValueError('Mihomo 运行代理组与候选配置不一致')
+            if not isinstance(runtime_rules,list) or len(runtime_rules)<len(document['rules']):
+                raise ValueError('Mihomo 运行分流规则与候选配置不一致')
             self.event({'action':'runtime_apply','result':'ok','groups':len(document['proxy-groups']),'rules':len(document['rules'])})
             return json_response({'applied':True,'runtime':{'mode':runtime.get('mode'),'mixed-port':runtime.get('mixed-port')}})
         except (ValueError,httpx.HTTPError,OSError) as exc:
