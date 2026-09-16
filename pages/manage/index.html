@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>代理管理中心</title><link rel="stylesheet" href="./style.css"></head><body><main>
+<header><div><p class="eyebrow">EGRESS CONTROL · 0.1.0</p><h1>代理管理中心</h1><p class="muted">查看请求出口、管理分流策略，并在业务请求前完成网络诊断。</p></div><button id="reload">刷新状态</button></header>
+<div id="notice" class="notice" hidden></div>
+<section class="grid"><article><span class="label">代理策略</span><strong id="profile-count">-</strong><small>已配置出口</small></article><article><span class="label">分流规则</span><strong id="route-count">-</strong><small>域名匹配</small></article><article><span class="label">节点目录</span><strong id="node-count">-</strong><small>可供策略使用</small></article><article><span class="label">事件记录</span><strong id="event-count">-</strong><small>最近 100 条</small></article></section>
+<section class="panel"><div class="panel-head"><div><h2>策略与出口</h2><p class="muted">每个业务平台应明确绑定策略。未配置的域名默认直连。</p></div><button id="save">保存配置</button></div><div id="profiles" class="rows"></div></section>
+<section class="panel"><h2>分流预览</h2><div class="inline"><input id="host" placeholder="例如 api.telegram.org"><button id="preview">查询策略</button></div><pre id="preview-result" class="result">输入域名后查看命中的出口策略。</pre></section>
+<section class="panel"><div class="panel-head"><div><h2>连通性诊断</h2><p class="muted">只执行受限 HTTP/HTTPS 检测，不携带业务 Token，不读取响应正文。</p></div><button id="probe">开始检测</button></div><div class="inline"><select id="probe-profile"></select><input id="probe-url" value="https://www.gstatic.com/generate_204"></div><div id="probe-result" class="result">尚未检测。</div></section>
+<section class="panel"><h2>最近事件</h2><div id="events" class="events"></div></section>
+<footer>代理入口保存后只展示协议，不返回凭据。默认直连策略不会替其他平台自动启用代理。</footer></main><script type="module" src="./app.js"></script></body></html>

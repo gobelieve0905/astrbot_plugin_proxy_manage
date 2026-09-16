@@ -1,0 +1,8 @@
+{
+  "config_json": {
+    "type": "text",
+    "description": "代理中心配置（JSON）",
+    "hint": "推荐使用插件页面编辑。空配置会使用安全的直连默认策略。",
+    "default": "{}"
+  }
+}
