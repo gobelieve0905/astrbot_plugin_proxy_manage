@@ -1,0 +1,14 @@
+.import-form,.filter{display:grid;grid-template-columns:1fr 160px auto auto;gap:10px;align-items:center;margin:12px 0}
+.filter{grid-template-columns:240px}
+.sub-card,.node-card{border-top:1px solid var(--line);padding:12px 0}
+.sub-card .table{grid-template-columns:1fr .8fr 2fr auto auto}
+.sub-meta,.node-meta{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;color:var(--muted);margin-top:9px}
+.sub-meta .interval{width:92px}
+.node-card .table{grid-template-columns:1.1fr .7fr 1.7fr auto}
+.node-meta b{color:var(--text);font-size:17px}
+.chip{border-radius:999px;padding:2px 8px;background:var(--input);color:var(--muted)}
+.chip.ok{background:var(--soft);color:var(--accent)}
+.chip.error,.chip.timeout{background:#f7e7e7;color:var(--danger)}
+.node-error{margin-top:8px;color:var(--danger);font-size:12px}
+.sub-card details{margin-top:8px}
+.sub-card summary{cursor:pointer;color:var(--muted)}
