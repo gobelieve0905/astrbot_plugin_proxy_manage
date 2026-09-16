@@ -11,7 +11,7 @@ from astrbot.api.web import error_response, json_response, request
 DIRECT = {"id":"direct","name":"直连","mode":"direct","node_ids":[],"selected":"","enabled":True}
 TEMPLATES = {"telegram":{"name":"Telegram","hosts":["api.telegram.org"]},"meta":{"name":"Meta","hosts":["graph.facebook.com","graph-video.facebook.com"]},"github":{"name":"GitHub","hosts":["api.github.com","github.com","raw.githubusercontent.com"]}}
 KINDS={"http","https","socks5","socks5h","mihomo"}; MODES={"direct","select","url-test","fallback"}; MATCHES={"exact","suffix"}
-ADVANCED_SCHEMES={"ss","ssr","vmess","vless","trojan","hysteria","hysteria2","tuic"}
+ADVANCED_SCHEMES={"ss","ssr","vmess","vless","trojan","hysteria","hysteria2","tuic","anytls"}
 def safe_url(v, credentials=False):
     try:
         p=urlparse(v); _=p.port
@@ -29,7 +29,7 @@ def safe_host(v):
     return h
 def ident(v): return re.sub(r'[^a-zA-Z0-9_-]','-',str(v or '').strip())[:64]
 
-@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.1')
+@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.2')
 class ProxyManager(Star):
     def __init__(self, context:Context, config:AstrBotConfig):
         super().__init__(context); self.context=context; self.config=config; self.data_dir=StarTools.get_data_dir('astrbot_plugin_proxy_manage'); self.data_dir.mkdir(parents=True,exist_ok=True); self.path=self.data_dir/'config.json'; self.backup=self.data_dir/'config.previous.json'; self.events_path=self.data_dir/'events.jsonl'; self.lock=asyncio.Lock(); self.state=self._load(); self.events=self._events(); self._routes()
@@ -181,7 +181,7 @@ class ProxyManager(Star):
                 candidate=base64.urlsafe_b64decode(compact + '===').decode('utf-8')
             if candidate and ('://' in candidate or 'proxies:' in candidate): decoded=candidate
         except (ValueError,UnicodeError): pass
-        nodes=[]
+        nodes=[]; discovered=set()
         if 'proxies:' in decoded:
             try:
                 import yaml
@@ -197,6 +197,7 @@ class ProxyManager(Star):
                     nodes.append({'id':f'{sid}-{i+1}','name':str(item.get('name',f'{sid}-{i+1}'))[:80],'kind':scheme,'endpoint':f'{scheme}://{auth}{host}:{port}','enabled':True})
         for i,line in enumerate(decoded.splitlines()):
             value=line.strip(); scheme=value.split('://',1)[0].lower() if '://' in value else ''
+            if scheme: discovered.add(scheme)
             if not value or scheme not in ADVANCED_SCHEMES | {'http','https','socks5','socks5h','socks'}: continue
             if scheme == 'socks': scheme='socks5'; value='socks5://'+value.split('://',1)[1]
             kind=scheme if scheme in {'http','https','socks5','socks5h'} else 'mihomo'; name=f'{sid}-{i+1}'
@@ -215,10 +216,10 @@ class ProxyManager(Star):
             payload=await request.json(); sid=ident(payload.get('id')); sub=next((x for x in self.state['subscriptions'] if x['id']==sid),None)
             if not sub: raise ValueError('订阅不存在')
             async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(sub['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.1'})
+                response=await client.get(sub['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.2'})
             if response.status_code>=400 or len(response.content)>10*1024*1024: raise ValueError('订阅请求失败或响应过大')
             nodes=self._parse_subscription(response.text,sid)
-            if not nodes: raise ValueError('未解析出支持的代理节点')
+            if not nodes: raise ValueError('未解析出支持的代理节点（发现协议：' + ', '.join(sorted(discovered)) + '）')
             async with self.lock:
                 previous=json.loads(json.dumps(self.state))
                 try:
@@ -248,6 +249,6 @@ class ProxyManager(Star):
                 response=await client.request('PUT','/proxies/'+quote(name,safe=''), json={'name':node}); response.raise_for_status()
             self.event({'action':'control_select','group':name,'node':node,'result':'ok'}); return json_response({'ok':True})
         except (ValueError,httpx.HTTPError): return error_response('代理组切换失败，请检查控制接口权限')
-    async def initialize(self): logger.info('代理管理中心 0.2.1 已加载')
+    async def initialize(self): logger.info('代理管理中心 0.2.2 已加载')
     async def terminate(self): pass
     async def on_message(self,event:AstrMessageEvent): return
