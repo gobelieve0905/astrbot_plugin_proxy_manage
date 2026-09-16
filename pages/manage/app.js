@@ -42,7 +42,7 @@ function render(){
   } else if(tab==='nodes'){
     html=`<section class="panel"><div class="bar"><h2>代理节点</h2><div class="actions"><button id="add">新增节点</button><button id="test-all">批量测速</button></div></div>
       ${state.nodes.map((node,index)=>{const item=health(node.id);return `<div class="node-card" data-i="${index}">
-        <div class="table"><input data-k="name" value="${esc(node.name)}"><select data-k="kind">${['http','https','socks5','socks5h','mihomo'].map(kind=>`<option ${node.kind===kind?'selected':''}>${kind}</option>`).join('')}</select><input data-k="endpoint" value="${esc(node.endpoint)}" placeholder="http://host:port 或 anytls://..."><button data-del="nodes">删除</button></div>
+        <div class="table"><input data-k="name" value="${esc(node.display_name||node.name)}"><span class="chip">${esc(node.protocol||node.kind)} · ${esc(node.engine||'')}</span><input data-k="endpoint" value="${esc(node.endpoint)}" placeholder="完整连接 URI 或 HTTP/SOCKS 地址"><label><input type="checkbox" data-k="excluded" ${node.excluded?'checked':''}>排除测速/组选优</label><button data-del="nodes">删除</button></div>
         <div class="node-meta"><span class="chip ${item.status}">${statusLabel(item)}</span><b>${item.latency_ms??'--'}</b><span>ms</span><span>${time(item.checked_at)}</span><span>${esc(node.subscription_id?'订阅：'+node.subscription_id:'手动节点')}</span><button data-test="${esc(node.id)}">测速</button></div>
         ${item.error?`<div class="node-error">${esc(item.error)}</div>`:''}</div>`}).join('')||'<p class="muted">暂无节点。</p>'}</section>`
   } else if(tab==='groups'){
@@ -74,7 +74,7 @@ function bind(){
   document.querySelectorAll('[data-k]').forEach(input=>input.addEventListener('change',()=>{
     const row=input.closest('[data-i]'); if(!row)return
     if(tab==='subscriptions'){ const item=state.subscriptions[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value }
-    else if(tab==='nodes'){ const item=state.nodes[Number(row.dataset.i)]; item[input.dataset.k]=input.value }
+    else if(tab==='nodes'){ const item=state.nodes[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.value; if(input.dataset.k==='name')item.display_name=input.value }
     else if(tab==='groups'){ const item=state.groups[Number(row.dataset.i)]; item[input.dataset.k]=input.value }
     else { const item=state.routes[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='number'?Number(input.value):input.value }
   }))
@@ -88,7 +88,7 @@ function bind(){
     if(item.id==='direct')return; list.splice(Number(row.dataset.i),1); render()
   }))
   $('add')?.addEventListener('click',()=>{
-    if(tab==='nodes')state.nodes.push({id:'node-'+Date.now(),name:'新节点',kind:'http',endpoint:'',subscription_id:'',enabled:true})
+    if(tab==='nodes')state.nodes.push({id:'node-'+Date.now(),name:'新节点',display_name:'新节点',protocol:'http',engine:'direct-http',kind:'http',endpoint:'',connection:{},subscription_id:'',enabled:true,excluded:false,exclusion_reason:''})
     else if(tab==='groups')state.groups.push({id:'group-'+Date.now(),name:'新代理组',mode:'select',node_ids:[],selected:'',enabled:true})
     else state.routes.push({id:'rule-'+Date.now(),host:'example.com',match:'exact',target:'direct',priority:100,enabled:true})
     render()

@@ -118,10 +118,16 @@ class ProxyManager(Star):
         for item in values:
             if not isinstance(item,dict) or not ident(item.get('id')):
                 continue
+            endpoint=str(item.get('endpoint','')).strip()
+            protocol=str(item.get('protocol') or item.get('kind','http')).lower()
             nodes.append({
-                'id':ident(item['id']), 'name':str(item.get('name',item['id']))[:80],
-                'kind':str(item.get('kind','http'))[:24], 'endpoint':str(item.get('endpoint',''))[:300],
+                'id':ident(item['id']), 'name':str(item.get('name',item.get('display_name',item['id'])))[:120],
+                'display_name':str(item.get('display_name',item.get('name',item['id'])))[:120],
+                'protocol':protocol[:24], 'engine':str(item.get('engine') or ('mihomo' if protocol in ADVANCED_SCHEMES else 'direct-http'))[:24],
+                'kind':str(item.get('kind') or ('mihomo' if protocol in ADVANCED_SCHEMES else protocol))[:24],
+                'endpoint':endpoint, 'connection':copy.deepcopy(item.get('connection')) if isinstance(item.get('connection'),dict) else {},
                 'subscription_id':ident(item.get('subscription_id')), 'enabled':bool(item.get('enabled',True)),
+                'excluded':bool(item.get('excluded',False)), 'exclusion_reason':str(item.get('exclusion_reason',''))[:160],
             })
 
         group_values=source.get('groups') if isinstance(source.get('groups'),list) else []
@@ -132,8 +138,11 @@ class ProxyManager(Star):
                     continue
                 item_id=ident(item['id']); node_id='legacy-'+item_id
                 if item.get('endpoint'):
-                    nodes.append({'id':node_id,'name':str(item.get('name',item_id))[:80],'kind':str(item.get('kind','http'))[:24],
-                                  'endpoint':str(item['endpoint'])[:300],'subscription_id':'','enabled':True})
+                    endpoint=str(item['endpoint']).strip(); protocol=str(item.get('protocol') or item.get('kind','http')).lower()
+                    nodes.append({'id':node_id,'name':str(item.get('name',item_id))[:120],'display_name':str(item.get('name',item_id))[:120],
+                                  'protocol':protocol,'engine': 'mihomo' if protocol in ADVANCED_SCHEMES else 'direct-http',
+                                  'kind':str(item.get('kind') or protocol)[:24], 'endpoint':endpoint,'connection':{},
+                                  'subscription_id':'','enabled':True,'excluded':False,'exclusion_reason':''})
                 group_values.append({'id':item_id,'name':item.get('name',item_id),
                                      'mode':'direct' if item.get('kind')=='direct' else 'select',
                                      'node_ids':[node_id] if item.get('endpoint') else [],
@@ -289,6 +298,8 @@ class ProxyManager(Star):
         result=json.loads(json.dumps(self.state))
         for node in result['nodes']:
             if node['endpoint']: node['endpoint']=urlparse(node['endpoint']).scheme+'://[configured]'
+            if isinstance(node.get('connection'),dict) and node['connection'].get('uri'):
+                node['connection']['uri']=urlparse(node['connection']['uri']).scheme+'://[configured]'
         for subscription in result['subscriptions']:
             subscription['url']=urlparse(subscription['url']).scheme+'://[configured]'
         result['control']['secret']='[configured]' if result['control']['secret'] else ''
@@ -370,7 +381,7 @@ class ProxyManager(Star):
         group=next((item for item in self.state['groups'] if item['id']==group_id and item['enabled']),None)
         if not group: raise ValueError('代理组不存在或未启用')
         if group['mode']=='direct': return group,None
-        nodes=[node for node in self.state['nodes'] if node['id'] in group['node_ids'] and node['enabled']]
+        nodes=[node for node in self.state['nodes'] if node['id'] in group['node_ids'] and node['enabled'] and not node.get('excluded')]
         if not nodes: raise ValueError('代理组没有可用节点')
         selected=next((node for node in nodes if node['id']==group['selected']),nodes[0])
         if group['mode'] in {'url-test','fallback'}:
@@ -438,14 +449,17 @@ class ProxyManager(Star):
                     if not host or not port: continue
                     scheme=str(item['type']); auth=''
                     if item.get('username'): auth=str(item['username'])+':'+str(item.get('password',''))+'@'
-                    nodes.append({'id':f'{subscription_id}-{index+1}','name':str(item.get('name',f'{subscription_id}-{index+1}'))[:80],
-                                  'kind':scheme,'endpoint':f'{scheme}://{auth}{host}:{port}','subscription_id':subscription_id,'enabled':True})
+                    endpoint=f'{scheme}://{auth}{host}:{port}'
+                    nodes.append({'id':f'{subscription_id}-{index+1}','name':str(item.get('name',f'{subscription_id}-{index+1}'))[:120],
+                                  'display_name':str(item.get('name',f'{subscription_id}-{index+1}'))[:120], 'protocol':scheme,
+                                  'engine':'direct-http','kind':scheme,'endpoint':endpoint,'connection':copy.deepcopy(item),
+                                  'subscription_id':subscription_id,'enabled':True,'excluded':False,'exclusion_reason':''})
         for index,line in enumerate(decoded.splitlines()):
             value=line.strip(); scheme=value.split('://',1)[0].lower() if '://' in value else ''
             if scheme: discovered.add(scheme)
             if not value or scheme not in ADVANCED_SCHEMES|{'http','https','socks5','socks5h','socks'}: continue
             if scheme=='socks': scheme='socks5'; value='socks5://'+value.split('://',1)[1]
-            kind=scheme if scheme in {'http','https','socks5','socks5h'} else 'mihomo'
+            protocol=scheme; kind=scheme if scheme in {'http','https','socks5','socks5h'} else 'mihomo'
             name=f'{subscription_id}-{index+1}'
             if scheme=='vmess':
                 try:
@@ -456,8 +470,10 @@ class ProxyManager(Star):
             node_id=subscription_id+'-'+hashlib.sha1(value.encode()).hexdigest()[:10]
             if any(node['id']==node_id for node in nodes): node_id+='-'+str(index+1)
             if safe_proxy_endpoint(value):
-                nodes.append({'id':node_id,'name':name[:80],'kind':kind,'endpoint':value[:300],
-                              'subscription_id':subscription_id,'enabled':True})
+                nodes.append({'id':node_id,'name':name[:120],'display_name':name[:120],'protocol':protocol,
+                              'engine':'direct-http' if kind != 'mihomo' else 'mihomo','kind':kind,'endpoint':value,
+                              'connection':{'uri':value},'subscription_id':subscription_id,'enabled':True,
+                              'excluded':False,'exclusion_reason':''})
         for node in nodes: node['region']=region_of(node['name'])
         return nodes,discovered
 
@@ -701,7 +717,7 @@ class ProxyManager(Star):
             if group['id']=='direct':
                 continue
             mode={'select':'select','url-test':'url-test','fallback':'fallback'}.get(group['mode'],'select')
-            selected_nodes={node['id']:node for node in self.state['nodes'] if node['enabled']}
+            selected_nodes={node['id']:node for node in self.state['nodes'] if node['enabled'] and not node.get('excluded')}
             selected_subscriptions={selected_nodes[node_id]['subscription_id'] for node_id in group['node_ids']
                                     if node_id in selected_nodes and selected_nodes[node_id].get('subscription_id')}
             group_providers=['provider-'+ident(sub_id) for sub_id in selected_subscriptions
@@ -814,7 +830,7 @@ class ProxyManager(Star):
     async def nodes_probe(self):
         try:
             payload=await request.json(); requested=payload.get('node_ids')
-            nodes=[node for node in self.state['nodes'] if node['enabled']]
+            nodes=[node for node in self.state['nodes'] if node['enabled'] and not node.get('excluded')]
             if isinstance(requested,list): nodes=[node for node in nodes if node['id'] in {ident(value) for value in requested}]
             if not nodes: raise ValueError('没有可测速的节点')
             semaphore=asyncio.Semaphore(5)

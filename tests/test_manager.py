@@ -131,6 +131,21 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(normalized["control"]["url"], "http://control.example:9090")
         self.assertEqual(normalized["proxy_entry"]["http_url"], "http://proxy.example:7890")
 
+    def test_anytls_keeps_protocol_and_complete_uri(self):
+        manager = self._manager_for_runtime()
+        nodes, _ = manager._parse_subscription('anytls://user:password@example.com:443?security=tls&sni=example.com#香港 AnyTLS', 'sub-a')
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0]['protocol'], 'anytls')
+        self.assertEqual(nodes[0]['engine'], 'mihomo')
+        self.assertIn('security=tls&sni=example.com', nodes[0]['endpoint'])
+        self.assertEqual(nodes[0]['display_name'], '香港 AnyTLS')
+
+    def test_excluded_nodes_are_not_candidates(self):
+        manager = self._manager_for_runtime()
+        manager.state['nodes'][0]['excluded'] = True
+        with self.assertRaises(ValueError):
+            manager.resolve('hk')
+
     def test_runtime_apply_must_verify_groups_and_rules(self):
         manager = self._manager_for_runtime()
         response = self.module.httpx.Response(
