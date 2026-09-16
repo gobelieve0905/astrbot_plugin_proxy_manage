@@ -292,6 +292,7 @@ class ProxyManager(Star):
         for subscription in result['subscriptions']:
             subscription['url']=urlparse(subscription['url']).scheme+'://[configured]'
         result['control']['secret']='[configured]' if result['control']['secret'] else ''
+        result.setdefault('proxy_entry', {'http_url':'', 'socks_url':'', 'source':'unknown'})
         for key in ('http_url','socks_url'):
             if result['proxy_entry'][key]: result['proxy_entry'][key]=urlparse(result['proxy_entry'][key]).scheme+'://[configured]'
         result['health']=self.health
