@@ -5,6 +5,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 
 def install_astrbot_stubs():
@@ -25,13 +26,6 @@ def install_astrbot_stubs():
     modules["astrbot.api.web"].error_response = lambda message, status_code=400: {"message": message, "status": status_code}
     modules["astrbot.api.web"].json_response = lambda data: data
     sys.modules.update(modules)
-    if "httpx" not in sys.modules:
-        httpx = types.ModuleType("httpx")
-        httpx.HTTPError = Exception
-        httpx.AsyncClient = object
-        httpx.Limits = lambda **kwargs: None
-        httpx.Headers = dict
-        sys.modules["httpx"] = httpx
 
 
 class TestConfigurationRules(unittest.TestCase):
@@ -64,6 +58,46 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(helper("sub-a", "http://node:80"), helper("sub-a", "http://node:80"))
         self.assertNotEqual(helper("sub-a", "http://node:80"), helper("sub-b", "http://node:80"))
         self.assertNotIn("token", self.module.safe_error("GET https://user:token@example.com/x"))
+
+    def _manager_for_runtime(self):
+        manager = self.module.ProxyManager.__new__(self.module.ProxyManager)
+        manager.state = {
+            "nodes": [
+                {"id": "hk-1", "name": "HK 1", "kind": "mihomo", "endpoint": "anytls://secret", "subscription_id": "sub-hk", "enabled": True},
+                {"id": "sg-1", "name": "SG 1", "kind": "mihomo", "endpoint": "anytls://secret2", "subscription_id": "sub-sg", "enabled": True},
+            ],
+            "groups": [
+                {"id": "direct", "name": "直连", "mode": "direct", "node_ids": [], "selected": "", "enabled": True},
+                {"id": "hk", "name": "香港自动", "mode": "url-test", "node_ids": ["hk-1"], "selected": "hk-1", "enabled": True},
+                {"id": "sg", "name": "新加坡自动", "mode": "url-test", "node_ids": ["sg-1"], "selected": "sg-1", "enabled": True},
+            ],
+            "routes": [{"id": "meta", "host": "meta.example", "match": "suffix", "target": "hk", "priority": 10, "enabled": True}],
+            "subscriptions": [
+                {"id": "sub-hk", "name": "HK", "url": "https://sub.example/hk", "enabled": True, "interval": 60},
+                {"id": "sub-sg", "name": "SG", "url": "https://sub.example/sg", "enabled": True, "interval": 60},
+            ],
+            "platforms": {}, "control": {"enabled": True, "url": "http://mihomo:9090", "secret": "secret", "timeout": 8},
+        }
+        manager.events = []
+        return manager
+
+    def test_runtime_groups_must_follow_selected_node_members(self):
+        document = self._manager_for_runtime()._runtime_document()
+        groups = {item["name"]: item for item in document["proxy-groups"]}
+        self.assertNotIn("DIRECT", groups["香港自动"].get("proxies", []))
+        self.assertEqual(groups["香港自动"].get("use"), ["provider-sub-hk"])
+        self.assertEqual(groups["新加坡自动"].get("use"), ["provider-sub-sg"])
+
+    def test_runtime_apply_must_verify_groups_and_rules(self):
+        manager = self._manager_for_runtime()
+        response = self.module.httpx.Response(200, json={"mode": "rule", "mixed-port": 7890, "proxies": {}})
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.put.return_value = response
+        client.get.return_value = response
+        with patch.object(self.module.httpx, "AsyncClient", return_value=client):
+            result = asyncio.run(manager.runtime_apply())
+        self.assertNotEqual(result.get("applied"), True, "仅核对 mode 不得报告配置应用成功")
 
 
 if __name__ == "__main__":
