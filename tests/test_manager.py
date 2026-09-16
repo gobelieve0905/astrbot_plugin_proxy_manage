@@ -151,8 +151,9 @@ class TestConfigurationRules(unittest.TestCase):
         normalized = manager._normalize({'nodes':[{'id':'old-1','name':'重复','kind':'mihomo','endpoint':'anytls://a','subscription_id':'sub-a','enabled':True}], 'groups':[{'id':'g','name':'G','mode':'select','node_ids':['old-1'],'selected':'old-1'}]})
         new_id = manager._stable_node_id('sub-a','anytls://a')
         self.assertEqual(normalized['nodes'][0]['id'], new_id)
-        self.assertEqual(normalized['groups'][0]['node_ids'], [new_id])
-        self.assertEqual(normalized['groups'][0]['selected'], new_id)
+        group = next(item for item in normalized['groups'] if item['id'] == 'g')
+        self.assertEqual(group['node_ids'], [new_id])
+        self.assertEqual(group['selected'], new_id)
 
     def test_same_display_name_from_two_subscriptions_has_distinct_ids(self):
         manager = self._manager_for_runtime()
