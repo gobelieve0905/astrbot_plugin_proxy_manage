@@ -87,7 +87,7 @@ def region_of(name: str) -> str:
     return '其他'
 
 
-@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.4')
+@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.5')
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -267,6 +267,7 @@ class ProxyManager(Star):
             ('subscription-import',self.subscription_import,['POST']), ('subscription-refresh',self.subscription_refresh,['POST']),
             ('control-status',self.control_status,['GET']), ('control-select',self.control_select,['POST']),
             ('node-probe',self.node_probe,['POST']), ('nodes-probe',self.nodes_probe,['POST']),
+            ('runtime-config',self.runtime_config,['GET']), ('runtime-apply',self.runtime_apply,['POST']),
         )
         for name,handler,methods in routes:
             self.context.register_web_api(base+'/'+name,handler,methods,'代理管理中心')
@@ -484,7 +485,7 @@ class ProxyManager(Star):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.4'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.5'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -523,7 +524,7 @@ class ProxyManager(Star):
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
             async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.4'})
+                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.5'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -615,6 +616,78 @@ class ProxyManager(Star):
         if not control['enabled'] or not control['url']: raise ValueError('Mihomo 协议测速需要先启用外部控制接口')
         return control,({'Authorization':'Bearer '+control['secret']} if control['secret'] else {})
 
+    def _runtime_document(self) -> dict:
+        """Build the controlled Mihomo fragment from plugin intent.
+
+        Subscription URLs remain providers so native protocols (AnyTLS, VLESS,
+        Hysteria2, etc.) are parsed by Mihomo itself. The plugin only owns the
+        provider/group/rule layer and never exposes credentials in the response.
+        """
+        try:
+            import yaml
+        except ImportError as exc:
+            raise ValueError('缺少 PyYAML，无法生成 Mihomo 配置') from exc
+        providers={}
+        provider_ids=[]
+        for sub in self.state['subscriptions']:
+            if not sub['enabled'] or not sub['url']:
+                continue
+            pid='provider-'+ident(sub['id'])
+            providers[pid]={'type':'http','url':sub['url'],'path':'./proxy_providers/'+pid+'.yaml',
+                            'interval':max(300,int(sub.get('interval',60) or 60)*60),
+                            'health-check':{'enable':True,'interval':300,'url':'https://www.gstatic.com/generate_204'}}
+            provider_ids.append(pid)
+        groups=[]
+        for group in self.state['groups']:
+            if group['id']=='direct':
+                continue
+            mode={'select':'select','url-test':'url-test','fallback':'fallback'}.get(group['mode'],'select')
+            item={'name':group['name'],'type':mode,'use':provider_ids or [],'proxies':['DIRECT']}
+            if group['mode'] in {'url-test','fallback'}:
+                item.update({'url':'https://www.gstatic.com/generate_204','interval':300,'tolerance':50})
+            groups.append(item)
+        names={item['id']:item['name'] for item in self.state['groups']}
+        rules=[]
+        for route in self.state['routes']:
+            if not route['enabled'] or route['target'] not in names: continue
+            host=route['host'].removeprefix('*.')
+            rules.append(('DOMAIN' if route['match']=='exact' else 'DOMAIN-SUFFIX')+','+host+','+names[route['target']])
+        rules.append('MATCH,'+names.get('direct','DIRECT'))
+        document={'mixed-port':7890,'allow-lan':False,'mode':'rule','log-level':'silent',
+                  'proxy-providers':providers,'proxy-groups':groups,'rules':rules}
+        # Validate serialization before handing the document to the controller.
+        yaml.safe_load(yaml.safe_dump(document,allow_unicode=True,sort_keys=False))
+        return document
+
+    async def runtime_config(self):
+        try:
+            document=self._runtime_document()
+            preview=copy.deepcopy(document)
+            for provider in preview.get('proxy-providers',{}).values():
+                provider['url']=urlparse(provider['url']).scheme+'://[configured]'
+            return json_response({'config':preview,'mapping':{
+                node['id']:{'name':node['name'],'subscription_id':node['subscription_id']}
+                for node in self.state['nodes'] if node['enabled']
+            },'applied':False})
+        except (ValueError,TypeError) as exc:
+            return error_response(str(exc))
+
+    async def runtime_apply(self):
+        try:
+            document=self._runtime_document(); control,headers=self._control()
+            import yaml
+            payload={'path':'/config.yaml','payload':yaml.safe_dump(document,allow_unicode=True,sort_keys=False)}
+            async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
+                response=await client.put('/configs?force=true',json=payload); response.raise_for_status()
+                running=await client.get('/configs'); running.raise_for_status(); runtime=running.json()
+            if not isinstance(runtime,dict) or runtime.get('mode')!='rule':
+                raise ValueError('Mihomo 已响应，但运行配置未切换到 rule 模式')
+            self.event({'action':'runtime_apply','result':'ok','groups':len(document['proxy-groups']),'rules':len(document['rules'])})
+            return json_response({'applied':True,'runtime':{'mode':runtime.get('mode'),'mixed-port':runtime.get('mixed-port')}})
+        except (ValueError,httpx.HTTPError,OSError) as exc:
+            self.event({'action':'runtime_apply','result':'failed','message':safe_error(exc)})
+            return error_response(str(exc) if isinstance(exc,ValueError) else 'Mihomo 配置应用失败，请检查控制接口和内核日志')
+
     def _set_health(self,node:dict,status:str,latency:int|None=None,error:str=''):
         self.health[node['id']]={'status':status,'latency_ms':latency,'error':str(error)[:300],
                                  'checked_at':int(time.time()),'target':'mihomo-control' if node['kind']=='mihomo' else 'direct-http'}
@@ -705,7 +778,7 @@ class ProxyManager(Star):
     async def initialize(self):
         if self.auto_task and not self.auto_task.done(): self.auto_task.cancel()
         self.auto_task=asyncio.create_task(self._auto_loop())
-        logger.info('代理管理中心 0.2.4 已加载')
+        logger.info('代理管理中心 0.2.5 已加载')
 
     async def terminate(self):
         if self.auto_task:

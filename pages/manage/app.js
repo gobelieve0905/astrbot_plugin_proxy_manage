@@ -52,7 +52,7 @@ function render(){
     html=`<section class="panel"><h2>平台策略</h2>${Object.entries(state.templates).map(([id,template])=>`<div class="platform"><b>${esc(template.name)}</b><small>${esc(template.hosts.join(' · '))}</small><select data-platform="${esc(id)}">${groupOptions((state.platforms[id]||{}).group_id||'direct')}</select><button data-template="${esc(id)}">应用模板</button></div>`).join('')}</section>`
   } else if(tab==='control'){
     const groups=Object.entries(controlResult?.proxies||{}).filter(([,group])=>['Selector','URLTest','Fallback','LoadBalance'].includes(group.type))
-    html=`<section class="panel"><div class="bar"><h2>Mihomo / Clash 外部控制</h2><button id="control-status">保存并检查</button></div><div class="control-form"><label><input type="checkbox" data-ck="enabled" ${state.control.enabled?'checked':''}> 启用</label><input id="control-url" value="${esc(state.control.url)}" placeholder="http://127.0.0.1:9090"><input id="control-secret" type="password" value="${esc(state.control.secret)}" placeholder="密钥"><input id="control-timeout" type="number" min="3" max="30" value="${state.control.timeout}"></div></section>
+    html=`<section class="panel"><div class="bar"><h2>Mihomo / Clash 外部控制</h2><div class="actions"><button id="control-status">保存并检查</button><button id="runtime-apply" class="primary">应用代理配置</button></div></div><div class="control-form"><label><input type="checkbox" data-ck="enabled" ${state.control.enabled?'checked':''}> 启用</label><input id="control-url" value="${esc(state.control.url)}" placeholder="http://127.0.0.1:9090"><input id="control-secret" type="password" value="${esc(state.control.secret)}" placeholder="密钥"><input id="control-timeout" type="number" min="3" max="30" value="${state.control.timeout}"></div><p class="muted">应用后由 Mihomo 使用订阅提供者、代理组和分流规则处理 AstrBot 的统一代理入口。</p></section>
       ${groups.length?`<section class="panel"><h2>代理组状态</h2>${groups.map(([name,group])=>`<div class="control-group"><b>${esc(name)}</b><small>${esc(group.type)} · ${esc(group.now||'无')}</small><select data-select="${esc(name)}">${(group.all||[]).map(node=>`<option value="${esc(node)}" ${node===group.now?'selected':''}>${esc(node)}</option>`).join('')}</select></div>`).join('')}</section>`:'<section class="panel"><p class="muted">尚未检查，或控制接口没有可切换代理组。</p></section>'}`
   } else {
     html=`<section class="panel"><h2>连接日志</h2>${state.events.slice().reverse().map(event=>`<div class="log">${esc(event.action)} · ${esc(event.result||'')}<small>${new Date(event.at*1000).toLocaleString()}</small></div>`).join('')||'<p class="muted">暂无事件。</p>'}</section>`
@@ -107,6 +107,7 @@ function bind(){
   }))
   $('preview')?.addEventListener('click',async()=>{$('result').textContent=JSON.stringify(await api.apiPost('preview',{host:$('host').value}),null,2)})
   $('control-status')?.addEventListener('click',checkControl)
+  $('runtime-apply')?.addEventListener('click',async()=>{try{await saveChanges();await api.apiPost('runtime-apply',{});controlResult=await api.apiGet('control-status');render();note('代理配置已应用并完成运行状态核对')}catch(error){note(error.message,true)}})
   document.querySelectorAll('[data-select]').forEach(select=>select.addEventListener('change',async()=>{try{await api.apiPost('control-select',{name:select.dataset.select,node:select.value});await checkControl();note('代理组已切换')}catch(error){note(error.message,true)}}))
 }
 
