@@ -19,6 +19,12 @@ DEFAULT = {
     "nodes": [],
 }
 
+PLATFORM_TEMPLATES = {
+    "telegram": {"name": "Telegram", "hosts": ["api.telegram.org"]},
+    "meta": {"name": "Meta", "hosts": ["graph.facebook.com", "graph-video.facebook.com"]},
+    "github": {"name": "GitHub", "hosts": ["api.github.com", "github.com", "raw.githubusercontent.com"]},
+}
+
 
 def _safe_url(value: str, *, allow_credentials: bool = False) -> bool:
     try:
@@ -43,7 +49,7 @@ def _safe_host(value: object) -> str:
     return host
 
 
-@register("astrbot_plugin_proxy_manage", "gobelieve", "可视化管理 AstrBot 代理出口", "0.1.1")
+@register("astrbot_plugin_proxy_manage", "gobelieve", "可视化管理 AstrBot 代理出口", "0.1.2")
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -144,8 +150,55 @@ class ProxyManager(Star):
             ("preview", self.page_preview, ["POST"]),
             ("probe", self.page_probe, ["POST"]),
             ("events", self.page_events, ["GET"]),
+            ("templates", self.page_templates, ["GET"]),
         ):
             self.context.register_web_api(base + "/" + suffix, handler, methods, "代理管理中心")
+
+    def _validate_state(self, value: object) -> dict:
+        state = self._normalize(value)
+        if not isinstance(value, dict) or not isinstance(value.get("profiles"), list):
+            raise ValueError("策略配置必须是对象，并包含 profiles 数组")
+        raw_profiles = value["profiles"]
+        for profile in raw_profiles:
+            if not isinstance(profile, dict):
+                raise ValueError("策略配置格式无效")
+            if profile.get("kind", "direct") not in {"direct", "http", "socks5", "mihomo"}:
+                raise ValueError("不支持的策略类型：" + str(profile.get("kind")))
+        ids = set()
+        for profile in state["profiles"]:
+            if profile["id"] in ids:
+                raise ValueError("策略 ID 重复：" + profile["id"])
+            ids.add(profile["id"])
+            if profile["kind"] != "direct" and not profile["endpoint"]:
+                raise ValueError("非直连策略必须配置代理入口：" + profile["id"])
+            if profile["endpoint"] and not _safe_url(profile["endpoint"], allow_credentials=True):
+                raise ValueError("策略代理入口无效：" + profile["id"])
+        raw_routes = value.get("routes", [])
+        if not isinstance(raw_routes, list):
+            raise ValueError("分流规则配置格式无效")
+        for route in raw_routes:
+            if not isinstance(route, dict):
+                raise ValueError("分流规则配置格式无效")
+            if route.get("match", "exact") not in {"exact", "suffix"}:
+                raise ValueError("不支持的匹配方式：" + str(route.get("match")))
+        seen = set()
+        for route in state["routes"]:
+            key = (route["host"], route["match"])
+            if key in seen:
+                raise ValueError("分流规则重复：" + route["host"])
+            seen.add(key)
+            if route["profile_id"] not in ids:
+                raise ValueError("分流规则引用了不存在的策略：" + route["profile_id"])
+        for left in state["routes"]:
+            for right in state["routes"]:
+                if left is right or not left.get("enabled", True) or not right.get("enabled", True):
+                    continue
+                left_host = left["host"].removeprefix("*.")
+                right_host = right["host"].removeprefix("*.")
+                covered = left_host == right_host or left_host.endswith("." + right_host) or right_host.endswith("." + left_host)
+                if covered and (left["match"] == "suffix" or right["match"] == "suffix"):
+                    raise ValueError("后缀规则存在覆盖冲突：{} 与 {}".format(left["host"], right["host"]))
+        return state
 
     def _snapshot(self) -> dict:
         profiles = []
@@ -188,6 +241,9 @@ class ProxyManager(Star):
     async def page_events(self):
         return json_response({"events": self.events[-100:]})
 
+    async def page_templates(self):
+        return json_response({"templates": PLATFORM_TEMPLATES})
+
     async def page_save(self):
         try:
             payload = await request.json()
@@ -205,8 +261,16 @@ class ProxyManager(Star):
                 endpoint = profile.get("endpoint", "")
                 if old and isinstance(endpoint, str) and endpoint.endswith("://[configured]"):
                     profile["endpoint"] = old.get("endpoint", "")
+            candidate = self._validate_state(payload)
+            if candidate == self.state:
+                return json_response(self._snapshot())
             async with self.lock:
-                await self._persist(payload)
+                previous_state = self.state
+                try:
+                    await self._persist(candidate)
+                except Exception:
+                    self.state = previous_state
+                    raise
                 self._event({"action": "save", "result": "ok", "message": "配置已保存"})
             return json_response(self._snapshot())
         except (ValueError, TypeError) as exc:
