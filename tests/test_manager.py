@@ -77,6 +77,7 @@ class TestConfigurationRules(unittest.TestCase):
                 {"id": "sub-sg", "name": "SG", "url": "https://sub.example/sg", "enabled": True, "interval": 60},
             ],
             "platforms": {}, "control": {"enabled": True, "url": "http://mihomo:9090", "secret": "secret", "timeout": 8},
+            "proxy_entry": {"http_url": "http://proxy.example:7890", "socks_url": "", "source": "configured"},
         }
         manager.events = []
         manager._test_dir = tempfile.TemporaryDirectory()
@@ -118,10 +119,17 @@ class TestConfigurationRules(unittest.TestCase):
 
     def test_runtime_groups_must_follow_selected_node_members(self):
         document = self._manager_for_runtime()._runtime_document()
+        self.assertNotIn("mixed-port", document)
         groups = {item["name"]: item for item in document["proxy-groups"]}
         self.assertNotIn("DIRECT", groups["香港自动"].get("proxies", []))
         self.assertEqual(groups["香港自动"].get("use"), ["provider-sub-hk"])
         self.assertEqual(groups["新加坡自动"].get("use"), ["provider-sub-sg"])
+
+    def test_proxy_entry_is_separate_from_control_endpoint(self):
+        manager = self._manager_for_runtime()
+        normalized = manager._normalize({"control": {"enabled": True, "url": "http://control.example:9090", "secret": "key"}, "proxy_entry": {"http_url": "http://proxy.example:7890"}})
+        self.assertEqual(normalized["control"]["url"], "http://control.example:9090")
+        self.assertEqual(normalized["proxy_entry"]["http_url"], "http://proxy.example:7890")
 
     def test_runtime_apply_must_verify_groups_and_rules(self):
         manager = self._manager_for_runtime()

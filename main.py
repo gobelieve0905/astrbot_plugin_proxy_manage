@@ -87,7 +87,7 @@ def region_of(name: str) -> str:
     return '其他'
 
 
-@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.6')
+@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.7')
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -197,11 +197,17 @@ class ProxyManager(Star):
 
         control=source.get('control') if isinstance(source.get('control'),dict) else {}
         timeout=int(control.get('timeout',8) or 8)
+        entry=source.get('proxy_entry') if isinstance(source.get('proxy_entry'),dict) else {}
         return {
             'version':2, 'name':str(source.get('name','默认配置'))[:80], 'nodes':nodes, 'groups':groups,
             'routes':routes, 'platforms':platforms, 'subscriptions':subscriptions,
             'control':{'enabled':bool(control.get('enabled',False)),'url':str(control.get('url','')).rstrip('/')[:300],
-                       'secret':str(control.get('secret',''))[:500],'timeout':max(3,min(timeout,30))},
+                       'secret':str(control.get('secret',''))[:500],'timeout':max(3,min(timeout,30)),
+                       'deployment':control.get('deployment') if control.get('deployment') in {'existing','dedicated'} else 'existing',
+                       'scope':control.get('scope') if control.get('scope') in {'providers-groups-rules','full'} else 'providers-groups-rules'},
+            'proxy_entry':{'http_url':str(entry.get('http_url','')).rstrip('/')[:300],
+                           'socks_url':str(entry.get('socks_url','')).rstrip('/')[:300],
+                           'source':entry.get('source') if entry.get('source') in {'configured','detected','unknown'} else 'unknown'},
         }
 
     def _validate(self, value: object) -> dict:
@@ -242,6 +248,12 @@ class ProxyManager(Star):
                 raise ValueError('订阅自动刷新间隔必须在 5 到 1440 分钟之间')
         if state['control']['enabled'] and not safe_url(state['control']['url']):
             raise ValueError('控制接口地址无效，只允许 HTTP 或 HTTPS')
+        for key in ('http_url','socks_url'):
+            value=state['proxy_entry'][key]
+            if value and not safe_url(value):
+                raise ValueError('代理入口地址无效：'+key)
+        if state['control']['deployment']=='dedicated' and state['control']['scope']=='full':
+            raise ValueError('插件暂不允许接管独立内核的完整配置，请使用受限配置范围')
         return state
 
     def _load_health(self) -> dict:
@@ -280,6 +292,8 @@ class ProxyManager(Star):
         for subscription in result['subscriptions']:
             subscription['url']=urlparse(subscription['url']).scheme+'://[configured]'
         result['control']['secret']='[configured]' if result['control']['secret'] else ''
+        for key in ('http_url','socks_url'):
+            if result['proxy_entry'][key]: result['proxy_entry'][key]=urlparse(result['proxy_entry'][key]).scheme+'://[configured]'
         result['health']=self.health
         result['events']=self.events[-50:]; result['templates']=TEMPLATES
         return result
@@ -486,7 +500,7 @@ class ProxyManager(Star):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.6'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.7'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -525,7 +539,7 @@ class ProxyManager(Star):
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
             async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.6'})
+                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.7'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -614,13 +628,14 @@ class ProxyManager(Star):
 
     def _control(self):
         control=self.state['control']
-        if not control['enabled'] or not control['url']: raise ValueError('Mihomo 协议测速需要先启用外部控制接口')
+        if not control['enabled'] or not control['url']: raise ValueError('尚未配置 Mihomo 控制接口地址和密钥')
         return control,({'Authorization':'Bearer '+control['secret']} if control['secret'] else {})
 
     async def _kernel_status(self) -> dict:
         control=self.state['control']
         if not control['enabled'] or not control['url']:
-            return {'state':'not_configured','ready':False,'message':'尚未配置 Mihomo 控制接口'}
+            return {'state':'not_configured','ready':False,'message':'尚未配置 Mihomo 控制接口地址和密钥',
+                    'deployment':control.get('deployment','existing'),'scope':control.get('scope','providers-groups-rules')}
         try:
             headers={'Authorization':'Bearer '+control['secret']} if control['secret'] else {}
             async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
@@ -629,12 +644,14 @@ class ProxyManager(Star):
                 raw_version=str(version.get('version',''))
                 match=re.search(r'(\d+)\.(\d+)\.(\d+)',raw_version)
                 if not version.get('meta') or not match or tuple(map(int,match.groups())) < (1,19,0):
-                    return {'state':'version_unsupported','ready':False,'message':'需要 Mihomo Meta 1.19.0 或更高版本','version':raw_version}
+                    return {'state':'version_unsupported','ready':False,'message':'需要 Mihomo Meta 1.19.0 或更高版本','version':raw_version,
+                            'deployment':control.get('deployment','existing'),'scope':control.get('scope','providers-groups-rules')}
                 configs=await client.get('/configs'); configs.raise_for_status(); runtime=configs.json()
                 proxies_response=await client.get('/proxies'); proxies_response.raise_for_status(); proxies=proxies_response.json().get('proxies',{})
                 rules_response=await client.get('/rules'); rules_response.raise_for_status(); runtime_rules=rules_response.json().get('rules',[])
             if runtime.get('mode')!='rule':
-                return {'state':'config_not_applied','ready':True,'message':'Mihomo 已连接，但插件配置尚未应用','version':raw_version}
+                return {'state':'config_not_applied','ready':True,'message':'Mihomo 已连接，但插件配置尚未应用','version':raw_version,
+                        'deployment':control.get('deployment','existing'),'scope':control.get('scope','providers-groups-rules')}
             try:
                 expected=self._runtime_document()
             except ValueError:
@@ -642,8 +659,11 @@ class ProxyManager(Star):
             if expected:
                 names={group['name'] for group in expected['proxy-groups']}
                 if not isinstance(proxies,dict) or not names.issubset(proxies) or len(runtime_rules)<len(expected['rules']):
-                    return {'state':'runtime_inconsistent','ready':True,'message':'运行配置与插件配置不一致','version':raw_version}
-            return {'state':'connected','ready':True,'message':'Mihomo 已连接且运行配置已核对','version':raw_version}
+                    return {'state':'runtime_inconsistent','ready':True,'message':'运行配置与插件配置不一致','version':raw_version,
+                            'deployment':control.get('deployment','existing'),'scope':control.get('scope','providers-groups-rules')}
+            return {'state':'connected','ready':True,'message':'Mihomo 已连接且运行配置已核对','version':raw_version,
+                    'deployment':control.get('deployment','existing'),'scope':control.get('scope','providers-groups-rules'),
+                    'proxy_entry':self.state['proxy_entry']}
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in {401,403}:
                 return {'state':'auth_failed','ready':False,'message':'Mihomo 控制接口认证失败'}
@@ -698,7 +718,7 @@ class ProxyManager(Star):
             host=route['host'].removeprefix('*.')
             rules.append(('DOMAIN' if route['match']=='exact' else 'DOMAIN-SUFFIX')+','+host+','+names[route['target']])
         rules.append('MATCH,'+names.get('direct','DIRECT'))
-        document={'mixed-port':7890,'allow-lan':False,'mode':'rule','log-level':'silent',
+        document={'mode':'rule','log-level':'silent',
                   'proxy-providers':providers,'proxy-groups':groups,'rules':rules}
         # Validate serialization before handing the document to the controller.
         yaml.safe_load(yaml.safe_dump(document,allow_unicode=True,sort_keys=False))
@@ -723,6 +743,8 @@ class ProxyManager(Star):
             if kernel['state'] in {'not_configured','connection_failed','auth_failed','version_unsupported'}:
                 raise ValueError('无法应用配置：'+kernel['message'])
             document=self._runtime_document(); control,headers=self._control()
+            if control['scope']!='providers-groups-rules':
+                raise ValueError('插件只允许管理 providers、groups 和 rules 配置范围')
             import yaml
             payload={'path':'/config.yaml','payload':yaml.safe_dump(document,allow_unicode=True,sort_keys=False)}
             async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
@@ -839,7 +861,7 @@ class ProxyManager(Star):
     async def initialize(self):
         if self.auto_task and not self.auto_task.done(): self.auto_task.cancel()
         self.auto_task=asyncio.create_task(self._auto_loop())
-        logger.info('代理管理中心 0.2.6 已加载')
+        logger.info('代理管理中心 0.2.7 已加载')
 
     async def terminate(self):
         if self.auto_task:
