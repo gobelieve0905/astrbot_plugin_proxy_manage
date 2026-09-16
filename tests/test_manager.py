@@ -79,6 +79,8 @@ class TestConfigurationRules(unittest.TestCase):
             "platforms": {}, "control": {"enabled": True, "url": "http://mihomo:9090", "secret": "secret", "timeout": 8},
         }
         manager.events = []
+        manager._test_dir = tempfile.TemporaryDirectory()
+        manager.events_path = Path(manager._test_dir.name) / "events.jsonl"
         return manager
 
     def test_runtime_groups_must_follow_selected_node_members(self):
