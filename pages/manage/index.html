@@ -1,5 +1,5 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>代理管理中心</title><link rel="stylesheet" href="./style.css"></head><body><main>
-<header><div><p class="eyebrow">EGRESS CONTROL · 0.1.0</p><h1>代理管理中心</h1><p class="muted">查看请求出口、管理分流策略，并在业务请求前完成网络诊断。</p></div><button id="reload">刷新状态</button></header>
+<header><div><p class="eyebrow">EGRESS CONTROL · 0.1.1</p><h1>代理管理中心</h1><p class="muted">查看请求出口、管理分流策略，并在业务请求前完成网络诊断。</p></div><button id="reload">刷新状态</button></header>
 <div id="notice" class="notice" hidden></div>
 <section class="grid"><article><span class="label">代理策略</span><strong id="profile-count">-</strong><small>已配置出口</small></article><article><span class="label">分流规则</span><strong id="route-count">-</strong><small>域名匹配</small></article><article><span class="label">节点目录</span><strong id="node-count">-</strong><small>可供策略使用</small></article><article><span class="label">事件记录</span><strong id="event-count">-</strong><small>最近 100 条</small></article></section>
 <section class="panel"><div class="panel-head"><div><h2>策略与出口</h2><p class="muted">每个业务平台应明确绑定策略。未配置的域名默认直连。</p></div><button id="save">保存配置</button></div><div id="profiles" class="rows"></div></section>

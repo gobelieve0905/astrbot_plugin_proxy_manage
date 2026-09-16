@@ -43,7 +43,7 @@ def _safe_host(value: object) -> str:
     return host
 
 
-@register("astrbot_plugin_proxy_manage", "gobelieve", "可视化管理 AstrBot 代理出口", "0.1.0")
+@register("astrbot_plugin_proxy_manage", "gobelieve", "可视化管理 AstrBot 代理出口", "0.1.1")
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
