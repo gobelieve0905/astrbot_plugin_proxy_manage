@@ -1139,7 +1139,7 @@ class ProxyManager(Star):
             document['external-controller']=control.get('listen','127.0.0.1:9090')
             document['secret']=control.get('secret','')
             port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
-            if port: document['mixed-port']=port
+            if port: document.update({'mixed-port':port,'allow-lan':True,'bind-address':'*'})
         # Validate serialization before handing the document to the controller.
         yaml.safe_load(yaml.safe_dump(document,allow_unicode=True,sort_keys=False))
         return document
@@ -1204,6 +1204,7 @@ class ProxyManager(Star):
                   'rules':['MATCH,DIRECT'],'external-controller':control.get('listen','127.0.0.1:9090'),'secret':control.get('secret','')}
         port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
         if port: document['mixed-port']=port
+        if port: document.update({'allow-lan':True,'bind-address':'*'})
         return document
 
     async def runtime_config(self):

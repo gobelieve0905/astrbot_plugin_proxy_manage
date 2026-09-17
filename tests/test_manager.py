@@ -210,6 +210,7 @@ class TestConfigurationRules(unittest.TestCase):
     def test_runtime_groups_must_follow_selected_node_members(self):
         document = self._manager_for_runtime()._runtime_document()
         self.assertEqual(document["mixed-port"],7890)
+        self.assertTrue(document['allow-lan']); self.assertEqual(document['bind-address'],'*')
         groups = {item["name"]: item for item in document["proxy-groups"]}
         self.assertEqual(groups["group-hk"].get("proxies"), ["node-hk-1"])
         self.assertEqual(groups["group-sg"].get("proxies"), ["node-sg-1"])
