@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import json
 import sys
@@ -109,7 +110,7 @@ class TestConfigurationRules(unittest.TestCase):
             manager.path = Path(directory) / "config.json"; manager.backup = Path(directory) / "config.previous.json"; manager.state = {}
             state = {"nodes": [], "groups": [{"id": "direct", "name": "直连", "mode": "direct", "node_ids": [], "selected": "", "enabled": True}], "routes": [], "subscriptions": [], "platforms": {}, "control": {"enabled": False, "url": "", "secret": "", "timeout": 8}}
             asyncio.run(manager.persist(state))
-            self.assertEqual(json.loads(manager.path.read_text())["version"], 2)
+            self.assertEqual(json.loads(manager.path.read_text())["version"], 3)
             self.assertEqual(manager.path.stat().st_mode & 0o777, 0o600)
             asyncio.run(manager.persist(state))
             self.assertEqual(manager.backup.stat().st_mode & 0o777, 0o600)
@@ -135,8 +136,8 @@ class TestConfigurationRules(unittest.TestCase):
         manager = self.module.ProxyManager.__new__(self.module.ProxyManager)
         manager.state = {
             "nodes": [
-                {"id": "hk-1", "name": "HK 1", "kind": "mihomo", "endpoint": "anytls://secret", "subscription_id": "sub-hk", "enabled": True},
-                {"id": "sg-1", "name": "SG 1", "kind": "mihomo", "endpoint": "anytls://secret2", "subscription_id": "sub-sg", "enabled": True},
+                {"id": "hk-1", "name": "HK 1", "display_name":"HK 1", "protocol":"anytls", "engine":"mihomo", "kind": "mihomo", "endpoint": "anytls://secret@example.com:443", "connection":{"uri":"anytls://secret@example.com:443"}, "kernel_name":"node-hk-1", "support":{"status":"supported","reason":""}, "subscription_id": "sub-hk", "enabled": True},
+                {"id": "sg-1", "name": "SG 1", "display_name":"SG 1", "protocol":"anytls", "engine":"mihomo", "kind": "mihomo", "endpoint": "anytls://secret2@example.com:443", "connection":{"uri":"anytls://secret2@example.com:443"}, "kernel_name":"node-sg-1", "support":{"status":"supported","reason":""}, "subscription_id": "sub-sg", "enabled": True},
             ],
             "groups": [
                 {"id": "direct", "name": "直连", "mode": "direct", "node_ids": [], "selected": "", "enabled": True},
@@ -194,9 +195,9 @@ class TestConfigurationRules(unittest.TestCase):
         document = self._manager_for_runtime()._runtime_document()
         self.assertNotIn("mixed-port", document)
         groups = {item["name"]: item for item in document["proxy-groups"]}
-        self.assertNotIn("DIRECT", groups["香港自动"].get("proxies", []))
-        self.assertEqual(groups["香港自动"].get("use"), ["provider-sub-hk"])
-        self.assertEqual(groups["新加坡自动"].get("use"), ["provider-sub-sg"])
+        self.assertEqual(groups["香港自动"].get("proxies"), ["node-hk-1"])
+        self.assertEqual(groups["新加坡自动"].get("proxies"), ["node-sg-1"])
+        self.assertNotIn("use", groups["香港自动"])
 
     def test_proxy_entry_is_separate_from_control_endpoint(self):
         manager = self._manager_for_runtime()
@@ -212,6 +213,60 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(nodes[0]['engine'], 'mihomo')
         self.assertIn('security=tls&sni=example.com', nodes[0]['endpoint'])
         self.assertEqual(nodes[0]['display_name'], '香港 AnyTLS')
+
+    def test_long_anytls_uri_is_lossless_and_generates_mihomo_parameters(self):
+        manager = self._manager_for_runtime(); padding='x'*420
+        uri=f'anytls://credential@[2001:db8::1]:443?sni=example.com&insecure=1&padding={padding}#长参数'
+        nodes, _ = manager._parse_subscription(uri, 'sub-long')
+        self.assertEqual(nodes[0]['endpoint'], uri)
+        normalized = manager._normalize({'nodes':nodes})['nodes'][0]
+        self.assertEqual(normalized['endpoint'], uri)
+        proxy = manager._mihomo_proxy(normalized)
+        self.assertEqual(proxy['server'], '2001:db8::1')
+        self.assertEqual(proxy['password'], 'credential')
+        self.assertEqual(proxy['sni'], 'example.com')
+        self.assertTrue(proxy['skip-cert-verify'])
+        self.assertEqual(proxy['padding'], padding)
+
+    def test_yaml_anytls_http_and_socks_preserve_auth_ipv6_and_tls(self):
+        manager = self._manager_for_runtime()
+        yaml_text = '''proxies:
+  - {name: AnyTLS v6, type: anytls, server: "2001:db8::10", port: 443, password: any-pass, sni: example.com, skip-cert-verify: true}
+  - {name: HTTP TLS, type: http, server: "2001:db8::20", port: 8443, username: alice, password: http-pass, tls: true}
+  - {name: SOCKS, type: socks5, server: socks.example, port: 1080, username: bob, password: socks-pass}
+'''
+        nodes, discovered = manager._parse_subscription(yaml_text, 'sub-yaml')
+        self.assertEqual(discovered, {'anytls','http','socks5'})
+        self.assertEqual([node['protocol'] for node in nodes], ['anytls','https','socks5'])
+        self.assertTrue(all(node['support']['status']=='supported' for node in nodes))
+        self.assertIn('[2001:db8::10]:443', nodes[0]['endpoint'])
+        self.assertEqual(nodes[0]['connection']['password'], 'any-pass')
+        self.assertTrue(manager._mihomo_proxy(nodes[1])['tls'])
+        self.assertEqual(manager._mihomo_proxy(nodes[2])['username'], 'bob')
+
+    def test_unverified_protocols_are_preserved_with_reason(self):
+        manager = self._manager_for_runtime()
+        nodes, discovered = manager._parse_subscription('vless://uuid@example.com:443#VLESS\nunknownx://opaque#未知', 'sub-other')
+        self.assertEqual(discovered, {'vless','unknownx'})
+        self.assertEqual(len(nodes), 2)
+        self.assertEqual(nodes[0]['support']['status'], 'unverified')
+        self.assertEqual(nodes[1]['support']['status'], 'unsupported')
+        self.assertTrue(all(node['support']['reason'] for node in nodes))
+        self.assertTrue(all(not node['enabled'] for node in nodes))
+
+    def test_subscription_notice_is_marked_but_not_auto_excluded(self):
+        manager = self._manager_for_runtime()
+        nodes, _ = manager._parse_subscription('anytls://credential@example.com:443#剩余流量：20 GB', 'sub-notice')
+        self.assertTrue(nodes[0]['suspected_notice'])
+        self.assertTrue(nodes[0]['notice_reason'])
+        self.assertFalse(nodes[0]['excluded'])
+        self.assertTrue(nodes[0]['enabled'])
+
+    def test_legacy_mihomo_kind_recovers_real_protocol(self):
+        manager = self._manager_for_runtime()
+        normalized = manager._normalize({'nodes':[{'id':'old','name':'A','kind':'mihomo','endpoint':'anytls://secret@example.com:443','subscription_id':'sub-a'}]})
+        self.assertEqual(normalized['nodes'][0]['protocol'], 'anytls')
+        self.assertEqual(normalized['nodes'][0]['support']['status'], 'supported')
 
     def test_excluded_nodes_are_not_candidates(self):
         manager = self._manager_for_runtime()
@@ -272,6 +327,40 @@ class TestConfigurationRules(unittest.TestCase):
         before = helper('sub-a', 'anytls://token@example.com:443?sni=example.com#旧名称')
         after = helper('sub-a', 'anytls://token@example.com:443?sni=example.com#新名称')
         self.assertEqual(before, after)
+
+    def test_vmess_display_name_and_subscription_order_do_not_change_identity(self):
+        helper = self.module.ProxyManager._stable_node_id
+        def vmess(name):
+            payload={'v':'2','ps':name,'add':'example.com','port':'443','id':'uuid','net':'ws'}
+            return 'vmess://'+base64.b64encode(json.dumps(payload).encode()).decode()
+        self.assertEqual(helper('sub-a',vmess('名称一')), helper('sub-a',vmess('名称二')))
+        manager = self._manager_for_runtime()
+        first, _ = manager._parse_subscription(vmess('A')+'\n'+vmess('B'), 'sub-a')
+        second, _ = manager._parse_subscription(vmess('B')+'\n'+vmess('A'), 'sub-a')
+        self.assertEqual({node['id'] for node in first}, {node['id'] for node in second})
+
+    def test_v2_migration_updates_all_references_health_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); endpoint='anytls://secret@example.com:443#旧名称'
+            raw={'version':2,'nodes':[{'id':'old-id','name':'旧名称','kind':'mihomo','endpoint':endpoint,'subscription_id':'sub-a','enabled':True}],
+                 'groups':[{'id':'g','name':'G','mode':'select','node_ids':['old-id'],'selected':'old-id','enabled':True}],
+                 'routes':[],'platforms':{},'subscriptions':[{'id':'sub-a','name':'A','url':'https://sub.example/a','enabled':True,'interval':60,'node_ids':['old-id']}],
+                 'control':{'enabled':False,'url':'','secret':'','timeout':8}}
+            (root/'config.json').write_text(json.dumps(raw)); (root/'health.json').write_text(json.dumps({'old-id':{'status':'ok'}}))
+            context=types.SimpleNamespace(register_web_api=lambda *args:None)
+            with patch.object(self.module.StarTools,'get_data_dir',return_value=root):
+                first=self.module.ProxyManager(context,{})
+                new_id=first.state['nodes'][0]['id']
+                self.assertEqual(first.state['version'],3)
+                self.assertEqual(first.state['groups'][1]['node_ids'],[new_id])
+                self.assertEqual(first.state['groups'][1]['selected'],new_id)
+                self.assertEqual(first.state['subscriptions'][0]['node_ids'],[new_id])
+                self.assertIn(new_id,first.health); self.assertNotIn('old-id',first.health)
+                backup=(root/'config.pre-v3.json').read_text(); self.assertEqual(json.loads(backup)['version'],2)
+                self.assertEqual((root/'config.pre-v3.json').stat().st_mode & 0o777,0o600)
+                second=self.module.ProxyManager(context,{})
+                self.assertEqual(second.state['nodes'][0]['id'],new_id)
+                self.assertEqual((root/'config.pre-v3.json').read_text(),backup)
 
     def test_refresh_preserves_excluded_node_preferences(self):
         manager = self._manager_for_runtime()

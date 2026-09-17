@@ -9,7 +9,7 @@ import json
 import re
 import time
 import uuid
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlsplit, urlunsplit
 
 import httpx
 from astrbot.api import AstrBotConfig, logger
@@ -28,6 +28,12 @@ KINDS={"http","https","socks5","socks5h","mihomo"}
 MODES={"direct","select","url-test","fallback"}
 MATCHES={"exact","suffix"}
 ADVANCED_SCHEMES={"ss","ssr","vmess","vless","trojan","hysteria","hysteria2","tuic","anytls"}
+SUPPORTED_PROTOCOLS={'anytls','http','https','socks','socks5','socks5h'}
+NOTICE_PATTERNS=(
+    r'剩余流量|流量剩余|已用流量|套餐流量|traffic',
+    r'距离.*重置|下次重置|重置剩余|reset',
+    r'套餐到期|到期时间|有效期|过期时间|expire|expiry',
+)
 CONFIGURED='[configured]'
 SENSITIVE_KEYS={
     'authorization','auth','password','passwd','secret','token','username','user','uuid','id',
@@ -128,6 +134,83 @@ def region_of(name: str) -> str:
     return '其他'
 
 
+def protocol_support(protocol: str) -> tuple[str,str]:
+    protocol=str(protocol or '').lower()
+    if protocol in SUPPORTED_PROTOCOLS: return 'supported',''
+    if protocol in ADVANCED_SCHEMES: return 'unverified','协议已识别，但尚未完成本插件运行验证'
+    return 'unsupported','订阅协议暂不支持'
+
+
+def infer_protocol(item: dict) -> str:
+    declared=str(item.get('protocol','')).lower()
+    if declared and declared!='mihomo': return 'socks5' if declared=='socks' else declared
+    endpoint=str(item.get('endpoint','')).strip()
+    if '://' in endpoint:
+        scheme=endpoint.split('://',1)[0].lower()
+        if scheme: return 'socks5' if scheme=='socks' else scheme
+    connection=item.get('connection')
+    if isinstance(connection,dict):
+        declared=str(connection.get('type','')).lower()
+        if declared: return 'socks5' if declared=='socks' else declared
+        uri=str(connection.get('uri',''))
+        if '://' in uri: return uri.split('://',1)[0].lower()
+    legacy=str(item.get('kind','http')).lower()
+    return 'unknown' if legacy=='mihomo' else ('socks5' if legacy=='socks' else legacy)
+
+
+def suspected_notice(name: str) -> tuple[bool,str]:
+    for pattern in NOTICE_PATTERNS:
+        if re.search(pattern,str(name or ''),re.I): return True,'名称疑似订阅流量、重置或到期提示'
+    return False,''
+
+
+def canonical_connection(protocol: str, endpoint: str='', connection: object=None) -> str:
+    """Canonical secret-bearing connection material; display-only fields are excluded."""
+    protocol=str(protocol or '').lower(); endpoint=str(endpoint or '').strip()
+    if protocol=='vmess' and endpoint.startswith('vmess://'):
+        try:
+            payload=json.loads(base64.b64decode(endpoint.split('://',1)[1]+'===').decode())
+            if isinstance(payload,dict):
+                payload={key:value for key,value in payload.items() if key not in {'ps','name','remark'}}
+                return 'vmess:'+json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+        except (ValueError,UnicodeError,json.JSONDecodeError): pass
+    if endpoint and '://' in endpoint:
+        try:
+            parsed=urlsplit(endpoint)
+            host=(parsed.hostname or '').lower(); port=parsed.port
+            user=unquote(parsed.username or ''); password=unquote(parsed.password or '')
+            auth=quote(user,safe='')
+            if password: auth+=':'+quote(password,safe='')
+            if auth: auth+='@'
+            display_host='['+host+']' if ':' in host and not host.startswith('[') else host
+            netloc=auth+display_host+((':'+str(port)) if port else '')
+            query=urlencode(sorted(parse_qsl(parsed.query,keep_blank_values=True)),doseq=True)
+            return urlunsplit((parsed.scheme.lower(),netloc,parsed.path,query,''))
+        except (TypeError,ValueError): pass
+    if isinstance(connection,dict):
+        clean={key:value for key,value in connection.items() if str(key).lower() not in {'name','ps','remark','display_name'}}
+        return protocol+':'+json.dumps(clean,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+    return protocol+':'+endpoint
+
+
+def identity_material(protocol: str, endpoint: str='', connection: object=None) -> str:
+    """Prefer stable address/principal fields; uncertain identities retain full canonical material."""
+    protocol=str(protocol or '').lower(); endpoint=str(endpoint or '').strip()
+    if endpoint and '://' in endpoint and protocol!='vmess':
+        try:
+            parsed=urlsplit(endpoint); host=(parsed.hostname or '').lower(); port=parsed.port
+            principal=unquote(parsed.username or '')
+            if host and port and (principal or protocol in {'http','https','socks','socks5','socks5h'}):
+                return json.dumps([protocol,host,port,principal],separators=(',',':'))
+        except (TypeError,ValueError): pass
+    if isinstance(connection,dict):
+        server=str(connection.get('server','')).lower(); port=connection.get('port')
+        principal=connection.get('username') or connection.get('user') or connection.get('uuid')
+        if server and port and (principal or protocol in {'http','https','socks','socks5','socks5h'}):
+            return json.dumps([protocol,server,port,str(principal or '')],separators=(',',':'))
+    return canonical_connection(protocol,endpoint,connection)
+
+
 @register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.10')
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -137,50 +220,83 @@ class ProxyManager(Star):
         self.data_dir.mkdir(parents=True,exist_ok=True)
         self.path=self.data_dir/'config.json'
         self.backup=self.data_dir/'config.previous.json'
+        self.migration_backup=self.data_dir/'config.pre-v3.json'
         self.health_path=self.data_dir/'health.json'
         self.events_path=self.data_dir/'events.jsonl'
-        for private_path in (self.path,self.backup,self.health_path,self.events_path):
+        for private_path in (self.path,self.backup,self.migration_backup,self.health_path,self.events_path):
             if private_path.exists():
                 try: private_path.chmod(0o600)
                 except OSError: logger.warning('代理中心私有文件权限收紧失败：'+private_path.name)
         self.lock=asyncio.Lock(); self.refresh_lock=asyncio.Lock()
         self.state=self._load(); self.health=self._load_health()
+        health_changed=False
         for old_id,new_id in getattr(self,'_id_aliases',{}).items():
-            if old_id != new_id and old_id in self.health and new_id not in self.health: self.health[new_id]=self.health.pop(old_id)
+            if old_id != new_id and old_id in self.health and new_id not in self.health:
+                self.health[new_id]=self.health.pop(old_id); health_changed=True
+        if health_changed: self.persist_health()
         self.events=self._load_events()
         self.previews={}; self.auto_task=None
         self._register_routes()
 
     def _load(self) -> dict:
+        from_disk=False
         try:
-            raw=json.loads(self.path.read_text(encoding='utf-8'))
+            raw=json.loads(self.path.read_text(encoding='utf-8')); from_disk=True
         except (OSError,ValueError):
             try: raw=json.loads(self.config.get('config_json','{}'))
             except (TypeError,ValueError): raw={}
-        return self._normalize(raw)
+        normalized=self._normalize(raw)
+        if from_disk and isinstance(raw,dict) and int(raw.get('version',0) or 0)<3:
+            try:
+                if not self.migration_backup.exists():
+                    self.migration_backup.write_text(json.dumps(raw,ensure_ascii=False,indent=2),encoding='utf-8')
+                    self.migration_backup.chmod(0o600)
+                temp=self.path.with_suffix('.migration.tmp')
+                temp.write_text(json.dumps(normalized,ensure_ascii=False,indent=2),encoding='utf-8'); temp.chmod(0o600)
+                temp.replace(self.path)
+            except OSError:
+                logger.warning('节点模型 v3 迁移写入失败，继续使用内存中的兼容配置')
+        return normalized
 
     def _normalize(self, raw: object) -> dict:
         source=raw if isinstance(raw,dict) else {}
-        nodes=[]; self._id_aliases={}
+        nodes=[]; node_by_id={}; self._id_aliases={}
         values=source.get('nodes',[]) if isinstance(source.get('nodes',[]),list) else []
         for item in values:
             if not isinstance(item,dict) or not ident(item.get('id')):
                 continue
             endpoint=str(item.get('endpoint','')).strip()
-            protocol=str(item.get('protocol') or item.get('kind','http')).lower()
-            old_id=ident(item['id']); endpoint=str(item.get('endpoint','')).strip(); subscription_id=ident(item.get('subscription_id'))
-            node_id=self._stable_node_id(subscription_id,endpoint) if subscription_id and endpoint else old_id
+            protocol=infer_protocol(item); connection=copy.deepcopy(item.get('connection')) if isinstance(item.get('connection'),dict) else {}
+            if not connection and endpoint: connection={'uri':endpoint}
+            old_id=ident(item['id']); subscription_id=ident(item.get('subscription_id'))
+            node_id=self._stable_node_id(subscription_id,endpoint,protocol,connection) if subscription_id else old_id
             self._id_aliases[old_id]=node_id
-            nodes.append({
+            support_status,support_reason=protocol_support(protocol)
+            support=item.get('support') if isinstance(item.get('support'),dict) else {}
+            notice,notice_reason=suspected_notice(item.get('display_name',item.get('name',item['id'])))
+            source_info=item.get('source') if isinstance(item.get('source'),dict) else {}
+            normalized_node={
                 'id':node_id, 'name':str(item.get('name',item.get('display_name',item['id'])))[:120],
                 'display_name':str(item.get('display_name',item.get('name',item['id'])))[:120],
-                'protocol':protocol[:24], 'engine':str(item.get('engine') or ('mihomo' if protocol in ADVANCED_SCHEMES else 'direct-http'))[:24],
+                'protocol':protocol[:24], 'engine':str(item.get('engine') or ('direct-http' if protocol in {'http','https','socks5','socks5h'} else 'mihomo'))[:24],
                 'kind':str(item.get('kind') or ('mihomo' if protocol in ADVANCED_SCHEMES else protocol))[:24],
-                'endpoint':endpoint, 'connection':copy.deepcopy(item.get('connection')) if isinstance(item.get('connection'),dict) else {},
+                'endpoint':endpoint, 'connection':connection,
                 'subscription_id':subscription_id, 'enabled':bool(item.get('enabled',True)),
                 'excluded':bool(item.get('excluded',False)), 'exclusion_reason':str(item.get('exclusion_reason',''))[:160],
                 'invalid_reference':bool(item.get('invalid_reference',False)),
-            })
+                'parameter_version':hashlib.sha256(canonical_connection(protocol,endpoint,connection).encode()).hexdigest()[:16],
+                'kernel_name':'node-'+node_id,
+                'source':{'type':source_info.get('type','subscription' if subscription_id else 'manual'),
+                          'subscription_id':subscription_id,'format':str(source_info.get('format','legacy'))[:24],
+                          'index':int(source_info.get('index',-1) if source_info.get('index') is not None else -1)},
+                'support':{'status':support_status,'reason':str(support.get('reason') or support_reason)[:200]},
+                'suspected_notice':bool(item.get('suspected_notice',notice)),
+                'notice_reason':str(item.get('notice_reason',notice_reason))[:160],
+            }
+            existing=node_by_id.get(node_id)
+            if not existing or (normalized_node['display_name'],normalized_node['parameter_version']) < (existing['display_name'],existing['parameter_version']):
+                node_by_id[node_id]=normalized_node
+        nodes=list(node_by_id.values())
 
         group_values=source.get('groups') if isinstance(source.get('groups'),list) else []
         if not group_values:
@@ -190,11 +306,14 @@ class ProxyManager(Star):
                     continue
                 item_id=ident(item['id']); node_id='legacy-'+item_id
                 if item.get('endpoint'):
-                    endpoint=str(item['endpoint']).strip(); protocol=str(item.get('protocol') or item.get('kind','http')).lower()
+                    endpoint=str(item['endpoint']).strip(); protocol=infer_protocol(item); support_status,support_reason=protocol_support(protocol)
                     nodes.append({'id':node_id,'name':str(item.get('name',item_id))[:120],'display_name':str(item.get('name',item_id))[:120],
                                   'protocol':protocol,'engine': 'mihomo' if protocol in ADVANCED_SCHEMES else 'direct-http',
-                                  'kind':str(item.get('kind') or protocol)[:24], 'endpoint':endpoint,'connection':{},
-                                  'subscription_id':'','enabled':True,'excluded':False,'exclusion_reason':'','invalid_reference':False})
+                                  'kind':str(item.get('kind') or protocol)[:24], 'endpoint':endpoint,'connection':{'uri':endpoint},
+                                  'subscription_id':'','enabled':True,'excluded':False,'exclusion_reason':'','invalid_reference':False,
+                                  'parameter_version':hashlib.sha256(canonical_connection(protocol,endpoint,{}).encode()).hexdigest()[:16],
+                                  'kernel_name':'node-'+node_id,'source':{'type':'legacy','subscription_id':'','format':'profile','index':-1},
+                                  'support':{'status':support_status,'reason':support_reason},'suspected_notice':False,'notice_reason':''})
                 group_values.append({'id':item_id,'name':item.get('name',item_id),
                                      'mode':'direct' if item.get('kind')=='direct' else 'select',
                                      'node_ids':[node_id] if item.get('endpoint') else [],
@@ -206,7 +325,7 @@ class ProxyManager(Star):
             groups.append({
                 'id':ident(item['id']), 'name':str(item.get('name',item['id']))[:80],
                 'mode':item.get('mode') if item.get('mode') in MODES else 'select',
-                'node_ids':[self._id_aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value)],
+                'node_ids':list(dict.fromkeys(self._id_aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value))),
                 'selected':self._id_aliases.get(ident(item.get('selected')),ident(item.get('selected'))), 'enabled':bool(item.get('enabled',True)),
             })
         if not any(group['id']=='direct' for group in groups): groups.insert(0,dict(DIRECT))
@@ -248,7 +367,7 @@ class ProxyManager(Star):
                 'id':ident(item.get('id')) or f'sub-{index+1}', 'name':str(item.get('name',f'订阅 {index+1}'))[:80],
                 'url':str(item['url'])[:1000], 'group':str(item.get('group','默认'))[:40] or '默认',
                 'enabled':bool(item.get('enabled',True)), 'interval':interval,
-                'node_ids':[ident(value) for value in item.get('node_ids',[]) if ident(value)],
+                'node_ids':list(dict.fromkeys(self._id_aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value))),
                 'updated_at':int(item.get('updated_at',0) or 0), 'next_refresh_at':int(item.get('next_refresh_at',0) or 0),
                 'upload':max(0,int(item.get('upload',0) or 0)), 'download':max(0,int(item.get('download',0) or 0)),
                 'total':max(0,int(item.get('total',0) or 0)), 'expire':int(item.get('expire',0) or 0),
@@ -260,7 +379,7 @@ class ProxyManager(Star):
         timeout=int(control.get('timeout',8) or 8)
         entry=source.get('proxy_entry') if isinstance(source.get('proxy_entry'),dict) else {}
         return {
-            'version':2, 'name':str(source.get('name','默认配置'))[:80], 'nodes':nodes, 'groups':groups,
+            'version':3, 'migration':{'stable_identity':1}, 'name':str(source.get('name','默认配置'))[:80], 'nodes':nodes, 'groups':groups,
             'routes':routes, 'platforms':platforms, 'subscriptions':subscriptions,
             'control':{'enabled':bool(control.get('enabled',False)),'url':str(control.get('url','')).rstrip('/')[:300],
                        'secret':str(control.get('secret',''))[:500],'timeout':max(3,min(timeout,30)),
@@ -282,7 +401,9 @@ class ProxyManager(Star):
         for node in state['nodes']:
             if node['id'] in node_ids: raise ValueError('节点 ID 重复：'+node['id'])
             node_ids.add(node['id'])
-            if node['kind'] not in KINDS or not safe_proxy_endpoint(node['endpoint']):
+            if node['kind'] not in KINDS:
+                raise ValueError('节点执行类型无效：'+node['id'])
+            if node['support']['status']=='supported' and not safe_proxy_endpoint(node['endpoint']):
                 raise ValueError('节点入口无效：'+node['id'])
         for group in state['groups']:
             if group['id'] in group_ids: raise ValueError('代理组 ID 重复：'+group['id'])
@@ -448,8 +569,13 @@ class ProxyManager(Star):
         group=next((item for item in self.state['groups'] if item['id']==group_id and item['enabled']),None)
         if not group: raise ValueError('代理组不存在或未启用')
         if group['mode']=='direct': return group,None
-        nodes=[node for node in self.state['nodes'] if node['id'] in group['node_ids'] and node['enabled'] and not node.get('excluded')]
+        if group['selected'] and group['selected'] not in {node['id'] for node in self.state['nodes']}:
+            raise ValueError('代理组手动选择已失效：'+group['name'])
+        nodes=[node for node in self.state['nodes'] if node['id'] in group['node_ids'] and node['enabled']
+               and not node.get('excluded') and node.get('support',{}).get('status','supported')=='supported']
         if not nodes: raise ValueError('代理组没有可用节点')
+        if group['selected'] and not any(node['id']==group['selected'] for node in nodes):
+            raise ValueError('代理组手动选择不可用或已失效：'+group['name'])
         selected=next((node for node in nodes if node['id']==group['selected']),nodes[0])
         if group['mode'] in {'url-test','fallback'}:
             healthy=[]
@@ -503,6 +629,25 @@ class ProxyManager(Star):
 
     def _parse_subscription(self,text:str,subscription_id:str):
         decoded=self._decode_subscription(text); nodes=[]; discovered=set()
+        def add_node(protocol:str,endpoint:str,connection:dict,name:str,index:int,source_format:str):
+            protocol='socks5' if protocol=='socks' else protocol.lower()
+            status,reason=protocol_support(protocol); notice,notice_reason=suspected_notice(name)
+            node_id=self._stable_node_id(subscription_id,endpoint,protocol,connection)
+            node={'id':node_id,'name':str(name)[:120],'display_name':str(name)[:120],'protocol':protocol,
+                  'engine':'direct-http' if protocol in {'http','https','socks5','socks5h'} else 'mihomo',
+                  'kind':protocol if protocol in {'http','https','socks5','socks5h'} else 'mihomo',
+                  'endpoint':endpoint,'connection':copy.deepcopy(connection),'subscription_id':subscription_id,
+                  'enabled':status=='supported','excluded':False,'exclusion_reason':'','invalid_reference':False,
+                  'parameter_version':hashlib.sha256(canonical_connection(protocol,endpoint,connection).encode()).hexdigest()[:16],
+                  'kernel_name':'node-'+node_id,
+                  'source':{'type':'subscription','subscription_id':subscription_id,'format':source_format,'index':index},
+                  'support':{'status':status,'reason':reason},'suspected_notice':notice,'notice_reason':notice_reason,
+                  'region':region_of(str(name))}
+            existing=next((item for item in nodes if item['id']==node_id),None)
+            if not existing: nodes.append(node)
+            elif (node['display_name'],node['parameter_version']) < (existing['display_name'],existing['parameter_version']):
+                nodes[nodes.index(existing)]=node
+
         if 'proxies:' in decoded:
             try:
                 import yaml
@@ -511,22 +656,32 @@ class ProxyManager(Star):
                 data=None
             if isinstance(data,dict) and isinstance(data.get('proxies'),list):
                 for index,item in enumerate(data['proxies']):
-                    if not isinstance(item,dict) or item.get('type') not in {'http','socks5'}: continue
+                    if not isinstance(item,dict): continue
+                    protocol=str(item.get('type','unknown')).lower(); discovered.add(protocol)
                     host=item.get('server'); port=item.get('port')
-                    if not host or not port: continue
-                    scheme=str(item['type']); auth=''
-                    if item.get('username'): auth=str(item['username'])+':'+str(item.get('password',''))+'@'
-                    endpoint=f'{scheme}://{auth}{host}:{port}'
-                    nodes.append({'id':f'{subscription_id}-{index+1}','name':str(item.get('name',f'{subscription_id}-{index+1}'))[:120],
-                                  'display_name':str(item.get('name',f'{subscription_id}-{index+1}'))[:120], 'protocol':scheme,
-                                  'engine':'direct-http','kind':scheme,'endpoint':endpoint,'connection':copy.deepcopy(item),
-                                  'subscription_id':subscription_id,'enabled':True,'excluded':False,'exclusion_reason':'','invalid_reference':False})
+                    name=str(item.get('name',f'{subscription_id}-{index+1}'))
+                    if not host or not port:
+                        add_node(protocol,'',item,name,index,'clash-yaml'); continue
+                    display_host='['+str(host)+']' if ':' in str(host) and not str(host).startswith('[') else str(host)
+                    if protocol in {'http','socks','socks5'}:
+                        scheme='socks5' if protocol in {'socks','socks5'} else ('https' if item.get('tls') else 'http'); auth=''
+                        if item.get('username') is not None:
+                            auth=quote(str(item.get('username','')),safe='')+':'+quote(str(item.get('password','')),safe='')+'@'
+                        endpoint=f'{scheme}://{auth}{display_host}:{port}'
+                    elif protocol=='anytls':
+                        credential=str(item.get('password') or item.get('username') or '')
+                        query={str(key).replace('_','-'):value for key,value in item.items()
+                               if key not in {'name','type','server','port','password','username'}}
+                        endpoint=f'anytls://{quote(credential,safe="")}@{display_host}:{port}'
+                        if query: endpoint+='?'+urlencode(sorted(query.items()),doseq=True)
+                    else:
+                        endpoint=f'{protocol}://{display_host}:{port}'
+                    add_node(scheme if protocol=='http' and item.get('tls') else protocol,endpoint,item,name,index,'clash-yaml')
         for index,line in enumerate(decoded.splitlines()):
             value=line.strip(); scheme=value.split('://',1)[0].lower() if '://' in value else ''
             if scheme: discovered.add(scheme)
-            if not value or scheme not in ADVANCED_SCHEMES|{'http','https','socks5','socks5h','socks'}: continue
+            if not value or not re.fullmatch(r'[a-z][a-z0-9+.-]*',scheme): continue
             if scheme=='socks': scheme='socks5'; value='socks5://'+value.split('://',1)[1]
-            protocol=scheme; kind=scheme if scheme in {'http','https','socks5','socks5h'} else 'mihomo'
             name=f'{subscription_id}-{index+1}'
             if scheme=='vmess':
                 try:
@@ -534,21 +689,14 @@ class ProxyManager(Star):
                     if isinstance(payload,dict) and payload.get('ps'): name=str(payload['ps'])
                 except (ValueError,UnicodeError): pass
             elif '#' in value: name=unquote(value.rsplit('#',1)[1])[:80]
-            node_id=subscription_id+'-'+hashlib.sha1(value.encode()).hexdigest()[:10]
-            if any(node['id']==node_id for node in nodes): node_id+='-'+str(index+1)
-            if safe_proxy_endpoint(value):
-                nodes.append({'id':node_id,'name':name[:120],'display_name':name[:120],'protocol':protocol,
-                              'engine':'direct-http' if kind != 'mihomo' else 'mihomo','kind':kind,'endpoint':value,
-                              'connection':{'uri':value},'subscription_id':subscription_id,'enabled':True,
-                              'excluded':False,'exclusion_reason':'','invalid_reference':False})
-        for node in nodes: node['region']=region_of(node['name'])
+            add_node(scheme,value,{'uri':value},name,index,'uri')
         return nodes,discovered
 
     @staticmethod
     def _summary(nodes:list[dict],discovered:set[str]):
         protocols={}; regions={}; names=[]
         for node in nodes:
-            protocols[node['kind']]=protocols.get(node['kind'],0)+1
+            protocols[node['protocol']]=protocols.get(node['protocol'],0)+1
             region=node.get('region','其他'); regions[region]=regions.get(region,0)+1
             if len(names)<8: names.append(node['name'])
         return {'count':len(nodes),'protocols':protocols,'regions':regions,'names':names,
@@ -603,6 +751,12 @@ class ProxyManager(Star):
 
     def _replace_subscription_nodes(self,subscription:dict,nodes:list[dict]):
         old=set(subscription['node_ids']); incoming={node['id'] for node in nodes}
+        existing={node['id']:node for node in self.state['nodes'] if node['id'] in old}
+        for node in nodes:
+            previous=existing.get(node['id'])
+            if previous:
+                for key in ('excluded','exclusion_reason'):
+                    node[key]=previous.get(key,node.get(key))
         for node in self.state['nodes']:
             if node['id'] in old and node['id'] not in incoming:
                 node['enabled']=False; node['invalid_reference']=True; node['exclusion_reason']='订阅已删除或节点参数已变更'
@@ -610,8 +764,10 @@ class ProxyManager(Star):
         subscription['node_ids']=[node['id'] for node in nodes]
 
     @staticmethod
-    def _stable_node_id(subscription_id:str, endpoint:str) -> str:
-        return subscription_id+'-'+hashlib.sha256(endpoint.strip().encode()).hexdigest()[:16]
+    def _stable_node_id(subscription_id:str, endpoint:str, protocol:str='', connection:object=None) -> str:
+        protocol=protocol or (endpoint.split('://',1)[0].lower() if '://' in endpoint else 'unknown')
+        identity=identity_material(protocol,endpoint,connection)
+        return subscription_id+'-'+hashlib.sha256(identity.encode()).hexdigest()[:16]
 
     def _record_subscription_error(self,subscription:dict,message:str):
         now=int(time.time())
@@ -638,7 +794,8 @@ class ProxyManager(Star):
                 previous=copy.deepcopy(self.state)
                 try:
                     for node in nodes:
-                        node['id']=self._stable_node_id(subscription_id,node['endpoint'])
+                        node['id']=self._stable_node_id(subscription_id,node['endpoint'],node.get('protocol',''),node.get('connection'))
+                        node['kernel_name']='node-'+node['id']
                         node['subscription_id']=subscription_id
                     self._replace_subscription_nodes(subscription,nodes)
                     now=int(time.time()); traffic=self._traffic_header(response.headers)
@@ -700,7 +857,8 @@ class ProxyManager(Star):
                         subscription.update({'name':item['name'],'group':item['group'],'interval':item['interval'],'enabled':True})
                         for node in item['nodes']:
                             node['subscription_id']=subscription['id']
-                            node['id']=self._stable_node_id(subscription['id'],node['endpoint'])
+                            node['id']=self._stable_node_id(subscription['id'],node['endpoint'],node.get('protocol',''),node.get('connection'))
+                            node['kernel_name']='node-'+node['id']
                         self._replace_subscription_nodes(subscription,item['nodes'])
                         now=int(time.time()); interval=int(item['interval'])
                         subscription['updated_at']=now
@@ -761,6 +919,39 @@ class ProxyManager(Star):
     async def kernel_status(self):
         return json_response(await self._kernel_status())
 
+    @staticmethod
+    def _typed_query_value(value:str):
+        if str(value).lower() in {'true','yes','1'}: return True
+        if str(value).lower() in {'false','no','0'}: return False
+        try: return int(value)
+        except (TypeError,ValueError): return value
+
+    def _mihomo_proxy(self,node:dict) -> dict:
+        protocol=node.get('protocol',''); connection=copy.deepcopy(node.get('connection',{}))
+        if node.get('support',{}).get('status','supported')!='supported':
+            raise ValueError('节点协议尚未验证，不能生成运行配置：'+node.get('display_name',node['id']))
+        if connection and connection.get('server') and connection.get('port'):
+            proxy={key:value for key,value in connection.items() if key not in {'uri','display_name'}}
+            proxy['name']=node['kernel_name']; proxy['type']='socks5' if protocol in {'socks','socks5','socks5h'} else ('http' if protocol in {'http','https'} else protocol)
+            return proxy
+        parsed=urlsplit(node['endpoint']); host=parsed.hostname; port=parsed.port
+        if not host or not port: raise ValueError('节点连接参数缺少服务器或端口：'+node['id'])
+        proxy={'name':node['kernel_name'],'type':'socks5' if protocol in {'socks','socks5','socks5h'} else ('http' if protocol in {'http','https'} else protocol),
+               'server':host,'port':port}
+        username=unquote(parsed.username or ''); password=unquote(parsed.password or '')
+        if protocol in {'http','https','socks','socks5','socks5h'}:
+            if username: proxy['username']=username
+            if password: proxy['password']=password
+            if protocol=='https': proxy['tls']=True
+        elif protocol=='anytls':
+            credential=password or username
+            if not credential: raise ValueError('AnyTLS 节点缺少密码：'+node['id'])
+            proxy['password']=credential
+        for key,value in parse_qsl(parsed.query,keep_blank_values=True):
+            target={'insecure':'skip-cert-verify','allow-insecure':'skip-cert-verify','servername':'sni'}.get(key,key.replace('_','-'))
+            proxy[target]=self._typed_query_value(value)
+        return proxy
+
     def _runtime_document(self) -> dict:
         """Build the controlled Mihomo fragment from plugin intent.
 
@@ -773,28 +964,17 @@ class ProxyManager(Star):
         except ImportError as exc:
             raise ValueError('缺少 PyYAML，无法生成 Mihomo 配置') from exc
         providers={}
-        provider_ids=[]
-        for sub in self.state['subscriptions']:
-            if not sub['enabled'] or not sub['url']:
-                continue
-            pid='provider-'+ident(sub['id'])
-            providers[pid]={'type':'http','url':sub['url'],'path':'./proxy_providers/'+pid+'.yaml',
-                            'interval':max(300,int(sub.get('interval',60) or 60)*60),
-                            'health-check':{'enable':True,'interval':300,'url':'https://www.gstatic.com/generate_204'}}
-            provider_ids.append(pid)
+        runnable={node['id']:node for node in self.state['nodes'] if node['enabled'] and not node.get('excluded')
+                  and not node.get('invalid_reference') and node.get('support',{}).get('status','supported')=='supported'}
+        proxies=[self._mihomo_proxy(node) for node in sorted(runnable.values(),key=lambda item:item['id'])]
         groups=[]
         for group in self.state['groups']:
             if group['id']=='direct':
                 continue
             mode={'select':'select','url-test':'url-test','fallback':'fallback'}.get(group['mode'],'select')
-            selected_nodes={node['id']:node for node in self.state['nodes'] if node['enabled'] and not node.get('excluded')}
-            selected_subscriptions={selected_nodes[node_id]['subscription_id'] for node_id in group['node_ids']
-                                    if node_id in selected_nodes and selected_nodes[node_id].get('subscription_id')}
-            group_providers=['provider-'+ident(sub_id) for sub_id in selected_subscriptions
-                             if 'provider-'+ident(sub_id) in providers]
-            if not group_providers:
-                raise ValueError('代理组没有可应用的订阅节点：'+group['name'])
-            item={'name':group['name'],'type':mode,'use':group_providers}
+            members=[runnable[node_id]['kernel_name'] for node_id in group['node_ids'] if node_id in runnable]
+            if not members: raise ValueError('代理组没有可应用的已验证节点：'+group['name'])
+            item={'name':group['name'],'type':mode,'proxies':members}
             if group['mode'] in {'url-test','fallback'}:
                 item.update({'url':'https://www.gstatic.com/generate_204','interval':300,'tolerance':50})
             groups.append(item)
@@ -805,7 +985,7 @@ class ProxyManager(Star):
             host=route['host'].removeprefix('*.')
             rules.append(('DOMAIN' if route['match']=='exact' else 'DOMAIN-SUFFIX')+','+host+','+names[route['target']])
         rules.append('MATCH,'+names.get('direct','DIRECT'))
-        document={'mode':'rule','log-level':'silent',
+        document={'mode':'rule','log-level':'silent','proxies':proxies,
                   'proxy-providers':providers,'proxy-groups':groups,'rules':rules}
         # Validate serialization before handing the document to the controller.
         yaml.safe_load(yaml.safe_dump(document,allow_unicode=True,sort_keys=False))
@@ -817,8 +997,9 @@ class ProxyManager(Star):
             preview=copy.deepcopy(document)
             for provider in preview.get('proxy-providers',{}).values():
                 provider['url']=urlparse(provider['url']).scheme+'://[configured]'
+            preview['proxies']=redact_config(preview.get('proxies',[]))
             return json_response({'config':preview,'mapping':{
-                node['id']:{'name':node['name'],'subscription_id':node['subscription_id']}
+                node['id']:{'name':node['name'],'kernel_name':node.get('kernel_name'),'subscription_id':node['subscription_id']}
                 for node in self.state['nodes'] if node['enabled']
             },'applied':False})
         except (ValueError,TypeError) as exc:
@@ -880,7 +1061,7 @@ class ProxyManager(Star):
                 # directly and must not be blocked by the optional controller setting.
                 control,headers=self._control(); timeout=max(1,min(int(payload.get('timeout',5) or 5),15))
                 async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=timeout,trust_env=False) as client:
-                    response=await client.get('/proxies/'+quote(node['name'],safe='')+'/delay',params={'url':target,'timeout':timeout*1000})
+                    response=await client.get('/proxies/'+quote(node.get('kernel_name',node['id']),safe='')+'/delay',params={'url':target,'timeout':timeout*1000})
                 response.raise_for_status(); data=response.json()
                 if not isinstance(data.get('delay'),int): raise ValueError('Mihomo 控制接口未返回延迟')
                 latency=int(data['delay'])
