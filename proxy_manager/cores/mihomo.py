@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
+from pathlib import Path
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 import httpx
@@ -24,7 +26,17 @@ class MihomoAdapter(CoreAdapter):
         }
 
     def artifact(self) -> dict:
-        return {'status':'managed','manifest':'mihomo_artifacts.json'}
+        return json.loads((Path(__file__).with_name('mihomo_artifacts.json')).read_text(encoding='utf-8'))
+
+    def config_filename(self) -> str: return 'config.yaml'
+
+    def serialize(self, document: dict) -> bytes:
+        try: import yaml
+        except ImportError as exc: raise ValueError('缺少 PyYAML，无法生成 Mihomo 配置') from exc
+        return yaml.safe_dump(document,allow_unicode=True,sort_keys=False).encode()
+
+    def command(self, binary: Path, config: Path) -> list[str]:
+        return [str(binary),'-d',str(config.parent),'-f',str(config)]
 
     @staticmethod
     def _typed_query_value(value:str):
@@ -207,7 +219,7 @@ class MihomoAdapter(CoreAdapter):
             rules_response=await client.get('/rules'); rules_response.raise_for_status(); runtime_rules=rules_response.json().get('rules',[])
         return {'version':raw_version,'runtime':runtime,'proxies':proxies,'rules':runtime_rules}
 
-    async def apply(self, state: dict, document: dict):
+    async def apply(self, state: dict, document: dict, **_runtime):
         import yaml
         control,headers=self.control(state)
         payload={'path':'','payload':yaml.safe_dump(document,allow_unicode=True,sort_keys=False)}

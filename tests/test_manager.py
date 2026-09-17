@@ -7,9 +7,11 @@ import json
 import importlib.util
 import os
 import sys
+import tarfile
 import tempfile
 import types
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -51,7 +53,7 @@ class TestConfigurationRules(unittest.TestCase):
         document=adapter.render(manager.state)
         self.assertEqual(document['rules'][-1],'MATCH,DIRECT')
         self.assertEqual(manager._runtime_document(), document)
-        self.assertEqual(manager._mihomo_proxy(manager.state['nodes'][0])['name'],'node-hk-1')
+        self.assertEqual(manager._adapter().render_proxy(manager.state['nodes'][0])['name'],'node-hk-1')
         source=Path(__file__).resolve().parents[1]/'proxy_manager'/'plugin.py'
         text=source.read_text(encoding='utf-8')
         self.assertNotIn('external-controller', text)
@@ -81,7 +83,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.6',html)
+        self.assertIn('流量控制 · 0.3.7',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('aria-label="主导航"',html)
@@ -93,8 +95,9 @@ class TestConfigurationRules(unittest.TestCase):
 
     def test_fixed_artifact_manifest_and_offline_digest_enforcement(self):
         from proxy_manager.runtime.artifacts import ArtifactManager
+        from proxy_manager.cores.registry import current_adapter
         with tempfile.TemporaryDirectory() as directory:
-            manager=ArtifactManager(Path(directory),'mihomo')
+            manager=ArtifactManager(Path(directory),current_adapter().artifact())
             self.assertEqual(manager.manifest['version'],'1.19.31')
             self.assertIn(manager.platform['libc'],{'glibc','musl','none'})
             if manager.selected() is None: self.skipTest('测试平台不在固定制品清单中')
@@ -109,10 +112,30 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertEqual(manager.binary.read_bytes(),before)
             self.assertEqual(manager.binary.stat().st_mode & 0o777,0o700)
 
+    def test_tar_artifact_extracts_only_manifest_binary(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+        manifest={'adapter':'fixture','version':'1.0.0','artifacts':{}}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('proxy_manager.runtime.artifacts.detect_platform',return_value={'os':'linux','arch':'amd64','libc':'glibc','machine':'x86_64'}):
+                manager=ArtifactManager(Path(directory),manifest)
+            archive_file=BytesIO()
+            with tarfile.open(fileobj=archive_file,mode='w:gz') as package:
+                binary=b'expected-core'; info=tarfile.TarInfo('release/core'); info.size=len(binary)
+                package.addfile(info,BytesIO(binary))
+                decoy=b'decoy'; info=tarfile.TarInfo('../../core'); info.size=len(decoy)
+                package.addfile(info,BytesIO(decoy))
+            archive=archive_file.getvalue()
+            manifest['artifacts']['linux-amd64-glibc']={
+                'name':'fixture.tar.gz','format':'tar.gz','binary_path':'release/core',
+                'sha256':hashlib.sha256(archive).hexdigest(),'url':'https://example.invalid/core.tar.gz'}
+            result=manager.install(archive)
+            self.assertTrue(result['ready']); self.assertEqual(manager.binary.read_bytes(),binary)
+
     def test_artifact_download_retries_trusted_sources_with_same_digest(self):
         from proxy_manager.runtime.artifacts import ArtifactManager
+        from proxy_manager.cores.registry import current_adapter
         with tempfile.TemporaryDirectory() as directory:
-            manager=ArtifactManager(Path(directory),'mihomo')
+            manager=ArtifactManager(Path(directory),current_adapter().artifact())
             archive=gzip.compress(b'trusted-source-binary')
             selected=manager.manifest['artifacts'][manager.selected()['key']]
             selected.update({'format':'gz','sha256':hashlib.sha256(archive).hexdigest(),'name':'fixture.gz',
@@ -198,7 +221,7 @@ class TestConfigurationRules(unittest.TestCase):
         manager=self._manager_for_runtime()
         node=manager._normalize({'nodes':[{'id':'a','name':'AnyTLS','protocol':'anytls','endpoint':'anytls://secret@example.com:443'}]})['nodes'][0]
         self.assertEqual(node['executor'],'mihomo')
-        self.assertEqual(node['adapters'],['mihomo'])
+        self.assertEqual(node['adapters'],['mihomo','sing-box'])
         http_node=manager._normalize({'nodes':[{'id':'b','name':'HTTP','protocol':'http','endpoint':'http://proxy.example:8080'}]})['nodes'][0]
         self.assertEqual(http_node['executor'],'direct-http')
 
@@ -294,7 +317,7 @@ class TestConfigurationRules(unittest.TestCase):
             manager.path = Path(directory) / "config.json"; manager.backup = Path(directory) / "config.previous.json"; manager.state = {}
             state = {"nodes": [], "groups": [{"id": "direct", "name": "直连", "mode": "direct", "node_ids": [], "selected": "", "enabled": True}], "routes": [], "subscriptions": [], "platforms": {}, "control": {"enabled": False, "url": "", "secret": "", "timeout": 8}}
             asyncio.run(manager.persist(state))
-            self.assertEqual(json.loads(manager.path.read_text())["version"], 4)
+            self.assertEqual(json.loads(manager.path.read_text())["version"], 5)
             self.assertEqual(manager.path.stat().st_mode & 0o777, 0o600)
             asyncio.run(manager.persist(state))
             self.assertEqual(manager.backup.stat().st_mode & 0o777, 0o600)
@@ -429,7 +452,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(nodes[0]['endpoint'], uri)
         normalized = manager._normalize({'nodes':nodes})['nodes'][0]
         self.assertEqual(normalized['endpoint'], uri)
-        proxy = manager._mihomo_proxy(normalized)
+        proxy = manager._adapter().render_proxy(normalized)
         self.assertEqual(proxy['server'], '2001:db8::1')
         self.assertEqual(proxy['password'], 'credential')
         self.assertEqual(proxy['sni'], 'example.com')
@@ -449,8 +472,8 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertTrue(all(node['support']['status']=='supported' for node in nodes))
         self.assertIn('[2001:db8::10]:443', nodes[0]['endpoint'])
         self.assertEqual(nodes[0]['connection']['password'], 'any-pass')
-        self.assertTrue(manager._mihomo_proxy(nodes[1])['tls'])
-        self.assertEqual(manager._mihomo_proxy(nodes[2])['username'], 'bob')
+        self.assertTrue(manager._adapter().render_proxy(nodes[1])['tls'])
+        self.assertEqual(manager._adapter().render_proxy(nodes[2])['username'], 'bob')
 
     def test_unverified_protocols_are_preserved_with_reason(self):
         manager = self._manager_for_runtime()
@@ -572,16 +595,16 @@ class TestConfigurationRules(unittest.TestCase):
             with patch.object(self.module.StarTools,'get_data_dir',return_value=root):
                 first=self.module.ProxyManager(context,{})
                 new_id=first.state['nodes'][0]['id']
-                self.assertEqual(first.state['version'],4)
+                self.assertEqual(first.state['version'],5)
                 self.assertEqual(first.state['groups'][1]['node_ids'],[new_id])
                 self.assertEqual(first.state['groups'][1]['selected'],new_id)
                 self.assertEqual(first.state['subscriptions'][0]['node_ids'],[new_id])
                 self.assertIn(new_id,first.health); self.assertNotIn('old-id',first.health)
-                backup=(root/'config.pre-v4.json').read_text(); self.assertEqual(json.loads(backup)['version'],2)
-                self.assertEqual((root/'config.pre-v4.json').stat().st_mode & 0o777,0o600)
+                backup=(root/'config.pre-v5.json').read_text(); self.assertEqual(json.loads(backup)['version'],2)
+                self.assertEqual((root/'config.pre-v5.json').stat().st_mode & 0o777,0o600)
                 second=self.module.ProxyManager(context,{})
                 self.assertEqual(second.state['nodes'][0]['id'],new_id)
-                self.assertEqual((root/'config.pre-v4.json').read_text(),backup)
+                self.assertEqual((root/'config.pre-v5.json').read_text(),backup)
 
     def test_refresh_preserves_excluded_node_preferences(self):
         manager = self._manager_for_runtime()
@@ -742,6 +765,16 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIsNone(manager._verified_recovery_document(manager.runtime_application))
         manager.runtime_application={'status':'saved','applied_revision':manager._runtime_revision(document),'document':document}
         self.assertIsNone(manager._verified_recovery_document(manager.runtime_application))
+
+    def test_recovery_document_is_bound_to_recorded_adapter(self):
+        from proxy_manager.cores.mihomo import MihomoAdapter
+        from proxy_manager.cores.sing_box import SingBoxAdapter
+        from proxy_manager.runtime.transaction import verified_recovery_document
+        manager=self._manager_for_runtime(); document=MihomoAdapter().render(manager.state,manager._compiled_rules())
+        application={'status':'applied','adapter':'mihomo','applied_revision':MihomoAdapter().revision(document),'document':document}
+        self.assertIsNone(verified_recovery_document(application,SingBoxAdapter()))
+        legacy=dict(application); legacy.pop('adapter')
+        self.assertEqual(verified_recovery_document(legacy,MihomoAdapter()),document)
 
     def test_fail_closed_kernel_status_requires_running_reject_rule(self):
         manager=self._manager_for_runtime(); recovery=manager._fail_closed_document(manager.state['control'],manager.state['proxy_entry'])
@@ -997,6 +1030,53 @@ class TestConfigurationRules(unittest.TestCase):
             result=asyncio.run(manager.verify_outbound())
         self.assertFalse(result['verified']); self.assertEqual(result['entry']['state'],'passed')
         self.assertEqual(result['rule']['state'],'unconfirmed'); self.assertEqual(result['exit']['state'],'unconfirmed')
+
+    def test_mihomo_and_sing_box_share_complete_adapter_contract(self):
+        from proxy_manager.cores.registry import all_adapters
+        manager=self._manager_for_runtime()
+        for adapter_id,adapter in all_adapters().items():
+            with self.subTest(adapter=adapter_id):
+                state=copy.deepcopy(manager.state); state['control']['adapter']=adapter_id
+                for node in state['nodes']: node['adapters']=['mihomo','sing-box']
+                document=adapter.render(state,manager._compiled_rules())
+                adapter.validate(document)
+                serialized=adapter.serialize(document)
+                self.assertIsInstance(serialized,bytes); self.assertTrue(serialized)
+                self.assertIn(adapter.config_filename(),{'config.yaml','config.json'})
+                command=adapter.command(Path('/core'),Path('/runtime')/adapter.config_filename())
+                self.assertEqual(command[0],'/core'); self.assertIn(str(Path('/runtime')/adapter.config_filename()),command)
+                manifest=adapter.artifact()
+                self.assertEqual(manifest['adapter'],adapter_id); self.assertTrue(manifest['version'])
+                self.assertTrue(manifest['artifacts']); self.assertTrue(adapter.revision(document))
+                redacted=json.dumps(adapter.redact(document),ensure_ascii=False)
+                self.assertNotIn('"secret": "secret"',redacted); self.assertNotIn('"password": "credential"',redacted)
+                closed=adapter.fail_closed_document(state['control'],state['proxy_entry'])
+                adapter.validate(closed); self.assertNotEqual(adapter.revision(document),adapter.revision(closed))
+                for method in ('start','stop','restart','apply','inspect','verify','probe','redact','healthy'):
+                    self.assertTrue(callable(getattr(adapter,method)))
+
+    def test_unknown_adapter_is_preserved_and_fails_closed(self):
+        from proxy_manager.cores.base import UnsupportedAdapter
+        from proxy_manager.cores.registry import current_adapter
+        state=self._manager_for_runtime().state; state['control']['adapter']='future-core'
+        adapter=current_adapter(state)
+        self.assertIsInstance(adapter,UnsupportedAdapter); self.assertEqual(adapter.id,'future-core')
+        with self.assertRaisesRegex(ValueError,'不支持或未知'):
+            adapter.render(state,[])
+        normalized=self._manager_for_runtime()._normalize(state)
+        self.assertEqual(normalized['control']['adapter'],'future-core')
+
+    def test_sing_box_official_manifest_and_native_json_shape(self):
+        from proxy_manager.cores.sing_box import SingBoxAdapter
+        adapter=SingBoxAdapter(); manifest=adapter.artifact()
+        self.assertEqual(manifest['version'],'1.14.1')
+        self.assertTrue(all(len(item['sha256'])==64 for item in manifest['artifacts'].values()))
+        manager=self._manager_for_runtime(); manager.state['control']['adapter']='sing-box'
+        for node in manager.state['nodes']: node['adapters']=['mihomo','sing-box']
+        document=adapter.render(manager.state,manager._compiled_rules())
+        self.assertEqual(document['inbounds'][0]['type'],'mixed')
+        self.assertIn('clash_api',document['experimental'])
+        self.assertTrue(any(item['type']=='anytls' for item in document['outbounds']))
 
 
 if __name__ == "__main__":

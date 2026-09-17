@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import stat
+import tarfile
 import time
 import zipfile
 from io import BytesIO
@@ -32,15 +33,19 @@ def detect_platform() -> dict:
 
 
 class ArtifactManager:
-    def __init__(self,data_dir:Path,adapter_id:str):
+    def __init__(self,data_dir:Path,manifest:dict):
+        if not isinstance(manifest,dict) or not manifest.get('adapter'):
+            raise ValueError('内核适配器未提供有效的固定制品清单')
+        adapter_id=str(manifest['adapter'])
         self.root=data_dir/'runtime'/'artifacts'/adapter_id
         self.root.mkdir(parents=True,exist_ok=True); self.root.chmod(0o700)
-        manifest_path=Path(__file__).resolve().parents[1]/'cores'/(adapter_id+'_artifacts.json')
-        self.manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+        self.manifest=manifest
         self.platform=detect_platform()
 
     def selected(self) -> dict|None:
-        key=self.platform['os']+'-'+self.platform['arch']
+        base=self.platform['os']+'-'+self.platform['arch']
+        libc_key=base+'-'+self.platform['libc'] if self.platform['os']=='linux' else ''
+        key=libc_key if libc_key in self.manifest.get('artifacts',{}) else base
         item=self.manifest.get('artifacts',{}).get(key)
         if not isinstance(item,dict): return None
         sources=item.get('sources') or [{'id':'github','name':'GitHub 官方源','url':item.get('url','')}]
@@ -149,11 +154,18 @@ class ArtifactManager:
                 with gzip.GzipFile(fileobj=BytesIO(archive)) as stream: binary=stream.read(MAX_BINARY_SIZE+1)
             elif item['format']=='zip':
                 with zipfile.ZipFile(BytesIO(archive)) as package:
-                    files=[info for info in package.infolist() if not info.is_dir()]
+                    path=str(item.get('binary_path',''))
+                    files=[info for info in package.infolist() if not info.is_dir() and (not path or info.filename==path)]
                     if len(files)!=1 or files[0].file_size>MAX_BINARY_SIZE: raise ValueError('内核 ZIP 内容不安全')
                     binary=package.read(files[0])
+            elif item['format']=='tar.gz':
+                with tarfile.open(fileobj=BytesIO(archive),mode='r:gz') as package:
+                    path=str(item.get('binary_path',''))
+                    files=[member for member in package.getmembers() if member.isfile() and member.name==path]
+                    if len(files)!=1 or files[0].size>MAX_BINARY_SIZE: raise ValueError('内核 TAR 内容不安全')
+                    stream=package.extractfile(files[0]); binary=stream.read(MAX_BINARY_SIZE+1) if stream else b''
             else: raise ValueError('固定清单中的压缩格式不受支持')
-        except (gzip.BadGzipFile,EOFError,zipfile.BadZipFile) as exc:
+        except (gzip.BadGzipFile,EOFError,zipfile.BadZipFile,tarfile.TarError) as exc:
             raise ValueError('内核制品压缩内容损坏') from exc
         if not binary or len(binary)>MAX_BINARY_SIZE: raise ValueError('解压后的内核为空或过大')
         temp=self.binary.with_suffix(self.binary.suffix+'.tmp')

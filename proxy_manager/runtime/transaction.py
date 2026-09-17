@@ -15,6 +15,8 @@ def verified_recovery_document(application: object, adapter=None) -> dict|None:
     adapter=adapter or current_adapter()
     if not isinstance(application,dict) or application.get('status') not in {'applied','pending_apply'}:
         return None
+    recorded=str(application.get('adapter') or 'mihomo')
+    if recorded!=adapter.id: return None
     document=application.get('document')
     if not isinstance(document,dict) or not application.get('applied_revision'):
         return None
@@ -32,8 +34,9 @@ def render_document(state: dict, adapter=None) -> dict:
     return document
 
 
-async def apply_runtime(state: dict, previous: dict, persist, event, adapter=None):
+async def apply_runtime(state: dict, previous: dict, persist, event, adapter=None, runtime: dict|None=None):
     adapter=adapter or current_adapter(state)
+    runtime=runtime or {}
     control=state['control']
     if control.get('deployment')!='dedicated' or control.get('scope')!='full':
         raise ValueError('共享内核缺少可信完整基线，禁止写入；请使用插件专用实例和完整配置范围')
@@ -44,15 +47,15 @@ async def apply_runtime(state: dict, previous: dict, persist, event, adapter=Non
     if recovery is None:
         recovery=adapter.fail_closed_document(control, state.get('proxy_entry',{}))
     adapter.validate(recovery)
-    persist({'status':'applying','saved_revision':revision,
+    persist({'status':'applying','adapter':adapter.id,'saved_revision':revision,
              'applied_revision':previous.get('applied_revision',''),
              'document':previous.get('document'),'message':'正在应用候选配置'})
     try:
-        await adapter.apply(state, document)
+        await adapter.apply(state, document, **runtime)
     except Exception as apply_error:
         restored=False; restore_message=''
         try:
-            await adapter.apply(state, recovery)
+            await adapter.apply(state, recovery, **runtime)
             restored=True
         except Exception as restore_error:
             restore_message=str(restore_error)
@@ -62,14 +65,13 @@ async def apply_runtime(state: dict, previous: dict, persist, event, adapter=Non
             if restored and recovery_kind=='previous_verified' else
             ('候选配置失败，未找到已验证配置；已写入并核对 MATCH,REJECT 失败关闭配置' if restored else '候选配置失败，且运行配置恢复核对失败')
         )
-        persist({'status':status,'saved_revision':revision,
+        persist({'status':status,'adapter':adapter.id,'saved_revision':revision,
                  'applied_revision':previous.get('applied_revision','') if recovery_kind=='previous_verified' else '',
                  'document':recovery if restored else previous.get('document'),
                  'message':message})
         event({'action':'runtime_apply','result':status,'message':str(apply_error),'restore':restore_message})
         return {'ok':False,'status':status,'message':message}
-    persist({'status':'applied','saved_revision':revision,'applied_revision':revision,
+    persist({'status':'applied','adapter':adapter.id,'saved_revision':revision,'applied_revision':revision,
              'document':document,'message':'候选配置已应用并完整核对'})
-    event({'action':'runtime_apply','result':'ok','revision':revision,
-           'groups':len(document.get('proxy-groups',[])),'rules':len(document.get('rules',[]))})
+    event({'action':'runtime_apply','result':'ok','revision':revision,'adapter':adapter.id})
     return {'ok':True,'applied':True,'status':'applied','saved_revision':revision,'applied_revision':revision}

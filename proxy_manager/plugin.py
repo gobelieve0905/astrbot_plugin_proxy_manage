@@ -19,7 +19,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import error_response, json_response, request
 
-from .cores.registry import current_adapter
+from .cores.registry import all_adapters, current_adapter
 from .domain.constants import CONFIGURED, TEMPLATES
 from .domain.identity import stable_node_id
 from .domain.model import compiled_rules, ident, match_rule, normalize_state, validate_state
@@ -41,7 +41,7 @@ class ProxyManager(Star):
         self.data_dir.mkdir(parents=True,exist_ok=True)
         self.path=self.data_dir/'config.json'
         self.backup=self.data_dir/'config.previous.json'
-        self.migration_backup=self.data_dir/'config.pre-v4.json'
+        self.migration_backup=self.data_dir/'config.pre-v5.json'
         self.health_path=self.data_dir/'health.json'
         self.events_path=self.data_dir/'events.jsonl'
         self.runtime_path=self.data_dir/'runtime-application.json'
@@ -54,7 +54,7 @@ class ProxyManager(Star):
         self.state=self._load(); self.health=self._load_health()
         self._bind_owned_runtime()
         self.astrbot_proxy=AstrBotProxyTransaction(self.data_dir)
-        self.artifacts=ArtifactManager(self.data_dir,self._adapter().id)
+        self.artifacts=ArtifactManager(self.data_dir,self._adapter().artifact())
         self.supervisor=KernelSupervisor(self.data_dir,self._kernel_health_check)
         self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
         self.runtime_application=self._load_runtime_application()
@@ -74,35 +74,29 @@ class ProxyManager(Star):
         except OSError: secret=''
         if len(secret)<32:
             secret=secrets.token_urlsafe(32); secret_path.write_text(secret,encoding='utf-8'); secret_path.chmod(0o600)
+        adapter=str(self.state.get('control',{}).get('adapter') or 'mihomo')
         self.state['control']={'enabled':True,'url':'http://127.0.0.1:19090','secret':secret,'timeout':8,
-                               'deployment':'dedicated','scope':'full','listen':'127.0.0.1:19090','adapter':'mihomo'}
+                               'deployment':'dedicated','scope':'full','listen':'127.0.0.1:19090','adapter':adapter}
         self.state['proxy_entry']={'http_url':'http://127.0.0.1:17890','socks_url':'socks5://127.0.0.1:17890','source':'plugin-managed'}
 
-    @property
-    def kernel_config_path(self): return self.data_dir/'runtime'/'config.yaml'
-
     def _write_kernel_config(self,document:dict):
-        if not hasattr(self,'data_dir'): return
-        import yaml
-        temp=self.kernel_config_path.with_suffix('.tmp')
-        temp.write_text(yaml.safe_dump(document,allow_unicode=True,sort_keys=False),encoding='utf-8'); temp.chmod(0o600)
-        temp.replace(self.kernel_config_path)
+        if not hasattr(self,'data_dir'): return None
+        return self._adapter().write_config(self.data_dir/'runtime',document)
 
     async def _kernel_health_check(self):
-        fetched=await self._adapter().fetch_runtime(self.state)
-        return not fetched.get('state')
+        return await self._adapter().healthy(self.state)
 
     async def _start_owned_kernel(self):
         artifact=self.artifacts.status()
         if not artifact.get('ready'): return artifact
         recovery=self._verified_recovery_document(getattr(self,'runtime_application',{}))
         document=recovery or self._adapter().fail_closed_document(self.state['control'],self.state['proxy_entry'])
-        self._adapter().validate(document); self._write_kernel_config(document)
-        return await self.supervisor.start(self.artifacts.binary,self.kernel_config_path)
+        adapter=self._adapter(); config=adapter.write_config(self.data_dir/'runtime',document)
+        return await adapter.start(self.supervisor,self.artifacts.binary,config)
 
     async def _activate_installed_kernel(self):
         async with self.operation_lock:
-            await self.supervisor.stop()
+            await self._adapter().stop(self.supervisor)
             process=await self._start_owned_kernel()
         self.event({'action':'kernel_install','result':'ok','version':self.artifacts.manifest.get('version'),
                     'source':self.artifacts.status().get('source','')})
@@ -120,9 +114,9 @@ class ProxyManager(Star):
                 try: raw=json.loads(self.config.get('config_json','{}'))
                 except (TypeError,ValueError): raw={}
         normalized=self._normalize(raw)
-        if from_disk and isinstance(raw,dict) and (recovered_from_backup or int(raw.get('version',0) or 0)<4):
+        if from_disk and isinstance(raw,dict) and (recovered_from_backup or int(raw.get('version',0) or 0)<5):
             try:
-                if int(raw.get('version',0) or 0)<4 and not self.migration_backup.exists():
+                if int(raw.get('version',0) or 0)<5 and not self.migration_backup.exists():
                     self.migration_backup.write_text(json.dumps(raw,ensure_ascii=False,indent=2),encoding='utf-8')
                     self.migration_backup.chmod(0o600)
                 temp=self.path.with_suffix('.migration.tmp')
@@ -158,6 +152,7 @@ class ProxyManager(Star):
         return current if isinstance(current,dict) else {}
 
     def _persist_runtime_application(self,value:dict):
+        value={**value,'adapter':value.get('adapter') or self._adapter().id}
         if self.runtime_path.exists():
             self.runtime_backup.write_text(self.runtime_path.read_text(encoding='utf-8'),encoding='utf-8')
             try: self.runtime_backup.chmod(0o600)
@@ -198,6 +193,7 @@ class ProxyManager(Star):
             ('kernel-install',self.kernel_install,['POST']), ('kernel-install-status',self.kernel_install_status,['GET']),
             ('kernel-install-cancel',self.kernel_install_cancel,['POST']), ('kernel-upload',self.kernel_upload,['POST']),
             ('kernel-start',self.kernel_start,['POST']), ('kernel-stop',self.kernel_stop,['POST']),
+            ('core-adapters',self.core_adapters,['GET']), ('adapter-select',self.adapter_select,['POST']),
             ('verify-outbound',self.verify_outbound,['POST']),
             ('astrbot-proxy-enable',self.astrbot_proxy_enable,['POST']),
             ('astrbot-proxy-restore',self.astrbot_proxy_restore,['POST']),
@@ -220,6 +216,9 @@ class ProxyManager(Star):
                               'install':self.install_task.status() if hasattr(self,'install_task') else {}}
         result['health']=redact_diagnostics(self.health)
         result['events']=redact_diagnostics(self.events[-50:]); result['templates']=TEMPLATES
+        result['adapters']=[{'id':adapter.id,'capabilities':{
+            key:sorted(value) if isinstance(value,set) else value for key,value in adapter.capabilities().items()
+        }} for adapter in all_adapters().values()]
         application=getattr(self,'runtime_application',{})
         result['application']={key:application.get(key) for key in (
             'status','saved_revision','applied_revision','updated_at','message','verification'
@@ -290,7 +289,8 @@ class ProxyManager(Star):
         for item in payload.get('subscriptions',[]):
             if isinstance(item,dict) and item.get('id') in old_subs:
                 item['url']=restore_config(item.get('url',''),old_subs[item['id']].get('url',''))
-        payload['control']=copy.deepcopy(self.state['control'])
+        requested=str((payload.get('control') or {}).get('adapter') or self.state['control'].get('adapter','mihomo'))
+        payload['control']=copy.deepcopy(self.state['control']); payload['control']['adapter']=requested
         payload['proxy_entry']=copy.deepcopy(self.state['proxy_entry'])
 
     async def state_page(self): return json_response(self.snapshot())
@@ -428,7 +428,7 @@ class ProxyManager(Star):
             request_finished=asyncio.Event()
 
             async def capture_connection():
-                # Mihomo only exposes active connections, so sample while the request is in flight.
+                # Active-connection APIs are ephemeral, so sample while the request is in flight.
                 for _attempt in range(100):
                     current=await adapter.connection_snapshot(self.state,host)
                     found=next((item for item in current if item.get('id') not in before),None)
@@ -445,7 +445,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.6'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.7'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -557,7 +557,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.6'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.7'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -628,7 +628,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.6'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.7'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -782,7 +782,35 @@ class ProxyManager(Star):
         except (ValueError,OSError,RuntimeError) as exc: return error_response(str(exc),500)
 
     async def kernel_stop(self):
-        async with self.operation_lock: return json_response(await self.supervisor.stop())
+        async with self.operation_lock: return json_response(await self._adapter().stop(self.supervisor))
+
+    async def core_adapters(self):
+        return json_response({'current':self._adapter().id,'adapters':[
+            {'id':adapter.id,'capabilities':{key:sorted(value) if isinstance(value,set) else value
+                                             for key,value in adapter.capabilities().items()},
+             'artifact':ArtifactManager(self.data_dir,adapter.artifact()).status()}
+            for adapter in all_adapters().values()]})
+
+    async def adapter_select(self):
+        try:
+            payload=await request.json(); adapter_id=str(payload.get('adapter',''))
+            adapter=all_adapters().get(adapter_id)
+            if not adapter: raise ValueError('不支持或未知的内核适配器：'+adapter_id)
+            candidate=copy.deepcopy(self.state); candidate['control']['adapter']=adapter_id
+            document=adapter.render(candidate,compiled_rules(candidate)); adapter.validate(document)
+            async with self.operation_lock:
+                await self.install_task.stop(); await self._adapter().stop(self.supervisor)
+                await self.persist(candidate)
+                self.artifacts=ArtifactManager(self.data_dir,adapter.artifact())
+                self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
+                self._persist_runtime_application({'status':'saved','adapter':adapter.id,'saved_revision':adapter.revision(document),
+                                                   'applied_revision':'','document':None,'updated_at':int(time.time()),
+                                                   'message':'已切换内核适配器，等待安装并应用配置'})
+                process=await self._start_owned_kernel()
+            self.event({'action':'adapter_select','adapter':adapter_id,'result':'ok'})
+            return json_response({'adapter':adapter_id,'artifact':self.artifacts.status(),'process':process})
+        except (ValueError,OSError,RuntimeError) as exc:
+            return error_response(str(exc),400)
 
     def _runtime_document(self) -> dict:
         adapter=self._adapter()
@@ -808,8 +836,10 @@ class ProxyManager(Star):
     def _verified_recovery_document(self, application: object):
         return verified_recovery_document(application, self._adapter())
 
-    def _mihomo_proxy(self, node: dict) -> dict:
-        return self._adapter().render_proxy(node)
+    def _adapter_apply_runtime(self, config_path: Path) -> dict:
+        if not hasattr(self,'supervisor') or not hasattr(self,'artifacts'):
+            return {}
+        return {'supervisor':self.supervisor,'binary':self.artifacts.binary,'config':config_path}
 
     async def runtime_config(self):
         try:
@@ -842,17 +872,17 @@ class ProxyManager(Star):
                 if recovery is None:
                     recovery=adapter.fail_closed_document(control,self.state['proxy_entry'])
                 adapter.validate(recovery)
-                self._persist_runtime_application({'status':'applying','saved_revision':revision,
+                self._persist_runtime_application({'status':'applying','adapter':adapter.id,'saved_revision':revision,
                                                    'applied_revision':previous.get('applied_revision',''),
                                                    'document':previous.get('document'),'updated_at':int(time.time()),'message':'正在应用候选配置'})
                 try:
-                    self._write_kernel_config(document)
-                    await adapter.apply(self.state, document)
+                    config_path=self._write_kernel_config(document)
+                    await adapter.apply(self.state,document,**self._adapter_apply_runtime(config_path))
                 except (ValueError,httpx.HTTPError,OSError) as apply_error:
                     restored=False; restore_message=''
                     try:
-                        self._write_kernel_config(recovery)
-                        await adapter.apply(self.state, recovery)
+                        config_path=self._write_kernel_config(recovery)
+                        await adapter.apply(self.state,recovery,**self._adapter_apply_runtime(config_path))
                         restored=True
                     except (ValueError,httpx.HTTPError,OSError) as restore_error:
                         restore_message=safe_error(restore_error)
@@ -862,16 +892,16 @@ class ProxyManager(Star):
                         if restored and recovery_kind=='previous_verified' else
                         ('候选配置失败，未找到已验证配置；已写入并核对 MATCH,REJECT 失败关闭配置' if restored else '候选配置失败，且运行配置恢复核对失败')
                     )
-                    self._persist_runtime_application({'status':status,'saved_revision':revision,
+                    self._persist_runtime_application({'status':status,'adapter':adapter.id,'saved_revision':revision,
                                                        'applied_revision':previous.get('applied_revision','') if recovery_kind=='previous_verified' else '',
                                                        'document':recovery if restored else previous.get('document'),
                                                        'updated_at':int(time.time()),'message':message})
                     self.event({'action':'runtime_apply','result':status,'message':safe_error(apply_error),'restore':safe_error(restore_message)})
                     return error_response(message,500)
-                application={'status':'applied','saved_revision':revision,'applied_revision':revision,
+                application={'status':'applied','adapter':adapter.id,'saved_revision':revision,'applied_revision':revision,
                              'document':document,'updated_at':int(time.time()),'message':'候选配置已应用并完整核对'}
                 self._persist_runtime_application(application)
-                self.event({'action':'runtime_apply','result':'ok','revision':revision,'groups':len(document.get('proxy-groups',[])),'rules':len(document.get('rules',[]))})
+                self.event({'action':'runtime_apply','result':'ok','revision':revision,'adapter':adapter.id})
                 return json_response({'applied':True,'status':'applied','saved_revision':revision,'applied_revision':revision,'adapter':adapter.id})
             except (ValueError,httpx.HTTPError,OSError) as exc:
                 self.event({'action':'runtime_apply','result':'failed','message':safe_error(exc)})
@@ -1046,7 +1076,7 @@ class ProxyManager(Star):
         status=self.astrbot_proxy.mark_started(self.state['proxy_entry']['http_url'])
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.6 已加载')
+        logger.info('代理管理中心 0.3.7 已加载')
 
     async def terminate(self):
         if self.auto_task:

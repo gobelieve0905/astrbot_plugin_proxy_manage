@@ -14,7 +14,7 @@ class KernelSupervisor:
         self.root=data_dir/'runtime'; self.root.mkdir(parents=True,exist_ok=True); self.root.chmod(0o700)
         self.pid_path=self.root/'kernel.pid.json'; self.log_path=self.root/'kernel.log'
         self.health_check=health_check; self.process=None; self.monitor_task=None; self.stopping=False
-        self.binary=None; self.config=None; self.last_error=''; self.restarts=0; self.orphan_record=None
+        self.binary=None; self.config=None; self.command=None; self.last_error=''; self.restarts=0; self.orphan_record=None
         self._recover_stale_pid()
 
     def _recover_stale_pid(self):
@@ -47,7 +47,7 @@ class KernelSupervisor:
             if backup.exists(): backup.unlink()
             self.log_path.replace(backup)
 
-    async def start(self,binary:Path,config:Path,timeout:float=12):
+    async def start(self,binary:Path,config:Path,timeout:float=12,command:list[str]|None=None):
         if self.process and self.process.poll() is None: return self.status()
         if self.orphan_record:
             recorded=Path(str(self.orphan_record.get('binary','')))
@@ -65,7 +65,9 @@ class KernelSupervisor:
             self.orphan_record=None
             try: self.pid_path.unlink()
             except FileNotFoundError: pass
-        self.binary=binary; self.config=config; self.stopping=False; self.last_error=''
+        self.binary=binary; self.config=config
+        self.command=command or [str(binary),'-d',str(self.root),'-f',str(config)]
+        self.stopping=False; self.last_error=''
         try: await self._spawn(timeout)
         except Exception as exc:
             self.last_error=str(exc)
@@ -78,7 +80,7 @@ class KernelSupervisor:
     async def _spawn(self,timeout:float):
         self._rotate_log(); log=self.log_path.open('ab',buffering=0)
         try:
-            self.process=subprocess.Popen([str(self.binary),'-d',str(self.root),'-f',str(self.config)],stdin=subprocess.DEVNULL,
+            self.process=subprocess.Popen(self.command,stdin=subprocess.DEVNULL,
                                           stdout=log,stderr=subprocess.STDOUT,cwd=self.root,close_fds=True,start_new_session=True)
         finally: log.close()
         self.pid_path.write_text(json.dumps({'pid':self.process.pid,'binary':str(self.binary),'started_at':int(time.time())}),encoding='utf-8')

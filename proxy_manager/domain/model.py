@@ -194,17 +194,18 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
     timeout=int(control.get('timeout',8) or 8)
     entry=source.get('proxy_entry') if isinstance(source.get('proxy_entry'),dict) else {}
     return {
-        'version':4, 'migration':{'stable_identity':2,'core_adapter':1}, 'name':str(source.get('name','默认配置'))[:80],
+        'version':5, 'migration':{'stable_identity':2,'core_adapter':2}, 'name':str(source.get('name','默认配置'))[:80],
         'nodes':nodes, 'groups':groups, 'routes':routes, 'rule_groups':rule_groups, 'platforms':platforms,
         'subscriptions':subscriptions,
         'control':{'enabled':bool(control.get('enabled',False)),'url':str(control.get('url','')).rstrip('/')[:300],
                    'secret':str(control.get('secret',''))[:500],'timeout':max(3,min(timeout,30)),
                    'deployment':control.get('deployment') if control.get('deployment') in {'existing','dedicated'} else 'existing',
                    'scope':control.get('scope') if control.get('scope') in {'providers-groups-rules','full'} else 'providers-groups-rules',
-                   'listen':str(control.get('listen','127.0.0.1:9090')).strip()[:200]},
+                   'listen':str(control.get('listen','127.0.0.1:9090')).strip()[:200],
+                   'adapter':str(control.get('adapter') or 'mihomo')[:40]},
         'proxy_entry':{'http_url':str(entry.get('http_url','')).rstrip('/')[:300],
                        'socks_url':str(entry.get('socks_url','')).rstrip('/')[:300],
-                       'source':entry.get('source') if entry.get('source') in {'configured','detected','unknown'} else 'unknown'},
+                       'source':entry.get('source') if entry.get('source') in {'configured','detected','unknown','plugin-managed'} else 'unknown'},
     }, aliases
 
 
