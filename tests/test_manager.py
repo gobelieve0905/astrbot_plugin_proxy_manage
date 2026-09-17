@@ -76,7 +76,8 @@ class TestConfigurationRules(unittest.TestCase):
                 {"id": "sub-hk", "name": "HK", "url": "https://sub.example/hk", "enabled": True, "interval": 60},
                 {"id": "sub-sg", "name": "SG", "url": "https://sub.example/sg", "enabled": True, "interval": 60},
             ],
-            "platforms": {}, "control": {"enabled": True, "url": "http://mihomo:9090", "secret": "secret", "timeout": 8},
+            "platforms": {}, "control": {"enabled": True, "url": "http://mihomo:9090", "secret": "secret", "timeout": 8,
+                                          "deployment": "existing", "scope": "providers-groups-rules"},
             "proxy_entry": {"http_url": "http://proxy.example:7890", "socks_url": "", "source": "configured"},
         }
         manager.events = []
@@ -163,20 +164,89 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(first[0]['display_name'], second[0]['display_name'])
         self.assertNotEqual(first[0]['id'], second[0]['id'])
 
-    def test_runtime_apply_must_verify_groups_and_rules(self):
+    def test_same_subscription_groups_only_include_selected_region_nodes(self):
         manager = self._manager_for_runtime()
+        manager.state['nodes'][1]['subscription_id'] = 'sub-hk'
+        manager.state['subscriptions'] = manager.state['subscriptions'][:1]
+        document = manager._runtime_document()
+        groups = {item['name']: item for item in document['proxy-groups']}
+        self.assertEqual(groups['香港自动'].get('proxies'), ['node-hk-1'])
+        self.assertEqual(groups['新加坡自动'].get('proxies'), ['node-sg-1'])
+        self.assertNotIn('use', groups['香港自动'])
+
+    def test_same_name_nodes_use_distinct_kernel_names_for_delay(self):
+        manager = self._manager_for_runtime()
+        manager.state['nodes'][0].update({'name': '同名节点', 'kernel_name': 'node-sub-hk-hk-1'})
+        manager.state['nodes'][1].update({'name': '同名节点', 'kernel_name': 'node-sub-sg-sg-1'})
         response = self.module.httpx.Response(
             200,
-            json={"mode": "rule", "mixed-port": 7890, "proxies": {}},
-            request=self.module.httpx.Request("GET", "http://mihomo:9090/configs"),
+            json={'delay': 25},
+            request=self.module.httpx.Request('GET', 'http://mihomo:9090/proxies/node/delay'),
         )
-        client = AsyncMock()
-        client.__aenter__.return_value = client
-        client.put.return_value = response
-        client.get.return_value = response
-        with patch.object(self.module.httpx, "AsyncClient", return_value=client):
+        client = AsyncMock(); client.__aenter__.return_value = client
+        client.get = AsyncMock(return_value=response)
+        with patch.object(manager, '_kernel_status', AsyncMock(return_value={'state': 'connected'})), \
+             patch.object(self.module.httpx, 'AsyncClient', return_value=client):
+            asyncio.run(manager._probe_node({'node_id': 'hk-1'}))
+            asyncio.run(manager._probe_node({'node_id': 'sg-1'}))
+        paths = [call.args[0] for call in client.get.await_args_list]
+        self.assertEqual(paths, [
+            '/proxies/node-sub-hk-hk-1/delay',
+            '/proxies/node-sub-sg-sg-1/delay',
+        ])
+
+    def test_display_name_change_does_not_change_stable_id(self):
+        helper = self.module.ProxyManager._stable_node_id
+        before = helper('sub-a', 'anytls://token@example.com:443?sni=example.com#旧名称')
+        after = helper('sub-a', 'anytls://token@example.com:443?sni=example.com#新名称')
+        self.assertEqual(before, after)
+
+    def test_refresh_preserves_excluded_node_preferences(self):
+        manager = self._manager_for_runtime()
+        old = manager.state['nodes'][0]
+        old.update({'excluded': True, 'exclusion_reason': '流量提示'})
+        manager.state['subscriptions'][0]['node_ids'] = [old['id']]
+        refreshed = dict(old, excluded=False, exclusion_reason='')
+        manager._replace_subscription_nodes(manager.state['subscriptions'][0], [refreshed])
+        current = next(node for node in manager.state['nodes'] if node['id'] == old['id'])
+        self.assertTrue(current['excluded'])
+        self.assertEqual(current['exclusion_reason'], '流量提示')
+
+    def test_missing_manual_selection_does_not_fall_back_silently(self):
+        manager = self._manager_for_runtime()
+        group = next(item for item in manager.state['groups'] if item['id'] == 'hk')
+        group['node_ids'] = ['missing-node', 'hk-1']
+        group['selected'] = 'missing-node'
+        with self.assertRaisesRegex(ValueError, '选择.*失效|失效.*选择'):
+            manager.resolve('hk')
+
+    def test_direct_fallback_maps_to_mihomo_direct(self):
+        document = self._manager_for_runtime()._runtime_document()
+        self.assertEqual(document['rules'][-1], 'MATCH,DIRECT')
+
+    def test_runtime_apply_must_verify_groups_and_rules(self):
+        manager = self._manager_for_runtime()
+        request = self.module.httpx.Request('GET', 'http://mihomo:9090/check')
+        def response(payload):
+            return self.module.httpx.Response(200, json=payload, request=request)
+        expected = manager._runtime_document()
+        client = AsyncMock(); client.__aenter__.return_value = client
+        client.put.return_value = response({})
+        client.get.side_effect = [
+            response({'mode': 'rule'}),
+            response({'proxies': {item['name']: {'type': 'URLTest'} for item in expected['proxy-groups']}}),
+            response({'rules': [{'payload': 'wrong-rule'} for _ in expected['rules']]}),
+        ]
+        with patch.object(manager, '_kernel_status', AsyncMock(return_value={'state': 'connected'})), \
+             patch.object(self.module.httpx, 'AsyncClient', return_value=client):
             result = asyncio.run(manager.runtime_apply())
-        self.assertNotEqual(result.get("applied"), True, "仅核对 mode 不得报告配置应用成功")
+        client.put.assert_awaited_once()
+        put_args = client.put.await_args
+        self.assertEqual(put_args.args[0], '/configs?force=true')
+        self.assertEqual(put_args.kwargs['json']['path'], '/config.yaml')
+        self.assertIn('proxy-groups:', put_args.kwargs['json']['payload'])
+        self.assertEqual([call.args[0] for call in client.get.await_args_list], ['/configs', '/proxies', '/rules'])
+        self.assertNotEqual(result.get('applied'), True, '规则内容不一致时不得报告应用成功')
 
 
 if __name__ == "__main__":
