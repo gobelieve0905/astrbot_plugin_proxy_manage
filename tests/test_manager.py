@@ -307,6 +307,11 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(first[0]['display_name'], second[0]['display_name'])
         self.assertNotEqual(first[0]['id'], second[0]['id'])
 
+    def test_region_survives_normalization_for_node_filters(self):
+        manager=self._manager_for_runtime()
+        node=manager._normalize({'nodes':[{'id':'hk','name':'AnyTLS 香港 1','protocol':'anytls','endpoint':'anytls://secret@example.com:443'}]})['nodes'][0]
+        self.assertEqual(node['region'],'HK')
+
     def test_same_subscription_groups_only_include_selected_region_nodes(self):
         manager = self._manager_for_runtime()
         manager.state['nodes'][1]['subscription_id'] = 'sub-hk'

@@ -283,6 +283,7 @@ class ProxyManager(Star):
                 'display_name':str(item.get('display_name',item.get('name',item['id'])))[:120],
                 'source_name':str(item.get('source_name',item.get('name',item['id'])))[:120],
                 'user_alias':str(item.get('user_alias',''))[:120],
+                'region':str(item.get('region') or region_of(str(item.get('source_name',item.get('display_name',item.get('name',''))))))[:40],
                 'protocol':protocol[:24], 'engine':str(item.get('engine') or ('direct-http' if protocol in {'http','https','socks5','socks5h'} else 'mihomo'))[:24],
                 'kind':str(item.get('kind') or ('mihomo' if protocol in ADVANCED_SCHEMES else protocol))[:24],
                 'endpoint':endpoint, 'connection':connection,
