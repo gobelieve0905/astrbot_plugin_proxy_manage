@@ -422,24 +422,36 @@ class ProxyManager(Star):
                 return json_response(result)
             adapter=self._adapter()
             before={item.get('id') for item in await adapter.connection_snapshot(self.state,host)}
+            trace=None
+            request_finished=asyncio.Event()
+
+            async def capture_connection():
+                # Mihomo only exposes active connections, so sample while the request is in flight.
+                for _attempt in range(100):
+                    current=await adapter.connection_snapshot(self.state,host)
+                    found=next((item for item in current if item.get('id') not in before),None)
+                    if found: return found
+                    if request_finished.is_set(): break
+                    await asyncio.sleep(.01)
+                return None
+
             proxy=self.state.get('proxy_entry',{}).get('http_url')
             if not use_environment and not proxy: raise ValueError('尚未配置统一 HTTP 代理入口')
             started=time.monotonic()
             client_options={'trust_env':use_environment,'follow_redirects':False,'timeout':15}
             if not use_environment: client_options['proxy']=proxy
-            async with httpx.AsyncClient(**client_options) as client:
-                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.6'})
+            trace_task=asyncio.create_task(capture_connection())
+            try:
+                async with httpx.AsyncClient(**client_options) as client:
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.6'})
+            finally:
+                request_finished.set()
+                trace=await trace_task
             response.raise_for_status()
             result.update({'host':host,'status_code':response.status_code,
                            'elapsed_ms':round((time.monotonic()-started)*1000),'matched_rule':route,
                            'group':{'id':group['id'],'name':group['name'],'kernel_name':group.get('kernel_name')}})
             result['entry']={'state':'passed','message':'AstrBot 进程继承的全局代理已返回 HTTPS 响应' if use_environment else '统一代理入口已返回 HTTPS 响应'}
-            trace=None
-            for _attempt in range(5):
-                current=await adapter.connection_snapshot(self.state,host)
-                trace=next((item for item in current if item.get('id') not in before),None)
-                if trace: break
-                await asyncio.sleep(.05)
             result['trace']={'request_correlated':bool(trace)}
             expected_rule='DOMAIN' if route and route['match']=='exact' else ('DOMAIN-SUFFIX' if route else 'MATCH')
             expected_payload=(route['host'].removeprefix('*.') if route else '')

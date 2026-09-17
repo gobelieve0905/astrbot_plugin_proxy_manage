@@ -894,6 +894,36 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('未回落到直连',result['entry']['message'])
         self.assertNotIn('proxy',factory.call_args.kwargs); self.assertTrue(factory.call_args.kwargs['trust_env'])
 
+    def test_outbound_verification_samples_connection_while_request_is_active(self):
+        manager=self._manager_for_runtime(); manager.state['rule_groups']=[
+            {'id':'ip','name':'IP','domains':[{'host':'api.ipify.org','match':'exact'}],'priority':1,'target':'hk','enabled':True}]
+        response=self.module.httpx.Response(200,json={'ip':'203.0.113.9'},request=self.module.httpx.Request('GET','https://api.ipify.org/?format=json'))
+        entry=AsyncMock(); entry.__aenter__.return_value=entry
+        request_active=False
+        async def get_entry(*_args,**_kwargs):
+            nonlocal request_active
+            request_active=True
+            await asyncio.sleep(.03)
+            request_active=False
+            return response
+        entry.get=AsyncMock(side_effect=get_entry)
+        control=AsyncMock(); control.__aenter__.return_value=control
+        control.get=AsyncMock(return_value=self.module.httpx.Response(200,json={'proxies':{'group-hk':{'now':'node-hk-1'}}},request=self.module.httpx.Request('GET','http://mihomo/proxies')))
+        trace={'id':'active','host':'api.ipify.org','rule':'DOMAIN','rule_payload':'api.ipify.org','chains':['node-hk-1','group-hk']}
+        snapshots=0
+        async def snapshot(*_args):
+            nonlocal snapshots
+            snapshots+=1
+            return [trace] if snapshots>1 and request_active else []
+        fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'url':'https://api.ipify.org?format=json'}))
+        adapter=manager._adapter()
+        with patch('proxy_manager.plugin.request',fake_request), patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
+             patch.object(adapter,'connection_snapshot',side_effect=snapshot), \
+             patch.object(self.module.httpx,'AsyncClient',side_effect=[entry,control]):
+            result=asyncio.run(manager.verify_outbound())
+        self.assertTrue(result['verified']); self.assertTrue(result['trace']['request_correlated'])
+
     def test_mihomo_connection_snapshot_accepts_null_connections(self):
         manager=self._manager_for_runtime(); adapter=manager._adapter()
         response=self.module.httpx.Response(200,json={'connections':None},request=self.module.httpx.Request('GET','http://mihomo/connections'))
