@@ -78,10 +78,27 @@ class ProxyManager(Star):
         except OSError: secret=''
         if len(secret)<32:
             secret=secrets.token_urlsafe(32); secret_path.write_text(secret,encoding='utf-8'); secret_path.chmod(0o600)
+        private_path=runtime_dir/'private-entry.json'
+        try:
+            private_credentials=json.loads(private_path.read_text(encoding='utf-8'))
+        except (OSError,ValueError):
+            private_credentials={}
+        username=str(private_credentials.get('username',''))
+        password=str(private_credentials.get('password',''))
+        if len(username)<16 or len(password)<32:
+            private_credentials={'username':'pm-'+secrets.token_urlsafe(18),'password':secrets.token_urlsafe(36)}
+            temp=private_path.with_suffix('.tmp')
+            temp.write_text(json.dumps(private_credentials),encoding='utf-8'); temp.chmod(0o600); temp.replace(private_path)
+        elif private_path.exists():
+            private_path.chmod(0o600)
         adapter=str(self.state.get('control',{}).get('adapter') or 'mihomo')
         self.state['control']={'enabled':True,'url':'http://127.0.0.1:19090','secret':secret,'timeout':8,
                                'deployment':'dedicated','scope':'full','listen':'127.0.0.1:19090','adapter':adapter}
-        self.state['proxy_entry']={'http_url':'http://127.0.0.1:17890','socks_url':'socks5://127.0.0.1:17890','source':'plugin-managed'}
+        private=(self.state.get('proxy_entry',{}).get('private') or {})
+        self.state['proxy_entry']={'http_url':'http://127.0.0.1:17890','socks_url':'socks5://127.0.0.1:17890','source':'plugin-managed',
+                                   'private':{'enabled':True,'listen':'0.0.0.0','port':int(private.get('port',17891) or 17891),
+                                              'service_host':str(private.get('service_host') or 'astrbot'),
+                                              'exposure':'private-network',**private_credentials}}
 
     def _write_kernel_config(self,document:dict):
         if not hasattr(self,'data_dir'): return None
@@ -118,9 +135,9 @@ class ProxyManager(Star):
                 try: raw=json.loads(self.config.get('config_json','{}'))
                 except (TypeError,ValueError): raw={}
         normalized=self._normalize(raw)
-        if from_disk and isinstance(raw,dict) and (recovered_from_backup or int(raw.get('version',0) or 0)<5):
+        if from_disk and isinstance(raw,dict) and (recovered_from_backup or int(raw.get('version',0) or 0)<6):
             try:
-                if int(raw.get('version',0) or 0)<5 and not self.migration_backup.exists():
+                if int(raw.get('version',0) or 0)<6 and not self.migration_backup.exists():
                     self.migration_backup.write_text(json.dumps(raw,ensure_ascii=False,indent=2),encoding='utf-8')
                     self.migration_backup.chmod(0o600)
                 temp=self.path.with_suffix('.migration.tmp')
@@ -214,7 +231,11 @@ class ProxyManager(Star):
         for subscription in result['subscriptions']:
             subscription['url']=urlparse(subscription['url']).scheme+'://'+CONFIGURED
         result['control']={'managed':True,'adapter':self._adapter().id}
-        result['proxy_entry']={'source':'plugin-managed'}
+        private=self.state.get('proxy_entry',{}).get('private',{})
+        result['proxy_entry']={'source':'plugin-managed','private':{
+            'enabled':bool(private.get('enabled')),'port':private.get('port'),
+            'authenticated':bool(private.get('username') and private.get('password')),
+            'exposure':'private-network','service_host':private.get('service_host','astrbot')}}
         if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
             result['kernel']={'artifact':self.artifacts.status(),'process':self.supervisor.status(),
                               'install':self.install_task.status() if hasattr(self,'install_task') else {}}
@@ -229,7 +250,7 @@ class ProxyManager(Star):
         )}
         astrbot=self.astrbot_proxy.status(self.state['proxy_entry']['http_url']) if hasattr(self,'astrbot_proxy') else {}
         result['astrbot_proxy']=astrbot
-        audit=self.traffic_audit.snapshot(self.state['proxy_entry']['http_url']) if hasattr(self,'traffic_audit') else {}
+        audit=self.traffic_audit.snapshot(self.state['proxy_entry']['http_url'],self.state['proxy_entry'].get('private')) if hasattr(self,'traffic_audit') else {}
         result['traffic_audit']=audit
         result['traffic_inventory']=traffic_inventory(self.state,application,astrbot=astrbot,audit=audit)
         return result
@@ -242,8 +263,11 @@ class ProxyManager(Star):
             self.backup.write_text(self.path.read_text(encoding='utf-8'),encoding='utf-8')
             try: self.backup.chmod(0o600)
             except OSError: pass
+        stored=copy.deepcopy(normalized)
+        stored_private=stored.get('proxy_entry',{}).get('private',{})
+        stored_private.pop('username',None); stored_private.pop('password',None)
         temp=self.path.with_suffix('.tmp')
-        temp.write_text(json.dumps(normalized,ensure_ascii=False,indent=2),encoding='utf-8')
+        temp.write_text(json.dumps(stored,ensure_ascii=False,indent=2),encoding='utf-8')
         try: temp.chmod(0o600)
         except OSError: pass
         temp.replace(self.path); self.state=normalized
@@ -451,7 +475,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.8'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.9'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -563,7 +587,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.8'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.9'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -634,7 +658,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.8'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.9'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1082,7 +1106,7 @@ class ProxyManager(Star):
         status=self.astrbot_proxy.mark_started(self.state['proxy_entry']['http_url'])
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.8 已加载')
+        logger.info('代理管理中心 0.3.9 已加载')
 
     async def terminate(self):
         if self.auto_task:

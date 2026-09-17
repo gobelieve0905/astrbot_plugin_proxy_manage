@@ -79,6 +79,14 @@ class CoreAdapter(ABC):
         from ..domain.security import redact_config
         return redact_config(copy.deepcopy(document))
 
+    @staticmethod
+    def public_entry(entry: dict) -> dict:
+        private=entry.get('private') if isinstance(entry.get('private'),dict) else {}
+        return {'source':entry.get('source','unknown'),'private':{
+            'enabled':bool(private.get('enabled')),'port':private.get('port'),
+            'authenticated':bool(private.get('username') and private.get('password')),
+            'exposure':'private-network'}}
+
 
 class UnsupportedAdapter(CoreAdapter):
     def __init__(self, adapter_id: str): self.id=adapter_id or 'unknown'

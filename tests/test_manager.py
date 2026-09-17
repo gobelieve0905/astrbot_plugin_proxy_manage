@@ -83,7 +83,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.8',html)
+        self.assertIn('流量控制 · 0.3.9',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('aria-label="主导航"',html)
@@ -175,6 +175,27 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertEqual(manager.state['control']['listen'],'127.0.0.1:19090')
             self.assertEqual(manager.state['proxy_entry']['http_url'],'http://127.0.0.1:17890')
             self.assertEqual((Path(directory)/'runtime'/'control.secret').stat().st_mode & 0o777,0o600)
+
+    def test_private_entry_credentials_are_stable_private_and_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager=self.module.ProxyManager.__new__(self.module.ProxyManager)
+            manager.data_dir=Path(directory); manager.state={'control':{},'proxy_entry':{}}
+            manager._bind_owned_runtime(); first=dict(manager.state['proxy_entry']['private'])
+            manager._bind_owned_runtime(); second=manager.state['proxy_entry']['private']
+            self.assertEqual((first['username'],first['password']),(second['username'],second['password']))
+            credential_path=Path(directory)/'runtime'/'private-entry.json'
+            self.assertEqual(credential_path.stat().st_mode & 0o777,0o600)
+            public={'enabled':second['enabled'],'port':second['port'],'authenticated':True,'exposure':second['exposure']}
+            self.assertNotIn(first['username'],json.dumps(public)); self.assertNotIn(first['password'],json.dumps(public))
+
+    def test_corrupt_private_entry_credentials_rotate_safely(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime=Path(directory)/'runtime'; runtime.mkdir(); (runtime/'private-entry.json').write_text('{broken')
+            manager=self.module.ProxyManager.__new__(self.module.ProxyManager)
+            manager.data_dir=Path(directory); manager.state={'control':{},'proxy_entry':{}}
+            manager._bind_owned_runtime()
+            stored=json.loads((runtime/'private-entry.json').read_text())
+            self.assertGreaterEqual(len(stored['username']),16); self.assertGreaterEqual(len(stored['password']),32)
 
     def test_kernel_supervisor_times_out_and_terminates_process(self):
         from proxy_manager.runtime.supervisor import KernelSupervisor
@@ -317,7 +338,7 @@ class TestConfigurationRules(unittest.TestCase):
             manager.path = Path(directory) / "config.json"; manager.backup = Path(directory) / "config.previous.json"; manager.state = {}
             state = {"nodes": [], "groups": [{"id": "direct", "name": "直连", "mode": "direct", "node_ids": [], "selected": "", "enabled": True}], "routes": [], "subscriptions": [], "platforms": {}, "control": {"enabled": False, "url": "", "secret": "", "timeout": 8}}
             asyncio.run(manager.persist(state))
-            self.assertEqual(json.loads(manager.path.read_text())["version"], 5)
+            self.assertEqual(json.loads(manager.path.read_text())["version"], 6)
             self.assertEqual(manager.path.stat().st_mode & 0o777, 0o600)
             asyncio.run(manager.persist(state))
             self.assertEqual(manager.backup.stat().st_mode & 0o777, 0o600)
@@ -595,7 +616,7 @@ class TestConfigurationRules(unittest.TestCase):
             with patch.object(self.module.StarTools,'get_data_dir',return_value=root):
                 first=self.module.ProxyManager(context,{})
                 new_id=first.state['nodes'][0]['id']
-                self.assertEqual(first.state['version'],5)
+                self.assertEqual(first.state['version'],6)
                 self.assertEqual(first.state['groups'][1]['node_ids'],[new_id])
                 self.assertEqual(first.state['groups'][1]['selected'],new_id)
                 self.assertEqual(first.state['subscriptions'][0]['node_ids'],[new_id])
@@ -898,6 +919,25 @@ class TestConfigurationRules(unittest.TestCase):
             platform=next(value for value in values if value['id']=='platform-sdk')
             self.assertEqual(provider['status'],'unknown'); self.assertEqual(platform['status'],'not_connected')
 
+    def test_mcp_audit_classifies_transports_without_leaking_credentials(self):
+        from proxy_manager.traffic.audit import AstrBotTrafficAudit
+        from proxy_manager.traffic.inventory import traffic_inventory
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); data=root/'data'; data.mkdir()
+            (data/'cmd_config.json').write_text('{}')
+            (data/'mcp_server.json').write_text(json.dumps({'mcpServers':{
+                'stdio':{'command':'node','args':['server.js'],'env':{'HTTP_PROXY':'http://127.0.0.1:17890','TOKEN':'hidden'}},
+                'host':{'url':'http://127.0.0.1:9000/mcp'},
+                'container':{'url':'http://applovin:6186/mcp','env':{'HTTPS_PROXY':'http://user:password@astrbot:17891'}},
+                'external':{'url':'https://mcp.example.com/sse','headers':{'Authorization':'Bearer hidden'}},
+            }}))
+            audit=AstrBotTrafficAudit(root).snapshot('http://127.0.0.1:17890',{'port':17891})
+            self.assertEqual([item['locality'] for item in audit['mcps']],['stdio','same_host','container','external'])
+            serialized=json.dumps(audit)
+            self.assertNotIn('hidden',serialized); self.assertNotIn('password',serialized); self.assertNotIn('Authorization',serialized)
+            mcp=next(item for item in traffic_inventory({'proxy_entry':{'http_url':'http://127.0.0.1:17890'}},{},audit=audit) if item['id']=='mcp-egress')
+            self.assertEqual(mcp['status'],'unknown')
+
     def test_audit_does_not_label_environment_inheritance_as_connected(self):
         from proxy_manager.traffic.inventory import traffic_inventory
         audit={'providers':[{'enabled':True,'proxy':'unset'}],'platforms':[{'enabled':True,'proxy':'unset'}]}
@@ -1069,6 +1109,8 @@ class TestConfigurationRules(unittest.TestCase):
         for adapter_id,adapter in all_adapters().items():
             with self.subTest(adapter=adapter_id):
                 state=copy.deepcopy(manager.state); state['control']['adapter']=adapter_id
+                state['proxy_entry']['private']={'enabled':True,'listen':'0.0.0.0','port':17891,
+                                                  'username':'private-user','password':'private-password'}
                 for node in state['nodes']: node['adapters']=['mihomo','sing-box']
                 document=adapter.render(state,manager._compiled_rules())
                 adapter.validate(document)
@@ -1084,6 +1126,10 @@ class TestConfigurationRules(unittest.TestCase):
                 self.assertNotIn('"secret": "secret"',redacted); self.assertNotIn('"password": "credential"',redacted)
                 closed=adapter.fail_closed_document(state['control'],state['proxy_entry'])
                 adapter.validate(closed); self.assertNotEqual(adapter.revision(document),adapter.revision(closed))
+                serialized_closed=json.dumps(closed)
+                self.assertIn('private-proxy-entry',serialized_closed); self.assertIn('private-password',serialized_closed)
+                public=adapter.public_entry(state['proxy_entry'])
+                self.assertNotIn('private-user',json.dumps(public)); self.assertNotIn('private-password',json.dumps(public))
                 for method in ('start','stop','restart','apply','inspect','verify','probe','redact','healthy'):
                     self.assertTrue(callable(getattr(adapter,method)))
 

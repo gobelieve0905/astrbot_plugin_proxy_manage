@@ -12,8 +12,8 @@ TRAFFIC_INVENTORY=[
      'method':'平台专用 proxy 字段或 SDK 代理能力','verification':'重启适配器后对 HTTP、WebSocket、媒体分别关联内核连接记录','bypass_risk':'SDK 长连接、媒体客户端或 webhook 可能不继承环境'},
     {'id':'plugin-http','name':'插件公共 HTTP 客户端','restart':False,
      'method':'继承核心代理或显式配置','verification':'插件声明接入点并提供无凭据请求级验证','bypass_risk':'第三方插件可使用 trust_env=false、裸 socket 或自建客户端'},
-    {'id':'mcp-egress','name':'MCP 外部请求','restart':False,
-     'method':'MCP 进程/容器出口指向稳定入口','verification':'每个 MCP 的无业务凭据出站请求与内核记录','bypass_risk':'MCP 独立进程/容器不继承 AstrBot 环境'},
+    {'id':'mcp-egress','name':'MCP 外部请求','restart':True,
+     'method':'stdio 注入回环代理；独立容器使用带随机认证的私网入口；同机进程需受控回环转发','verification':'每个 MCP 的无业务凭据出站请求与内核记录','bypass_risk':'MCP 可显式禁用环境代理、使用裸 socket，或从独立网络直接出站'},
     {'id':'updates','name':'插件市场与依赖下载','restart':False,
      'method':'更新组件显式使用稳定入口','verification':'下载请求的内核记录和制品摘要校验','bypass_risk':'市场、GitHub、PyPI 与 pip 安装器是独立进程或客户端'},
     {'id':'recent-verification','name':'最近一次受控验证请求','restart':False,
@@ -78,6 +78,13 @@ def traffic_inventory(state: dict, application: dict, environ: dict|None=None, a
         elif item['id']=='plugin-http':
             count=int(audit.get('plugin_count',0) or 0)
             item.update({'status':'not_connected','message':'发现 '+str(count)+' 个插件配置项；第三方网络实现尚未声明或验证'})
+        elif item['id']=='mcp-egress':
+            mcps=audit.get('mcps',[])
+            configured=[value for value in mcps if value.get('proxy')=='configured']
+            item.update({'status':'unknown' if configured else 'not_connected',
+                         'message':('发现 '+str(len(configured))+' 个 MCP 已配置入口，但尚无请求级出口证据' if configured else
+                                    ('发现 '+str(len(mcps))+' 个 MCP，尚未配置或无法安全接入其外部出口' if mcps else '未发现 MCP 配置')),
+                         'discovered':mcps})
         elif item['id']=='updates':
             item.update({'status':'not_connected','message':'插件市场、GitHub、PyPI 和依赖安装器尚未统一接入稳定入口'})
         else:

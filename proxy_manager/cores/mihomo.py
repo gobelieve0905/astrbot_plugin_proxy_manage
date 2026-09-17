@@ -30,6 +30,15 @@ class MihomoAdapter(CoreAdapter):
 
     def config_filename(self) -> str: return 'config.yaml'
 
+    @staticmethod
+    def _private_listener(entry: dict) -> list[dict]:
+        private=entry.get('private') if isinstance(entry.get('private'),dict) else {}
+        if not private.get('enabled'): return []
+        username=str(private.get('username','')); password=str(private.get('password',''))
+        if not username or not password: raise ValueError('私有网络入口缺少认证凭据')
+        return [{'name':'private-proxy-entry','type':'mixed','listen':private.get('listen','0.0.0.0'),
+                 'port':int(private.get('port',17891)),'users':[{'username':username,'password':password}]}]
+
     def serialize(self, document: dict) -> bytes:
         try: import yaml
         except ImportError as exc: raise ValueError('缺少 PyYAML，无法生成 Mihomo 配置') from exc
@@ -107,6 +116,7 @@ class MihomoAdapter(CoreAdapter):
             document['secret']=control.get('secret','')
             port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
             if port: document.update({'mixed-port':port,'allow-lan':False,'bind-address':'127.0.0.1'})
+            document['listeners']=self._private_listener(entry)
         yaml.safe_load(yaml.safe_dump(document,allow_unicode=True,sort_keys=False))
         return document
 
@@ -164,6 +174,7 @@ class MihomoAdapter(CoreAdapter):
         port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
         if port: document['mixed-port']=port
         if port: document.update({'allow-lan':False,'bind-address':'127.0.0.1'})
+        document['listeners']=self._private_listener(entry)
         return document
 
     def control(self, state: dict) -> tuple[dict,dict]:
@@ -202,7 +213,7 @@ class MihomoAdapter(CoreAdapter):
         if errors:
             return {**base,'state':'runtime_inconsistent','message':'运行配置与已应用修订不一致：'+errors[0]}
         return {**base,'state':'applied','message':'专用内核已连接，运行配置与已应用修订一致',
-                'proxy_entry':state['proxy_entry']}
+                'proxy_entry':self.public_entry(state['proxy_entry'])}
 
     async def fetch_runtime(self, state: dict):
         control,headers=self.control(state)

@@ -82,8 +82,8 @@ class SingBoxAdapter(CoreAdapter):
             if not target: continue
             key='domain' if route['match']=='exact' else 'domain_suffix'
             rules.append({key:[route['host'].removeprefix('*.')],'action':'route','outbound':target})
-        control=state['control']; entry=state['proxy_entry']; port=urlsplit(entry.get('http_url','')).port
-        return {'log':{'level':'warn'},'inbounds':[{'type':'mixed','tag':'proxy-entry','listen':'127.0.0.1','listen_port':port}],
+        control=state['control']; entry=state['proxy_entry']
+        return {'log':{'level':'warn'},'inbounds':self._inbounds(entry),
                 'outbounds':outbounds,'route':{'rules':rules,'final':'DIRECT','auto_detect_interface':True},
                 'experimental':{'clash_api':{'external_controller':control.get('listen','127.0.0.1:19090'),
                                                'secret':control.get('secret','')}}}
@@ -129,7 +129,7 @@ class SingBoxAdapter(CoreAdapter):
 
     def fail_closed_document(self, control: dict, entry: dict) -> dict:
         port=urlsplit(entry.get('http_url','')).port
-        return {'log':{'level':'warn'},'inbounds':[{'type':'mixed','tag':'proxy-entry','listen':'127.0.0.1','listen_port':port}],
+        return {'log':{'level':'warn'},'inbounds':self._inbounds(entry),
                 'outbounds':[{'type':'block','tag':'REJECT'}],'route':{'rules':[],'final':'REJECT','auto_detect_interface':True},
                 'experimental':{'clash_api':{'external_controller':control.get('listen','127.0.0.1:19090'),'secret':control.get('secret','')}}}
 
@@ -147,7 +147,7 @@ class SingBoxAdapter(CoreAdapter):
         if saved!=applied: return {**base,'state':'pending_apply','message':'sing-box 配置等待应用'}
         errors=self.verify(expected,runtime,proxies,rules)
         if errors: return {**base,'state':'runtime_inconsistent','message':errors[0]}
-        return {**base,'state':'applied','message':'sing-box 运行配置与已应用修订一致','proxy_entry':state['proxy_entry']}
+        return {**base,'state':'applied','message':'sing-box 运行配置与已应用修订一致','proxy_entry':self.public_entry(state['proxy_entry'])}
 
     async def fetch_runtime(self, state: dict) -> dict:
         control,headers=self.control(state)
@@ -201,3 +201,15 @@ class SingBoxAdapter(CoreAdapter):
                            'rule_payload':str(item.get('rulePayload','')).rstrip('.').lower(),
                            'chains':[str(value) for value in item.get('chains',[]) if isinstance(value,str)]})
         return result
+    @staticmethod
+    def _inbounds(entry: dict) -> list[dict]:
+        port=urlsplit(entry.get('http_url','')).port
+        values=[{'type':'mixed','tag':'proxy-entry','listen':'127.0.0.1','listen_port':port}]
+        private=entry.get('private') if isinstance(entry.get('private'),dict) else {}
+        if private.get('enabled'):
+            username=str(private.get('username','')); password=str(private.get('password',''))
+            if not username or not password: raise ValueError('私有网络入口缺少认证凭据')
+            values.append({'type':'mixed','tag':'private-proxy-entry','listen':private.get('listen','0.0.0.0'),
+                           'listen_port':int(private.get('port',17891)),
+                           'users':[{'username':username,'password':password}]})
+        return values

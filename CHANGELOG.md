@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.3.9 - 2026-09-17
+
+- 为插件自管 Mihomo 与 sing-box 增加双入口：AstrBot 继续使用无凭据回环入口，受信容器网络使用强制随机认证的私有入口；正常配置与失败关闭配置保持相同入口边界。
+- 私网入口凭据独立持久化为 `0600` 运行制品，损坏时安全轮换；页面、状态、审计和普通日志不返回用户名、密码或完整认证 URL。
+- 动态读取 `mcp_server.json`，区分 stdio MCP、同机独立进程、独立容器和外部 MCP，并展示接入方式与重启要求；不读取 headers、Token 等业务凭据。
+- 明确 stdio 使用回环环境代理、独立容器使用受信 Docker 私网认证入口、同机进程等待受控回环转发。当前版本不自动改写 Compose 或现有 MCP 配置，未取得请求级内核记录时不显示已接管。
+
 ## 0.3.8 - 2026-09-17
 
 - 审计 AstrBot 4.28.1 的 Provider 独立 `proxy` 字段、Lark/Telegram/Discord 等平台 HTTP/WebSocket/媒体路径、Agent 运行器、插件配置、插件市场/GitHub/PyPI/依赖下载器与显式 `trust_env=false` 风险。

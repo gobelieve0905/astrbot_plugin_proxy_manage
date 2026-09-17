@@ -193,8 +193,9 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
     control=source.get('control') if isinstance(source.get('control'),dict) else {}
     timeout=int(control.get('timeout',8) or 8)
     entry=source.get('proxy_entry') if isinstance(source.get('proxy_entry'),dict) else {}
+    private=entry.get('private') if isinstance(entry.get('private'),dict) else {}
     return {
-        'version':5, 'migration':{'stable_identity':2,'core_adapter':2}, 'name':str(source.get('name','默认配置'))[:80],
+        'version':6, 'migration':{'stable_identity':2,'core_adapter':2,'private_entry':1}, 'name':str(source.get('name','默认配置'))[:80],
         'nodes':nodes, 'groups':groups, 'routes':routes, 'rule_groups':rule_groups, 'platforms':platforms,
         'subscriptions':subscriptions,
         'control':{'enabled':bool(control.get('enabled',False)),'url':str(control.get('url','')).rstrip('/')[:300],
@@ -205,7 +206,12 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
                    'adapter':str(control.get('adapter') or 'mihomo')[:40]},
         'proxy_entry':{'http_url':str(entry.get('http_url','')).rstrip('/')[:300],
                        'socks_url':str(entry.get('socks_url','')).rstrip('/')[:300],
-                       'source':entry.get('source') if entry.get('source') in {'configured','detected','unknown','plugin-managed'} else 'unknown'},
+                       'source':entry.get('source') if entry.get('source') in {'configured','detected','unknown','plugin-managed'} else 'unknown',
+                       'private':{'enabled':bool(private.get('enabled',True)),
+                                  'listen':str(private.get('listen') or '0.0.0.0')[:80],
+                                  'port':max(1,min(int(private.get('port',17891) or 17891),65535)),
+                                  'service_host':str(private.get('service_host') or 'astrbot')[:120],
+                                  'exposure':'private-network'}},
     }, aliases
 
 

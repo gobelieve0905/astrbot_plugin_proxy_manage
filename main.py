@@ -28,6 +28,6 @@ else:
     from proxy_manager.plugin import ProxyManager as _ProxyManager
 
 
-@register('astrbot_plugin_proxy_manage','gobelieve','AstrBot 统一出站流量控制面','0.3.8')
+@register('astrbot_plugin_proxy_manage','gobelieve','AstrBot 统一出站流量控制面','0.3.9')
 class ProxyManager(_ProxyManager):
     pass
