@@ -924,6 +924,21 @@ class TestConfigurationRules(unittest.TestCase):
             result=asyncio.run(manager.verify_outbound())
         self.assertTrue(result['verified']); self.assertTrue(result['trace']['request_correlated'])
 
+    def test_astrbot_core_verification_attempts_request_when_kernel_is_stopped(self):
+        manager=self._manager_for_runtime(); manager.astrbot_proxy=types.SimpleNamespace(status=lambda *_args:{'effective':True})
+        fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'url':'https://api.ipify.org?format=json'}))
+        client=AsyncMock(); client.__aenter__.return_value=client
+        client.get=AsyncMock(side_effect=self.module.httpx.ConnectError('kernel stopped'))
+        adapter=manager._adapter()
+        with patch('proxy_manager.plugin.request',fake_request), patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'stopped','message':'内核未运行'})), \
+             patch.object(adapter,'connection_snapshot',AsyncMock()) as snapshot, \
+             patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            result=asyncio.run(manager.verify_astrbot_egress())
+        client.get.assert_awaited_once(); snapshot.assert_not_awaited()
+        self.assertFalse(result['verified']); self.assertEqual(result['entry']['state'],'failed')
+        self.assertEqual(result['rule']['state'],'unconfirmed')
+
     def test_mihomo_connection_snapshot_accepts_null_connections(self):
         manager=self._manager_for_runtime(); adapter=manager._adapter()
         response=self.module.httpx.Response(200,json={'connections':None},request=self.module.httpx.Request('GET','http://mihomo/connections'))

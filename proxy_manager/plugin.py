@@ -416,12 +416,14 @@ class ProxyManager(Star):
             group=next((item for item in self.state['groups'] if item['id']==target),None)
             if not group: raise ValueError('规则目标代理组不存在')
             kernel=await self._kernel_status()
-            if kernel.get('state')!='applied':
+            kernel_ready=kernel.get('state')=='applied'
+            if not kernel_ready:
                 result['rule']={'state':'unconfirmed','message':'内核运行状态未通过核对：'+str(kernel.get('message','未知'))}
-                self._record_outbound_verification(result)
-                return json_response(result)
+                if not use_environment:
+                    self._record_outbound_verification(result)
+                    return json_response(result)
             adapter=self._adapter()
-            before={item.get('id') for item in await adapter.connection_snapshot(self.state,host)}
+            before={item.get('id') for item in await adapter.connection_snapshot(self.state,host)} if kernel_ready else set()
             trace=None
             request_finished=asyncio.Event()
 
@@ -440,13 +442,13 @@ class ProxyManager(Star):
             started=time.monotonic()
             client_options={'trust_env':use_environment,'follow_redirects':False,'timeout':15}
             if not use_environment: client_options['proxy']=proxy
-            trace_task=asyncio.create_task(capture_connection())
+            trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
                     response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.6'})
             finally:
                 request_finished.set()
-                trace=await trace_task
+                if trace_task: trace=await trace_task
             response.raise_for_status()
             result.update({'host':host,'status_code':response.status_code,
                            'elapsed_ms':round((time.monotonic()-started)*1000),'matched_rule':route,
