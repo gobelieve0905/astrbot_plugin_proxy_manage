@@ -898,6 +898,14 @@ class TestConfigurationRules(unittest.TestCase):
             platform=next(value for value in values if value['id']=='platform-sdk')
             self.assertEqual(provider['status'],'unknown'); self.assertEqual(platform['status'],'not_connected')
 
+    def test_audit_does_not_label_environment_inheritance_as_connected(self):
+        from proxy_manager.traffic.inventory import traffic_inventory
+        audit={'providers':[{'enabled':True,'proxy':'unset'}],'platforms':[{'enabled':True,'proxy':'unset'}]}
+        values=traffic_inventory({'proxy_entry':{'http_url':'http://127.0.0.1:17890'}},{},
+                                 astrbot={'effective':True},audit=audit)
+        self.assertEqual(next(value for value in values if value['id']=='provider-proxy')['status'],'unknown')
+        self.assertEqual(next(value for value in values if value['id']=='platform-sdk')['status'],'unknown')
+
     def test_astrbot_proxy_transaction_backs_up_narrows_and_restores(self):
         from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
         with tempfile.TemporaryDirectory() as directory:

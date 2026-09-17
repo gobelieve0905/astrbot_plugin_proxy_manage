@@ -26,6 +26,7 @@ def traffic_inventory(state: dict, application: dict, environ: dict|None=None, a
     entry=str((state.get('proxy_entry') or {}).get('http_url') or '').rstrip('/')
     configured={str(environ.get(key,'')).rstrip('/') for key in ('http_proxy','https_proxy','HTTP_PROXY','HTTPS_PROXY') if environ.get(key)}
     verification=application.get('verification') if isinstance(application,dict) else {}
+    verification=verification if isinstance(verification,dict) else {}
     traced=bool(isinstance(verification,dict) and verification.get('verified') and verification.get('scope')=='astrbot-core' and
                 verification.get('trace',{}).get('request_correlated') and
                 application.get('status')=='applied' and
@@ -64,13 +65,15 @@ def traffic_inventory(state: dict, application: dict, environ: dict|None=None, a
                 item.update({'status':'unknown','message':'已发现 '+str(len(stable))+' 个 Provider 指向稳定入口；尚无请求级 Provider 证据'})
             elif other:
                 item.update({'status':'not_connected','message':'已发现 '+str(len(other))+' 个 Provider 使用其他代理入口'})
+            elif providers and astrbot.get('effective'):
+                item.update({'status':'unknown','message':'未发现 Provider 专用 proxy；部分客户端可能继承全局代理，但尚无请求级证据'})
             else:
                 item.update({'status':'not_connected','message':'未发现已启用 Provider 的稳定入口专用 proxy 配置'})
             item['discovered']=providers
         elif item['id']=='platform-sdk':
             platforms=audit.get('platforms',[])
-            item.update({'status':'not_connected',
-                         'message':('发现 '+str(len(platforms))+' 个平台；HTTP、WebSocket 和媒体仍需逐项请求级验证' if platforms else '未发现可审计的平台配置'),
+            item.update({'status':'unknown' if platforms and astrbot.get('effective') else 'not_connected',
+                         'message':('发现 '+str(len(platforms))+' 个平台；全局代理可能覆盖部分 HTTP，HTTP、WebSocket 和媒体仍需逐项请求级验证' if platforms else '未发现可审计的平台配置'),
                          'discovered':platforms})
         elif item['id']=='plugin-http':
             count=int(audit.get('plugin_count',0) or 0)
