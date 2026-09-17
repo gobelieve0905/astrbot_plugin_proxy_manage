@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id)
 const api = window.AstrBotPluginPage
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台策略',control:'内核管理',logs:'连接日志'}
 let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importing=false, probeTask=null
+let installPollTimer=null
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 function note(text,error=false){ $('notice').textContent=text; $('notice').hidden=!text; $('notice').className=error?'error':'' }
@@ -68,7 +69,12 @@ function render(){
   } else if(tab==='control'){
     const groups=controlResult?.groups||[]
     const artifact=kernelStatus.artifact||state.kernel?.artifact||{}, process=kernelStatus.process||state.kernel?.process||{}
-    html=`<section class="panel"><div class="bar"><h2>插件自管内核</h2><div class="actions"><button id="kernel-install">下载安装</button><button id="kernel-start">启动</button><button id="kernel-stop">停止</button><button id="runtime-apply" class="primary">应用代理配置</button></div></div><div class="cards"><article><b>${esc(artifact.version||'--')}</b><span>固定版本</span></article><article><b>${esc(artifact.platform?.os||'--')} / ${esc(artifact.platform?.arch||'--')}</b><span>${esc(artifact.platform?.libc||'平台')}</span></article><article><b>${esc(artifact.state||'未知')}</b><span>制品状态</span></article><article><b>${esc(process.state||'未知')}</b><span>进程状态</span></article></div><div class="inline"><input id="kernel-file" type="file" accept=".gz,.zip"><button id="kernel-upload">校验并安装离线制品</button><button id="control-status">刷新运行状态</button></div><p class="muted">控制密钥、监听地址和稳定代理入口由插件内部生成并仅绑定回环地址，不需要手工配置。</p></section>
+    const install=kernelStatus.install||state.kernel?.install||{}, total=Number(install.total||artifact.size||0), downloaded=Number(install.downloaded||0), percent=total?Math.min(100,Math.round(downloaded*100/total)):0
+    const taskRunning=install.state==='running'
+    html=`<section class="panel"><div class="bar"><h2>插件自管内核</h2><div class="actions"><button id="kernel-install" ${taskRunning?'disabled':''}>下载安装</button>${taskRunning?'<button id="kernel-install-cancel">取消下载</button>':''}<button id="kernel-start">启动</button><button id="kernel-stop">停止</button><button id="runtime-apply" class="primary">应用代理配置</button></div></div><div class="cards"><article><b>${esc(artifact.version||'--')}</b><span>固定版本</span></article><article><b>${esc(artifact.platform?.os||'--')} / ${esc(artifact.platform?.arch||'--')}</b><span>${esc(artifact.platform?.libc||'平台')}</span></article><article><b>${esc(artifact.state||'未知')}</b><span>制品状态</span></article><article><b>${esc(process.state||'未知')}</b><span>进程状态</span></article></div>
+      <div class="download-status"><div><b>${esc(install.message||'可在线安装或上传离线制品')}</b><small>${esc(install.source||'')}${install.attempt?` · 第 ${install.attempt}/${install.attempts} 次`:''}</small></div><progress max="100" value="${percent}"></progress><span>${downloaded?formatBytes(downloaded)+' / ':''}${total?formatBytes(total):'--'}</span></div>
+      <div class="artifact-guide"><b>${esc(artifact.artifact||'当前平台制品')}</b><code>${esc(artifact.expected_sha256||'')}</code>${artifact.download_url?`<a href="${esc(artifact.download_url)}" target="_blank" rel="noopener noreferrer">打开官方下载地址</a>`:''}</div>
+      <div class="inline"><input id="kernel-file" type="file" accept=".gz,.zip"><button id="kernel-upload">校验并安装离线制品</button><button id="control-status">刷新运行状态</button></div><p class="muted">控制密钥、监听地址和稳定代理入口由插件内部生成并仅绑定回环地址，不需要手工配置。</p></section>
       ${groups.length?`<section class="panel"><h2>代理组状态</h2>${groups.map(group=>`<div class="control-group"><b>${esc(group.display_name)}</b><small>${esc(group.type)} · ${esc(group.selected_display_name||'无')}</small><select data-select="${esc(group.id)}">${group.members.map(node=>`<option value="${esc(node.id)}" ${node.id===group.selected_node_id?'selected':''} ${node.available?'':'disabled'}>${esc(node.display_name)}${node.available?'':'（不可用）'}</option>`).join('')}</select></div>`).join('')}</section>`:'<section class="panel"><p class="muted">尚未检查，或控制接口没有可切换代理组。</p></section>'}`
   } else {
     html=`<section class="panel"><h2>连接日志</h2>${state.events.slice().reverse().map(event=>`<div class="log">${esc(event.action)} · ${esc(event.result||'')}<small>${new Date(event.at*1000).toLocaleString()}</small></div>`).join('')||'<p class="muted">暂无事件。</p>'}</section>`
@@ -130,7 +136,8 @@ function bind(){
   $('preview')?.addEventListener('click',async()=>{$('result').textContent=JSON.stringify(await api.apiPost('preview',{host:$('host').value}),null,2)})
   $('verify-outbound')?.addEventListener('click',async()=>{try{const result=await api.apiPost('verify-outbound',{url:$('verify-url').value});state.application={...(state.application||{}),verification:result};render();note(result.verified?'出口已确认':'验证未能确认实际出口，请查看三个层级的证据',!result.verified)}catch(error){note(error.message,true)}})
   $('control-status')?.addEventListener('click',checkControl)
-  $('kernel-install')?.addEventListener('click',()=>kernelAction('kernel-install','正在下载并校验固定版本内核...'))
+  $('kernel-install')?.addEventListener('click',startKernelInstall)
+  $('kernel-install-cancel')?.addEventListener('click',cancelKernelInstall)
   $('kernel-start')?.addEventListener('click',()=>kernelAction('kernel-start','正在启动内核...'))
   $('kernel-stop')?.addEventListener('click',()=>kernelAction('kernel-stop','正在停止内核...'))
   $('kernel-upload')?.addEventListener('click',uploadKernel)
@@ -155,6 +162,10 @@ async function refreshSubscription(id){
 async function checkControl(){
   try{ kernelStatus=await api.apiGet('kernel-status');controlResult=kernelStatus.ready?await api.apiGet('control-status'):null;render();note(kernelStatus.message,!kernelStatus.ready) }catch(error){note(error.message,true)}
 }
+function formatBytes(value){if(!value)return '0 B';const units=['B','KiB','MiB','GiB'];let size=value,index=0;while(size>=1024&&index<units.length-1){size/=1024;index++}return `${size.toFixed(index?1:0)} ${units[index]}`}
+async function startKernelInstall(){try{kernelStatus.install=await api.apiPost('kernel-install',{});render();note('内核安装任务已创建');pollKernelInstall()}catch(error){note(error.message,true)}}
+async function cancelKernelInstall(){try{kernelStatus.install=await api.apiPost('kernel-install-cancel',{});render();note('在线安装已取消')}catch(error){note(error.message,true)}}
+async function pollKernelInstall(){clearTimeout(installPollTimer);try{const install=await api.apiGet('kernel-install-status');kernelStatus.install=install;if(install.state==='running'){render();installPollTimer=setTimeout(pollKernelInstall,700)}else{await load();note(install.message,install.state!=='completed'&&install.state!=='cancelled')}}catch(error){note(error.message,true)}}
 async function kernelAction(route,message){try{note(message);await api.apiPost(route,{});await load();note('内核状态已更新')}catch(error){note(error.message,true)}}
 async function uploadKernel(){const file=$('kernel-file')?.files?.[0];if(!file)return note('请选择与当前平台匹配的固定版本制品',true);if(file.size>64*1024*1024)return note('制品超过 64 MiB 限制',true);try{note('正在校验离线制品...');const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',',2)[1]);reader.onerror=reject;reader.readAsDataURL(file)});await api.apiPost('kernel-upload',{content});await load();note('离线制品已校验并安装')}catch(error){note(error.message,true)}}
 async function startProbe(nodeIds){
@@ -164,7 +175,7 @@ async function pollProbe(){
   if(!probeTask)return
   try{const task=await api.apiPost('probe-task-status',{task_id:probeTask.id});probeTask=task;for(const result of task.results)if(result.health)state.health[result.node_id]=result.health;render();if(task.status==='running')setTimeout(pollProbe,500);else note(`测速完成：${task.summary.ok} 可用，${task.summary.error+task.summary.timeout} 失败，${task.summary.skipped} 未执行，${task.summary.cancelled} 已取消`)}catch(error){note(error.message,true)}
 }
-async function load(){ try{ state=await api.apiGet('state');kernelStatus=await api.apiGet('kernel-status');original=structuredClone(state);controlResult=null;importPreview=null;render() }catch(error){note(error.message,true)} }
+async function load(){ try{ state=await api.apiGet('state');kernelStatus=await api.apiGet('kernel-status');original=structuredClone(state);controlResult=null;importPreview=null;render();if(kernelStatus.install?.state==='running')pollKernelInstall() }catch(error){note(error.message,true)} }
 
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render()}))
 $('reload').addEventListener('click',load)

@@ -1,0 +1,44 @@
+.download-status {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 2fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin: 16px 0;
+}
+
+.download-status small {
+  display: block;
+}
+
+.download-status progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.artifact-guide {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.artifact-guide code {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.artifact-guide a {
+  color: var(--accent);
+}
+
+@media (max-width: 700px) {
+  .download-status,
+  .artifact-guide {
+    grid-template-columns: 1fr;
+  }
+}

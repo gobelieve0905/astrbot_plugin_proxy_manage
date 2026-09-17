@@ -93,6 +93,39 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertEqual(manager.binary.read_bytes(),before)
             self.assertEqual(manager.binary.stat().st_mode & 0o777,0o700)
 
+    def test_artifact_download_retries_trusted_sources_with_same_digest(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+        with tempfile.TemporaryDirectory() as directory:
+            manager=ArtifactManager(Path(directory),'mihomo')
+            archive=gzip.compress(b'trusted-source-binary')
+            selected=manager.manifest['artifacts'][manager.selected()['key']]
+            selected.update({'format':'gz','sha256':hashlib.sha256(archive).hexdigest(),'name':'fixture.gz',
+                             'sources':[{'id':'primary','name':'受信分发源','url':'https://cdn.example/core.gz'},
+                                        {'id':'github','name':'GitHub 官方源','url':'https://github.example/core.gz'}]})
+            progress=[]
+            manager._download_source=AsyncMock(side_effect=[RuntimeError('timeout'),RuntimeError('timeout'),archive])
+            with patch('proxy_manager.runtime.artifacts.asyncio.sleep',new=AsyncMock()):
+                result=asyncio.run(manager.download(progress.append))
+            self.assertTrue(result['ready']); self.assertEqual(result['source'],'github')
+            self.assertEqual(manager._download_source.await_count,3)
+            self.assertEqual([call.args[1]['id'] for call in manager._download_source.await_args_list],
+                             ['primary','primary','github'])
+            self.assertEqual(progress[-1]['phase'],'installed')
+
+    def test_artifact_install_task_returns_immediately_and_can_cancel(self):
+        from proxy_manager.runtime.artifacts import ArtifactInstallTask
+        async def scenario():
+            started=asyncio.Event()
+            async def download(*_args): started.set(); await asyncio.Event().wait()
+            manager=types.SimpleNamespace(download=download)
+            task=ArtifactInstallTask(manager,AsyncMock())
+            initial=task.start(); self.assertEqual(initial['state'],'running')
+            await started.wait()
+            cancelled=await task.cancel()
+            self.assertEqual(cancelled['state'],'cancelled')
+            self.assertEqual(cancelled['phase'],'cancelled')
+        asyncio.run(scenario())
+
     def test_internal_runtime_secret_is_stable_and_not_client_configurable(self):
         with tempfile.TemporaryDirectory() as directory:
             manager=self.module.ProxyManager.__new__(self.module.ProxyManager)

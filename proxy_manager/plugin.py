@@ -26,7 +26,7 @@ from .domain.model import compiled_rules, ident, match_rule, normalize_state, va
 from .domain.security import redact_config, redact_diagnostics, restore_config, safe_error, safe_host, safe_url
 from .importers.subscription import parse_subscription, summary, traffic_header
 from .runtime.transaction import verified_recovery_document
-from .runtime.artifacts import ArtifactManager, MAX_ARCHIVE_SIZE
+from .runtime.artifacts import ArtifactInstallTask, ArtifactManager, MAX_ARCHIVE_SIZE
 from .runtime.supervisor import KernelSupervisor
 
 
@@ -52,6 +52,7 @@ class ProxyManager(Star):
         self._bind_owned_runtime()
         self.artifacts=ArtifactManager(self.data_dir,self._adapter().id)
         self.supervisor=KernelSupervisor(self.data_dir,self._kernel_health_check)
+        self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
         self.runtime_application=self._load_runtime_application()
         health_changed=False
         for old_id,new_id in getattr(self,'_id_aliases',{}).items():
@@ -94,6 +95,13 @@ class ProxyManager(Star):
         document=recovery or self._adapter().fail_closed_document(self.state['control'],self.state['proxy_entry'])
         self._adapter().validate(document); self._write_kernel_config(document)
         return await self.supervisor.start(self.artifacts.binary,self.kernel_config_path)
+
+    async def _activate_installed_kernel(self):
+        await self.supervisor.stop()
+        process=await self._start_owned_kernel()
+        self.event({'action':'kernel_install','result':'ok','version':self.artifacts.manifest.get('version'),
+                    'source':self.artifacts.status().get('source','')})
+        return process
 
     def _load(self) -> dict:
         from_disk=False
@@ -168,7 +176,8 @@ class ProxyManager(Star):
             ('probe-task-cancel',self.probe_task_cancel,['POST']),
             ('runtime-config',self.runtime_config,['GET']), ('runtime-apply',self.runtime_apply,['POST']),
             ('kernel-status',self.kernel_status,['GET']),
-            ('kernel-install',self.kernel_install,['POST']), ('kernel-upload',self.kernel_upload,['POST']),
+            ('kernel-install',self.kernel_install,['POST']), ('kernel-install-status',self.kernel_install_status,['GET']),
+            ('kernel-install-cancel',self.kernel_install_cancel,['POST']), ('kernel-upload',self.kernel_upload,['POST']),
             ('kernel-start',self.kernel_start,['POST']), ('kernel-stop',self.kernel_stop,['POST']),
             ('verify-outbound',self.verify_outbound,['POST']),
         )
@@ -185,7 +194,8 @@ class ProxyManager(Star):
         result['control']={'managed':True,'adapter':self._adapter().id}
         result['proxy_entry']={'source':'plugin-managed'}
         if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
-            result['kernel']={'artifact':self.artifacts.status(),'process':self.supervisor.status()}
+            result['kernel']={'artifact':self.artifacts.status(),'process':self.supervisor.status(),
+                              'install':self.install_task.status() if hasattr(self,'install_task') else {}}
         result['health']=redact_diagnostics(self.health)
         result['events']=redact_diagnostics(self.events[-50:]); result['templates']=TEMPLATES
         application=getattr(self,'runtime_application',{})
@@ -346,7 +356,7 @@ class ProxyManager(Star):
             if not proxy: raise ValueError('尚未配置统一 HTTP 代理入口')
             started=time.monotonic()
             async with httpx.AsyncClient(proxy=proxy,trust_env=False,follow_redirects=False,timeout=15) as client:
-                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.2'})
+                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.3'})
             response.raise_for_status()
             result.update({'host':host,'status_code':response.status_code,
                            'elapsed_ms':round((time.monotonic()-started)*1000),'matched_rule':route,
@@ -445,7 +455,7 @@ class ProxyManager(Star):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.2'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.3'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -517,7 +527,7 @@ class ProxyManager(Star):
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
             async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.2'})
+                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.3'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -640,26 +650,26 @@ class ProxyManager(Star):
         status=await self._kernel_status()
         if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
             status.setdefault('artifact',self.artifacts.status()); status.setdefault('process',self.supervisor.status())
+            status.setdefault('install',self.install_task.status())
         return json_response(status)
 
     async def kernel_install(self):
-        try:
-            artifact=await self.artifacts.download(); await self.supervisor.stop(); process=await self._start_owned_kernel()
-            self.event({'action':'kernel_install','result':'ok','version':artifact.get('version'),'source':'official'})
-            return json_response({'artifact':artifact,'process':process})
-        except (ValueError,OSError,httpx.HTTPError,RuntimeError) as exc:
-            self.event({'action':'kernel_install','result':'failed','message':safe_error(exc)})
-            return error_response(str(exc) if isinstance(exc,ValueError) else '内核下载、校验或启动失败',500)
+        return json_response(self.install_task.start())
+
+    async def kernel_install_status(self): return json_response(self.install_task.status())
+
+    async def kernel_install_cancel(self): return json_response(await self.install_task.cancel())
 
     async def kernel_upload(self):
         try:
+            await self.install_task.cancel()
             length=int(request.headers.get('content-length','0') or 0)
             if length>MAX_ARCHIVE_SIZE*2: raise ValueError('内核制品请求体过大')
             if str(request.content_type).split(';',1)[0]=='application/json':
                 payload=await request.json(); body=base64.b64decode(str(payload.get('content','')),validate=True)
             else: body=await request.body()
-            artifact=self.artifacts.install(bytes(body),'offline'); await self.supervisor.stop(); process=await self._start_owned_kernel()
-            self.event({'action':'kernel_install','result':'ok','version':artifact.get('version'),'source':'offline'})
+            artifact=self.artifacts.install(bytes(body),'offline'); process=await self._activate_installed_kernel()
+            self.install_task.record_completed(artifact,process,'离线制品校验、安装并启动成功')
             return json_response({'artifact':artifact,'process':process})
         except (ValueError,OSError,RuntimeError,TypeError,binascii.Error) as exc:
             self.event({'action':'kernel_install','result':'failed','message':safe_error(exc)})
@@ -918,7 +928,7 @@ class ProxyManager(Star):
         try: await self._start_owned_kernel()
         except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
             logger.warning('代理管理中心自管内核未启动：'+safe_error(exc))
-        logger.info('代理管理中心 0.3.2 已加载')
+        logger.info('代理管理中心 0.3.3 已加载')
 
     async def terminate(self):
         if self.auto_task:
@@ -926,6 +936,6 @@ class ProxyManager(Star):
             try: await self.auto_task
             except asyncio.CancelledError: pass
             self.auto_task=None
-        await self.supervisor.stop()
+        await self.install_task.stop(); await self.supervisor.stop()
 
     async def on_message(self,event:AstrMessageEvent): return
