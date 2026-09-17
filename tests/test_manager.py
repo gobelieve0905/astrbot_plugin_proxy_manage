@@ -150,7 +150,7 @@ class TestConfigurationRules(unittest.TestCase):
                 {"id": "sub-sg", "name": "SG", "url": "https://sub.example/sg", "enabled": True, "interval": 60},
             ],
             "platforms": {}, "control": {"enabled": True, "url": "http://mihomo:9090", "secret": "secret", "timeout": 8,
-                                          "deployment": "existing", "scope": "providers-groups-rules"},
+                                          "deployment": "dedicated", "scope": "full", "listen":"0.0.0.0:9090"},
             "proxy_entry": {"http_url": "http://proxy.example:7890", "socks_url": "", "source": "configured"},
         }
         manager.events = []
@@ -160,7 +160,10 @@ class TestConfigurationRules(unittest.TestCase):
         manager.health_path = Path(manager._test_dir.name) / "health.json"
         manager.path = Path(manager._test_dir.name) / "config.json"
         manager.backup = Path(manager._test_dir.name) / "config.previous.json"
-        manager.lock = asyncio.Lock(); manager.refresh_lock = asyncio.Lock(); manager.previews = {}
+        manager.runtime_path = Path(manager._test_dir.name) / "runtime-application.json"
+        manager.runtime_backup = Path(manager._test_dir.name) / "runtime-application.previous.json"
+        manager.runtime_application = {}
+        manager.lock = asyncio.Lock(); manager.refresh_lock = asyncio.Lock(); manager.apply_lock = asyncio.Lock(); manager.previews = {}
         return manager
 
     def test_kernel_not_configured_is_explicit(self):
@@ -186,17 +189,26 @@ class TestConfigurationRules(unittest.TestCase):
             response({"mode": "global"}), response({"proxies": {}}), response({"rules": []}),
         ])
         with patch.object(self.module.httpx, "AsyncClient", return_value=client):
-            self.assertEqual(asyncio.run(manager._kernel_status())["state"], "config_not_applied")
+            self.assertEqual(asyncio.run(manager._kernel_status())["state"], "saved")
         client.get = AsyncMock(side_effect=[
             response({"meta": True, "version": "1.19.0"}),
             response({"mode": "rule"}), response({"proxies": {}}), response({"rules": []}),
         ])
+        revision=manager._runtime_revision(manager._runtime_document())
+        manager.runtime_application={'status':'applied','applied_revision':revision,'document':manager._runtime_document()}
         with patch.object(self.module.httpx, "AsyncClient", return_value=client):
             self.assertEqual(asyncio.run(manager._kernel_status())["state"], "runtime_inconsistent")
 
+    def test_kernel_status_rejects_wrong_secret(self):
+        manager=self._manager_for_runtime(); request=self.module.httpx.Request('GET','http://mihomo:9090/version')
+        denied=self.module.httpx.Response(401,json={'message':'Unauthorized'},request=request)
+        client=AsyncMock(); client.__aenter__.return_value=client; client.get=AsyncMock(return_value=denied)
+        with patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            self.assertEqual(asyncio.run(manager._kernel_status())['state'],'auth_failed')
+
     def test_runtime_groups_must_follow_selected_node_members(self):
         document = self._manager_for_runtime()._runtime_document()
-        self.assertNotIn("mixed-port", document)
+        self.assertEqual(document["mixed-port"],7890)
         groups = {item["name"]: item for item in document["proxy-groups"]}
         self.assertEqual(groups["group-hk"].get("proxies"), ["node-hk-1"])
         self.assertEqual(groups["group-sg"].get("proxies"), ["node-sg-1"])
@@ -315,7 +327,7 @@ class TestConfigurationRules(unittest.TestCase):
         )
         client = AsyncMock(); client.__aenter__.return_value = client
         client.get = AsyncMock(return_value=response)
-        with patch.object(manager, '_kernel_status', AsyncMock(return_value={'state': 'connected'})), \
+        with patch.object(manager, '_kernel_status', AsyncMock(return_value={'state': 'applied','message':'已应用'})), \
              patch.object(self.module.httpx, 'AsyncClient', return_value=client):
             asyncio.run(manager._probe_node({'node_id': 'hk-1'}))
             asyncio.run(manager._probe_node({'node_id': 'sg-1'}))
@@ -459,19 +471,57 @@ class TestConfigurationRules(unittest.TestCase):
         client.put.return_value = response({})
         client.get.side_effect = [
             response({'mode': 'rule'}),
-            response({'proxies': {item['name']: {'type': 'URLTest'} for item in expected['proxy-groups']}}),
+            response({'proxies': {item['name']: {'type': 'URLTest','all':['wrong-member'],'now':'wrong-member'} for item in expected['proxy-groups']}}),
             response({'rules': [{'payload': 'wrong-rule'} for _ in expected['rules']]}),
+            response({'mode': 'rule'}), response({'proxies': {}}),
+            response({'rules': [{'type':'MATCH','payload':'','proxy':'DIRECT'}]}),
         ]
-        with patch.object(manager, '_kernel_status', AsyncMock(return_value={'state': 'connected'})), \
+        with patch.object(manager, '_kernel_status', AsyncMock(return_value={'state': 'applied'})), \
              patch.object(self.module.httpx, 'AsyncClient', return_value=client):
             result = asyncio.run(manager.runtime_apply())
-        client.put.assert_awaited_once()
-        put_args = client.put.await_args
+        self.assertEqual(client.put.await_count,2)
+        put_args = client.put.await_args_list[0]
         self.assertEqual(put_args.args[0], '/configs?force=true')
-        self.assertEqual(put_args.kwargs['json']['path'], '/config.yaml')
+        self.assertEqual(put_args.kwargs['json']['path'], '')
         self.assertIn('proxy-groups:', put_args.kwargs['json']['payload'])
-        self.assertEqual([call.args[0] for call in client.get.await_args_list], ['/configs', '/proxies', '/rules'])
+        self.assertEqual([call.args[0] for call in client.get.await_args_list], ['/configs', '/proxies', '/rules']*2)
         self.assertNotEqual(result.get('applied'), True, '规则内容不一致时不得报告应用成功')
+        self.assertEqual(manager.runtime_application['status'],'saved')
+
+    def test_runtime_apply_success_persists_verified_revision(self):
+        manager=self._manager_for_runtime(); document=manager._runtime_document()
+        request=self.module.httpx.Request('GET','http://mihomo:9090/check')
+        def response(payload): return self.module.httpx.Response(200,json=payload,request=request)
+        proxies={proxy['name']:{'type':proxy['type']} for proxy in document['proxies']}
+        type_names={'select':'Selector','url-test':'URLTest','fallback':'Fallback'}
+        for group in document['proxy-groups']:
+            proxies[group['name']]={'type':type_names[group['type']],'all':group['proxies'],'now':group['proxies'][0]}
+        rules=[{'type':kind,'payload':payload,'proxy':target} for kind,payload,target in manager._expected_rules(document)]
+        client=AsyncMock(); client.__aenter__.return_value=client; client.put=AsyncMock(return_value=response({}))
+        client.get=AsyncMock(side_effect=[response({'mode':'rule'}),response({'proxies':proxies}),response({'rules':rules})])
+        with patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'saved'})), \
+             patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            result=asyncio.run(manager.runtime_apply())
+        self.assertTrue(result['applied']); self.assertEqual(result['saved_revision'],result['applied_revision'])
+        self.assertEqual(manager.runtime_application['status'],'applied')
+        self.assertEqual(manager.runtime_path.stat().st_mode & 0o777,0o600)
+
+    def test_runtime_verification_rejects_wrong_group_members_and_rule_order(self):
+        manager=self._manager_for_runtime(); document=manager._runtime_document()
+        proxies={proxy['name']:{'type':proxy['type']} for proxy in document['proxies']}
+        for group in document['proxy-groups']:
+            proxies[group['name']]={'type':'URLTest','all':['wrong'],'now':'wrong'}
+        rules=[{'type':kind,'payload':payload,'proxy':target} for kind,payload,target in reversed(manager._expected_rules(document))]
+        errors=manager._verify_runtime_data(document,{'mode':'rule'},proxies,rules)
+        self.assertTrue(any('成员' in error for error in errors)); self.assertTrue(any('规则' in error for error in errors))
+
+    def test_shared_instance_application_is_blocked_before_write(self):
+        manager=self._manager_for_runtime(); manager.state['control'].update({'deployment':'existing','scope':'providers-groups-rules'})
+        client=AsyncMock(); client.__aenter__.return_value=client
+        with patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'saved'})), \
+             patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            result=asyncio.run(manager.runtime_apply())
+        self.assertEqual(result['status'],400); client.put.assert_not_awaited()
 
 
 if __name__ == "__main__":

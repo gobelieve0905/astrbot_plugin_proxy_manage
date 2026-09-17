@@ -223,12 +223,15 @@ class ProxyManager(Star):
         self.migration_backup=self.data_dir/'config.pre-v3.json'
         self.health_path=self.data_dir/'health.json'
         self.events_path=self.data_dir/'events.jsonl'
-        for private_path in (self.path,self.backup,self.migration_backup,self.health_path,self.events_path):
+        self.runtime_path=self.data_dir/'runtime-application.json'
+        self.runtime_backup=self.data_dir/'runtime-application.previous.json'
+        for private_path in (self.path,self.backup,self.migration_backup,self.health_path,self.events_path,self.runtime_path,self.runtime_backup):
             if private_path.exists():
                 try: private_path.chmod(0o600)
                 except OSError: logger.warning('代理中心私有文件权限收紧失败：'+private_path.name)
-        self.lock=asyncio.Lock(); self.refresh_lock=asyncio.Lock()
+        self.lock=asyncio.Lock(); self.refresh_lock=asyncio.Lock(); self.apply_lock=asyncio.Lock()
         self.state=self._load(); self.health=self._load_health()
+        self.runtime_application=self._load_runtime_application()
         health_changed=False
         for old_id,new_id in getattr(self,'_id_aliases',{}).items():
             if old_id != new_id and old_id in self.health and new_id not in self.health:
@@ -388,7 +391,8 @@ class ProxyManager(Star):
             'control':{'enabled':bool(control.get('enabled',False)),'url':str(control.get('url','')).rstrip('/')[:300],
                        'secret':str(control.get('secret',''))[:500],'timeout':max(3,min(timeout,30)),
                        'deployment':control.get('deployment') if control.get('deployment') in {'existing','dedicated'} else 'existing',
-                       'scope':control.get('scope') if control.get('scope') in {'providers-groups-rules','full'} else 'providers-groups-rules'},
+                       'scope':control.get('scope') if control.get('scope') in {'providers-groups-rules','full'} else 'providers-groups-rules',
+                       'listen':str(control.get('listen','127.0.0.1:9090')).strip()[:200]},
             'proxy_entry':{'http_url':str(entry.get('http_url','')).rstrip('/')[:300],
                            'socks_url':str(entry.get('socks_url','')).rstrip('/')[:300],
                            'source':entry.get('source') if entry.get('source') in {'configured','detected','unknown'} else 'unknown'},
@@ -438,9 +442,27 @@ class ProxyManager(Star):
             value=state['proxy_entry'][key]
             if value and not safe_url(value,credentials=True):
                 raise ValueError('代理入口地址无效：'+key)
-        if state['control']['deployment']=='dedicated' and state['control']['scope']=='full':
-            raise ValueError('插件暂不允许接管独立内核的完整配置，请使用受限配置范围')
+        if state['control']['listen'] and not re.fullmatch(r'(?:\[[0-9a-fA-F:]+\]|[^:\s]+):\d{1,5}',state['control']['listen']):
+            raise ValueError('内核控制监听地址格式无效')
         return state
+
+    def _load_runtime_application(self) -> dict:
+        try:
+            value=json.loads(self.runtime_path.read_text(encoding='utf-8'))
+            return value if isinstance(value,dict) else {}
+        except (OSError,ValueError):
+            return {}
+
+    def _persist_runtime_application(self,value:dict):
+        if self.runtime_path.exists():
+            self.runtime_backup.write_text(self.runtime_path.read_text(encoding='utf-8'),encoding='utf-8')
+            try: self.runtime_backup.chmod(0o600)
+            except OSError: pass
+        temp=self.runtime_path.with_suffix('.tmp')
+        temp.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
+        try: temp.chmod(0o600)
+        except OSError: pass
+        temp.replace(self.runtime_path); self.runtime_application=value
 
     def _load_health(self) -> dict:
         try:
@@ -484,6 +506,8 @@ class ProxyManager(Star):
             if result['proxy_entry'][key]: result['proxy_entry'][key]=urlparse(result['proxy_entry'][key]).scheme+'://'+CONFIGURED
         result['health']=redact_diagnostics(self.health)
         result['events']=redact_diagnostics(self.events[-50:]); result['templates']=TEMPLATES
+        application=getattr(self,'runtime_application',{})
+        result['application']={key:application.get(key) for key in ('status','saved_revision','applied_revision','updated_at','message')}
         return result
 
     async def persist(self,state:dict):
@@ -497,6 +521,15 @@ class ProxyManager(Star):
         try: temp.chmod(0o600)
         except OSError: pass
         temp.replace(self.path); self.state=normalized
+        if hasattr(self,'runtime_application') and self.runtime_application.get('status')!='restore_failed':
+            try: saved_revision=self._runtime_revision(self._runtime_document())
+            except (ValueError,TypeError): saved_revision=''
+            applied_revision=self.runtime_application.get('applied_revision','')
+            status='applied' if saved_revision and saved_revision==applied_revision else ('pending_apply' if applied_revision else 'saved')
+            application={**self.runtime_application,'status':status,'saved_revision':saved_revision,'updated_at':int(time.time()),
+                         'message':'配置已应用' if status=='applied' else ('配置已变更，等待应用' if status=='pending_apply' else '配置已保存，尚未应用')}
+            try: self._persist_runtime_application(application)
+            except OSError: logger.warning('运行配置修订状态写入失败')
 
     def persist_health(self):
         try:
@@ -926,19 +959,27 @@ class ProxyManager(Star):
                 configs=await client.get('/configs'); configs.raise_for_status(); runtime=configs.json()
                 proxies_response=await client.get('/proxies'); proxies_response.raise_for_status(); proxies=proxies_response.json().get('proxies',{})
                 rules_response=await client.get('/rules'); rules_response.raise_for_status(); runtime_rules=rules_response.json().get('rules',[])
-            if runtime.get('mode')!='rule':
-                return {'state':'config_not_applied','ready':True,'message':'Mihomo 已连接，但插件配置尚未应用','version':raw_version,
-                        'deployment':control.get('deployment','existing'),'scope':control.get('scope','providers-groups-rules')}
             try:
                 expected=self._runtime_document()
             except ValueError:
                 expected=None
-            if expected:
-                names={group['name'] for group in expected['proxy-groups']}
-                if not isinstance(proxies,dict) or not names.issubset(proxies) or len(runtime_rules)<len(expected['rules']):
-                    return {'state':'runtime_inconsistent','ready':True,'message':'运行配置与插件配置不一致','version':raw_version,
-                            'deployment':control.get('deployment','existing'),'scope':control.get('scope','providers-groups-rules')}
-            return {'state':'connected','ready':True,'message':'Mihomo 已连接且运行配置已核对','version':raw_version,
+            saved_revision=self._runtime_revision(expected) if expected else ''
+            application=getattr(self,'runtime_application',{})
+            base={'ready':True,'version':raw_version,'deployment':control.get('deployment','existing'),
+                  'scope':control.get('scope','providers-groups-rules'),'saved_revision':saved_revision,
+                  'applied_revision':application.get('applied_revision','')}
+            if application.get('status')=='restore_failed':
+                return {**base,'state':'restore_failed','message':'上次应用失败且运行配置恢复失败，请立即检查专用内核'}
+            if control.get('deployment')!='dedicated':
+                return {**base,'state':'saved','message':'共享内核仅允许检查；缺少可信完整基线，已禁止写入'}
+            if not application.get('applied_revision'):
+                return {**base,'state':'saved','message':'插件配置已保存，尚未应用到专用内核'}
+            if saved_revision!=application.get('applied_revision'):
+                return {**base,'state':'pending_apply','message':'插件配置已变更，等待应用到专用内核'}
+            errors=self._verify_runtime_data(expected,runtime,proxies,runtime_rules) if expected else ['候选配置无效']
+            if errors:
+                return {**base,'state':'runtime_inconsistent','message':'运行配置与已应用修订不一致：'+errors[0]}
+            return {**base,'state':'applied','message':'专用 Mihomo 已连接，运行配置与已应用修订一致',
                     'deployment':control.get('deployment','existing'),'scope':control.get('scope','providers-groups-rules'),
                     'proxy_entry':self.state['proxy_entry']}
         except httpx.HTTPStatusError as exc:
@@ -985,12 +1026,7 @@ class ProxyManager(Star):
         return proxy
 
     def _runtime_document(self) -> dict:
-        """Build the controlled Mihomo fragment from plugin intent.
-
-        Subscription URLs remain providers so native protocols (AnyTLS, VLESS,
-        Hysteria2, etc.) are parsed by Mihomo itself. The plugin only owns the
-        provider/group/rule layer and never exposes credentials in the response.
-        """
+        """Build a complete candidate for a plugin-dedicated Mihomo instance."""
         try:
             import yaml
         except ImportError as exc:
@@ -1017,55 +1053,149 @@ class ProxyManager(Star):
             host=route['host'].removeprefix('*.')
             rules.append(('DOMAIN' if route['match']=='exact' else 'DOMAIN-SUFFIX')+','+host+','+names[route['target']])
         rules.append('MATCH,'+names.get('direct','DIRECT'))
+        control=self.state['control']; entry=self.state.get('proxy_entry',{})
         document={'mode':'rule','log-level':'silent','proxies':proxies,
                   'proxy-providers':providers,'proxy-groups':groups,'rules':rules}
+        if control.get('deployment')=='dedicated':
+            document['external-controller']=control.get('listen','127.0.0.1:9090')
+            document['secret']=control.get('secret','')
+            port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
+            if port: document['mixed-port']=port
         # Validate serialization before handing the document to the controller.
         yaml.safe_load(yaml.safe_dump(document,allow_unicode=True,sort_keys=False))
+        return document
+
+    @staticmethod
+    def _runtime_revision(document:dict) -> str:
+        return hashlib.sha256(json.dumps(document,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()[:16]
+
+    @staticmethod
+    def _validate_runtime_document(document:dict):
+        proxy_names=[item.get('name') for item in document.get('proxies',[])]
+        group_names=[item.get('name') for item in document.get('proxy-groups',[])]
+        if not proxy_names or len(proxy_names)!=len(set(proxy_names)) or any(not name for name in proxy_names):
+            raise ValueError('候选配置中的内核节点名称为空或重复')
+        if len(group_names)!=len(set(group_names)) or any(not name for name in group_names):
+            raise ValueError('候选配置中的内核代理组名称为空或重复')
+        available=set(proxy_names)|{'DIRECT','REJECT'}
+        for group in document.get('proxy-groups',[]):
+            members=group.get('proxies',[])
+            if not members or any(member not in available for member in members):
+                raise ValueError('候选配置中的代理组成员无效：'+str(group.get('name','')))
+            available.add(group['name'])
+        for rule in document.get('rules',[]):
+            if not isinstance(rule,str) or ',' not in rule or rule.rsplit(',',1)[1] not in available:
+                raise ValueError('候选配置中的分流规则目标无效')
+
+    @staticmethod
+    def _expected_rules(document:dict) -> list[tuple[str,str,str]]:
+        result=[]
+        for value in document.get('rules',[]):
+            parts=value.split(','); kind=parts[0].upper(); target=parts[-1]
+            result.append((kind,','.join(parts[1:-1]),target))
+        return result
+
+    @classmethod
+    def _verify_runtime_data(cls,document:dict,runtime:object,proxies:object,rules:object) -> list[str]:
+        errors=[]
+        if not isinstance(runtime,dict) or runtime.get('mode')!='rule': errors.append('运行模式不是 rule')
+        if not isinstance(proxies,dict): return errors+['无法读取运行代理']
+        for proxy in document.get('proxies',[]):
+            actual=proxies.get(proxy['name'])
+            if not isinstance(actual,dict): errors.append('缺少内核节点 '+proxy['name']); continue
+            if str(actual.get('type','')).lower().replace('-','') != str(proxy.get('type','')).lower().replace('-',''):
+                errors.append('节点类型不一致 '+proxy['name'])
+        type_names={'select':'Selector','url-test':'URLTest','fallback':'Fallback'}
+        for group in document.get('proxy-groups',[]):
+            actual=proxies.get(group['name'])
+            if not isinstance(actual,dict): errors.append('缺少代理组 '+group['name']); continue
+            if actual.get('type')!=type_names.get(group.get('type')): errors.append('代理组类型不一致 '+group['name'])
+            if actual.get('all')!=group.get('proxies'): errors.append('代理组成员不一致 '+group['name'])
+            if actual.get('now') not in group.get('proxies',[]): errors.append('代理组选择状态无效 '+group['name'])
+        actual_rules=[]
+        if isinstance(rules,list):
+            for rule in rules:
+                if isinstance(rule,dict): actual_rules.append((str(rule.get('type','')).upper(),str(rule.get('payload','')),str(rule.get('proxy',''))))
+        if actual_rules!=cls._expected_rules(document): errors.append('运行规则内容或顺序不一致')
+        return errors
+
+    @staticmethod
+    def _recovery_document(control:dict,entry:dict) -> dict:
+        document={'mode':'rule','log-level':'silent','proxies':[],'proxy-providers':{},'proxy-groups':[],
+                  'rules':['MATCH,DIRECT'],'external-controller':control.get('listen','127.0.0.1:9090'),'secret':control.get('secret','')}
+        port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
+        if port: document['mixed-port']=port
         return document
 
     async def runtime_config(self):
         try:
             document=self._runtime_document()
-            preview=copy.deepcopy(document)
-            for provider in preview.get('proxy-providers',{}).values():
-                provider['url']=urlparse(provider['url']).scheme+'://[configured]'
-            preview['proxies']=redact_config(preview.get('proxies',[]))
+            preview=redact_config(copy.deepcopy(document))
             return json_response({'config':preview,'mapping':{
                 'nodes':{node['id']:{'name':node['name'],'kernel_name':node.get('kernel_name'),'subscription_id':node['subscription_id']}
                          for node in self.state['nodes'] if node['enabled']},
                 'groups':{group['id']:{'name':group['name'],'kernel_name':group.get('kernel_name')}
                           for group in self.state['groups'] if group['enabled']},
-            },'applied':False})
+            },'saved_revision':self._runtime_revision(document),
+               'applied_revision':getattr(self,'runtime_application',{}).get('applied_revision',''),
+               'status':getattr(self,'runtime_application',{}).get('status','saved')})
         except (ValueError,TypeError) as exc:
             return error_response(str(exc))
 
     async def runtime_apply(self):
-        try:
-            kernel=await self._kernel_status()
-            if kernel['state'] in {'not_configured','connection_failed','auth_failed','version_unsupported'}:
-                raise ValueError('无法应用配置：'+kernel['message'])
-            document=self._runtime_document(); control,headers=self._control()
-            if control['scope']!='providers-groups-rules':
-                raise ValueError('插件只允许管理 providers、groups 和 rules 配置范围')
-            import yaml
-            payload={'path':'/config.yaml','payload':yaml.safe_dump(document,allow_unicode=True,sort_keys=False)}
-            async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
-                response=await client.put('/configs?force=true',json=payload); response.raise_for_status()
-                running=await client.get('/configs'); running.raise_for_status(); runtime=running.json()
-                proxies_response=await client.get('/proxies'); proxies_response.raise_for_status(); proxies=proxies_response.json().get('proxies',{})
-                rules_response=await client.get('/rules'); rules_response.raise_for_status(); runtime_rules=rules_response.json().get('rules',[])
-            if not isinstance(runtime,dict) or runtime.get('mode')!='rule':
-                raise ValueError('Mihomo 已响应，但运行配置未切换到 rule 模式')
-            expected_names={group['name'] for group in document['proxy-groups']}
-            if not isinstance(proxies,dict) or not expected_names.issubset(proxies):
-                raise ValueError('Mihomo 运行代理组与候选配置不一致')
-            if not isinstance(runtime_rules,list) or len(runtime_rules)<len(document['rules']):
-                raise ValueError('Mihomo 运行分流规则与候选配置不一致')
-            self.event({'action':'runtime_apply','result':'ok','groups':len(document['proxy-groups']),'rules':len(document['rules'])})
-            return json_response({'applied':True,'runtime':{'mode':runtime.get('mode'),'mixed-port':runtime.get('mixed-port')}})
-        except (ValueError,httpx.HTTPError,OSError) as exc:
-            self.event({'action':'runtime_apply','result':'failed','message':safe_error(exc)})
-            return error_response(str(exc) if isinstance(exc,ValueError) else 'Mihomo 配置应用失败，请检查控制接口和内核日志')
+        async with self.apply_lock:
+            try:
+                kernel=await self._kernel_status()
+                if kernel['state'] in {'not_configured','connection_failed','auth_failed','version_unsupported'}:
+                    raise ValueError('无法应用配置：'+kernel['message'])
+                document=self._runtime_document(); self._validate_runtime_document(document)
+                revision=self._runtime_revision(document); control,headers=self._control()
+                if control.get('deployment')!='dedicated' or control.get('scope')!='full':
+                    raise ValueError('共享内核缺少可信完整基线，禁止写入；请使用插件专用实例和完整配置范围')
+                previous=getattr(self,'runtime_application',{})
+                recovery=copy.deepcopy(previous.get('document')) if isinstance(previous.get('document'),dict) else self._recovery_document(control,self.state['proxy_entry'])
+                import yaml
+                candidate_payload={'path':'','payload':yaml.safe_dump(document,allow_unicode=True,sort_keys=False)}
+                recovery_payload={'path':'','payload':yaml.safe_dump(recovery,allow_unicode=True,sort_keys=False)}
+                self._persist_runtime_application({'status':'applying','saved_revision':revision,
+                                                   'applied_revision':previous.get('applied_revision',''),
+                                                   'document':previous.get('document'),'updated_at':int(time.time()),'message':'正在应用候选配置'})
+                async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
+                    try:
+                        response=await client.put('/configs?force=true',json=candidate_payload); response.raise_for_status()
+                        running=await client.get('/configs'); running.raise_for_status()
+                        proxies_response=await client.get('/proxies'); proxies_response.raise_for_status()
+                        rules_response=await client.get('/rules'); rules_response.raise_for_status()
+                        errors=self._verify_runtime_data(document,running.json(),proxies_response.json().get('proxies',{}),rules_response.json().get('rules',[]))
+                        if errors: raise ValueError('；'.join(errors))
+                    except (ValueError,httpx.HTTPError,OSError) as apply_error:
+                        restored=False; restore_message=''
+                        try:
+                            response=await client.put('/configs?force=true',json=recovery_payload); response.raise_for_status()
+                            running=await client.get('/configs'); running.raise_for_status()
+                            proxies_response=await client.get('/proxies'); proxies_response.raise_for_status()
+                            rules_response=await client.get('/rules'); rules_response.raise_for_status()
+                            restore_errors=self._verify_runtime_data(recovery,running.json(),proxies_response.json().get('proxies',{}),rules_response.json().get('rules',[]))
+                            if restore_errors: raise ValueError('；'.join(restore_errors))
+                            restored=True
+                        except (ValueError,httpx.HTTPError,OSError) as restore_error:
+                            restore_message=safe_error(restore_error)
+                        status=('pending_apply' if previous.get('applied_revision') else 'saved') if restored else 'restore_failed'
+                        message='候选配置应用或核对失败，已恢复并重新核对' if restored else '候选配置失败，且运行配置恢复核对失败'
+                        self._persist_runtime_application({'status':status,'saved_revision':revision,
+                                                           'applied_revision':previous.get('applied_revision',''),
+                                                           'document':recovery if restored else previous.get('document'),
+                                                           'updated_at':int(time.time()),'message':message})
+                        self.event({'action':'runtime_apply','result':status,'message':safe_error(apply_error),'restore':safe_error(restore_message)})
+                        return error_response(message,500)
+                application={'status':'applied','saved_revision':revision,'applied_revision':revision,
+                             'document':document,'updated_at':int(time.time()),'message':'候选配置已应用并完整核对'}
+                self._persist_runtime_application(application)
+                self.event({'action':'runtime_apply','result':'ok','revision':revision,'groups':len(document['proxy-groups']),'rules':len(document['rules'])})
+                return json_response({'applied':True,'status':'applied','saved_revision':revision,'applied_revision':revision})
+            except (ValueError,httpx.HTTPError,OSError) as exc:
+                self.event({'action':'runtime_apply','result':'failed','message':safe_error(exc)})
+                return error_response(str(exc) if isinstance(exc,ValueError) else 'Mihomo 配置应用失败，请检查控制接口和内核日志')
 
     def _set_health(self,node:dict,status:str,latency:int|None=None,error:str=''):
         self.health[node['id']]={'status':status,'latency_ms':latency,'error':str(error)[:300],
@@ -1085,7 +1215,7 @@ class ProxyManager(Star):
             if not safe_url(target): raise ValueError('测速目标只允许 HTTP 或 HTTPS 地址')
             if node['kind']=='mihomo' and urlparse(node['endpoint']).scheme not in {'http','https','socks5','socks5h'}:
                 kernel=await self._kernel_status()
-                if kernel['state']!='connected':
+                if kernel['state']!='applied':
                     self._set_health(node,'pending',None,kernel['message'])
                     return json_response({'node_id':node_id,'health':self.health[node_id],'skipped':True,'kernel':kernel})
             started=time.monotonic()
@@ -1163,6 +1293,7 @@ class ProxyManager(Star):
     async def control_select(self):
         try:
             payload=await request.json(); control,headers=self._control()
+            if control.get('deployment')!='dedicated': raise ValueError('共享内核当前只允许状态核对，不能切换代理组')
             group_id=ident(payload.get('group_id')); node_id=ident(payload.get('node_id'))
             group=next((item for item in self.state['groups'] if item['id']==group_id and item['id']!='direct'),None)
             node=next((item for item in self.state['nodes'] if item['id']==node_id),None)
