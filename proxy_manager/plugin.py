@@ -372,7 +372,7 @@ class ProxyManager(Star):
         except (ValueError,httpx.HTTPError): return error_response('连通性检测失败，请检查代理组、节点和目标站点')
 
     def _decode_subscription(self,text:str) -> str:
-        from proxy_manager.importers.subscription import decode_subscription
+        from .importers.subscription import decode_subscription
         return decode_subscription(text)
 
     def _parse_subscription(self,text:str,subscription_id:str):

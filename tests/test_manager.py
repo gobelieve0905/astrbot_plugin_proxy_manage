@@ -55,6 +55,9 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertNotIn('skip-cert-verify', text)
         self.assertNotIn('mixed-port', text)
         self.assertNotIn('/configs?force=true', text)
+        package=source.parent
+        for module in package.rglob('*.py'):
+            self.assertNotIn('from proxy_manager.',module.read_text(encoding='utf-8'),str(module))
 
     def test_entry_imports_inside_astrbot_namespace_package(self):
         root=Path(__file__).resolve().parents[1]

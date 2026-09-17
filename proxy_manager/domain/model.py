@@ -10,7 +10,7 @@ from .security import ident, safe_proxy_endpoint, safe_url
 
 
 def executor_for(protocol: str, item: dict|None=None) -> tuple[str,list[str]]:
-    from proxy_manager.cores.registry import adapters_for, default_executor
+    from ..cores.registry import adapters_for, default_executor
     adapters=adapters_for(protocol)
     stored=str((item or {}).get('executor') or '')
     if stored in adapters: return stored,adapters
