@@ -20,8 +20,8 @@ from astrbot.api.web import error_response, json_response, request
 
 DIRECT = {"id":"direct","name":"直连","kernel_name":"DIRECT","mode":"direct","node_ids":[],"selected":"","enabled":True}
 TEMPLATES = {
-    "telegram":{"name":"Telegram","hosts":["api.telegram.org"]},
-    "meta":{"name":"Meta","hosts":["graph.facebook.com","graph-video.facebook.com"]},
+    "telegram":{"name":"Telegram","domains":[{"host":"api.telegram.org","match":"exact"},{"host":"telegram.org","match":"suffix"},{"host":"t.me","match":"suffix"}]},
+    "meta":{"name":"Meta","domains":[{"host":"graph.facebook.com","match":"exact"},{"host":"facebook.com","match":"suffix"},{"host":"fbcdn.net","match":"suffix"},{"host":"instagram.com","match":"suffix"}]},
     "github":{"name":"GitHub","hosts":["api.github.com","github.com","raw.githubusercontent.com"]},
 }
 KINDS={"http","https","socks5","socks5h","mihomo"}
@@ -238,7 +238,7 @@ class ProxyManager(Star):
                 self.health[new_id]=self.health.pop(old_id); health_changed=True
         if health_changed: self.persist_health()
         self.events=self._load_events()
-        self.previews={}; self.auto_task=None
+        self.previews={}; self.probe_tasks={}; self.auto_task=None
         self._register_routes()
 
     def _load(self) -> dict:
@@ -334,6 +334,10 @@ class ProxyManager(Star):
                 'mode':item.get('mode') if item.get('mode') in MODES else 'select',
                 'node_ids':list(dict.fromkeys(self._id_aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value))),
                 'selected':self._id_aliases.get(ident(item.get('selected')),ident(item.get('selected'))), 'enabled':bool(item.get('enabled',True)),
+                'test_url':str(item.get('test_url','https://www.gstatic.com/generate_204'))[:500],
+                'test_interval':max(30,min(int(item.get('test_interval',300) or 300),86400)),
+                'tolerance':max(0,min(int(item.get('tolerance',50) or 0),5000)),
+                'failure_policy':item.get('failure_policy') if item.get('failure_policy') in {'fail-closed','keep-last'} else 'fail-closed',
             })
         if not any(group['id']=='direct' for group in groups): groups.insert(0,dict(DIRECT))
         group_ids={group['id'] for group in groups}
@@ -351,6 +355,28 @@ class ProxyManager(Star):
                            'target':target,'priority':max(1,min(int(item.get('priority',100) or 100),10000)),
                            'enabled':bool(item.get('enabled',True))})
         routes.sort(key=lambda item:item['priority'])
+
+        rule_groups=[]
+        values=source.get('rule_groups',[]) if isinstance(source.get('rule_groups'),list) else []
+        for index,item in enumerate(values):
+            if not isinstance(item,dict): continue
+            target=ident(item.get('target'))
+            if target not in group_ids: continue
+            domains=[]
+            for domain in item.get('domains',[]) if isinstance(item.get('domains'),list) else []:
+                try:
+                    if isinstance(domain,str): host=safe_host(domain); match='suffix'
+                    else: host=safe_host(domain.get('host')); match=domain.get('match') if domain.get('match') in MATCHES else 'exact'
+                    domains.append({'host':host,'match':match})
+                except (ValueError,AttributeError): continue
+            if domains:
+                rule_groups.append({'id':ident(item.get('id')) or f'rules-{index+1}','name':str(item.get('name','规则组'))[:80],
+                                    'domains':domains,'priority':max(1,min(int(item.get('priority',100) or 100),10000)),
+                                    'target':target,'enabled':bool(item.get('enabled',True))})
+        if not rule_groups:
+            for route in routes:
+                rule_groups.append({'id':route['id'],'name':route['host'],'domains':[{'host':route['host'],'match':route['match']}],
+                                    'priority':route['priority'],'target':route['target'],'enabled':route['enabled']})
 
         platforms={}
         if isinstance(source.get('platforms'),dict):
@@ -387,7 +413,7 @@ class ProxyManager(Star):
         entry=source.get('proxy_entry') if isinstance(source.get('proxy_entry'),dict) else {}
         return {
             'version':3, 'migration':{'stable_identity':1}, 'name':str(source.get('name','默认配置'))[:80], 'nodes':nodes, 'groups':groups,
-            'routes':routes, 'platforms':platforms, 'subscriptions':subscriptions,
+            'routes':routes, 'rule_groups':rule_groups, 'platforms':platforms, 'subscriptions':subscriptions,
             'control':{'enabled':bool(control.get('enabled',False)),'url':str(control.get('url','')).rstrip('/')[:300],
                        'secret':str(control.get('secret',''))[:500],'timeout':max(3,min(timeout,30)),
                        'deployment':control.get('deployment') if control.get('deployment') in {'existing','dedicated'} else 'existing',
@@ -421,6 +447,8 @@ class ProxyManager(Star):
             if group['mode']!='direct' and not group['node_ids']: raise ValueError('代理组至少需要一个节点：'+group['id'])
             if group['selected'] and group['selected'] not in group['node_ids']:
                 raise ValueError('代理组当前节点无效：'+group['id'])
+            if group['mode'] in {'url-test','fallback'} and not safe_url(group['test_url']):
+                raise ValueError('代理组测速目标无效：'+group['id'])
         seen=set()
         for route in state['routes']:
             if route['target'] not in group_ids: raise ValueError('规则引用不存在代理组：'+route['target'])
@@ -429,6 +457,14 @@ class ProxyManager(Star):
             seen.add(key)
         for key,platform in state['platforms'].items():
             if platform['group_id'] not in group_ids: raise ValueError('平台引用不存在代理组：'+key)
+        seen_domains={}
+        for rule_group in state['rule_groups']:
+            if rule_group['target'] not in group_ids: raise ValueError('规则组引用不存在代理组：'+rule_group['id'])
+            if not rule_group['enabled']: continue
+            for domain in rule_group['domains']:
+                key=(domain['host'],domain['match'],rule_group['priority'])
+                if key in seen_domains: raise ValueError('规则冲突：'+domain['host']+' 与 '+seen_domains[key])
+                seen_domains[key]=rule_group['name']
         sub_ids=set()
         for subscription in state['subscriptions']:
             if subscription['id'] in sub_ids: raise ValueError('订阅 ID 重复：'+subscription['id'])
@@ -487,8 +523,11 @@ class ProxyManager(Star):
             ('subscription-import',self.subscription_import,['POST']), ('subscription-refresh',self.subscription_refresh,['POST']),
             ('control-status',self.control_status,['GET']), ('control-select',self.control_select,['POST']),
             ('node-probe',self.node_probe,['POST']), ('nodes-probe',self.nodes_probe,['POST']),
+            ('probe-task',self.probe_task,['POST']), ('probe-task-status',self.probe_task_status,['POST']),
+            ('probe-task-cancel',self.probe_task_cancel,['POST']),
             ('runtime-config',self.runtime_config,['GET']), ('runtime-apply',self.runtime_apply,['POST']),
             ('kernel-status',self.kernel_status,['GET']),
+            ('verify-outbound',self.verify_outbound,['POST']),
         )
         for name,handler,methods in routes:
             self.context.register_web_api(base+'/'+name,handler,methods,'代理管理中心')
@@ -625,18 +664,55 @@ class ProxyManager(Star):
                 selected=min(healthy,key=lambda node:self.health[node['id']].get('latency_ms',99999)) if group['mode']=='url-test' else healthy[0]
         return group,selected
 
+    def _compiled_rules(self) -> list[dict]:
+        compiled=[]
+        for rule_group in self.state.get('rule_groups',[]):
+            if not rule_group['enabled']: continue
+            for position,domain in enumerate(rule_group['domains']):
+                compiled.append({'rule_group_id':rule_group['id'],'rule_group':rule_group['name'],'host':domain['host'],
+                                 'match':domain['match'],'target':rule_group['target'],'priority':rule_group['priority'],
+                                 'position':position})
+        compiled.sort(key=lambda item:(item['priority'],item['position'],item['rule_group_id']))
+        return compiled
+
+    def _match_rule(self,host:str) -> dict|None:
+        for route in self._compiled_rules():
+            base=route['host'].removeprefix('*.')
+            if (route['match']=='exact' and base==host) or (route['match']=='suffix' and (host==base or host.endswith('.'+base))):
+                return route
+        return None
+
     async def preview(self):
         try:
             host=safe_host((await request.json()).get('host'))
-            matches=[route for route in self.state['routes'] if route['enabled'] and (
-                (route['match']=='exact' and route['host'].removeprefix('*.')==host) or
-                (route['match']=='suffix' and (host==route['host'].removeprefix('*.') or host.endswith('.'+route['host'].removeprefix('*.'))))
-            )]
-            route=min(matches,key=lambda item:item['priority'],default=None)
+            route=self._match_rule(host)
             group,node=self.resolve(route['target'] if route else 'direct')
             return json_response({'host':host,'matched':route,'group':group,
                                   'node':node and {'id':node['id'],'name':node['name'],'kind':node['kind']}})
         except (ValueError,TypeError) as exc: return error_response(str(exc))
+
+    async def verify_outbound(self):
+        try:
+            payload=await request.json(); url=str(payload.get('url','')); parsed=urlsplit(url)
+            if parsed.scheme!='https' or not parsed.hostname: raise ValueError('实际出站验证只允许 HTTPS 地址')
+            host=safe_host(parsed.hostname); route=self._match_rule(host); target=route['target'] if route else 'direct'
+            group=next((item for item in self.state['groups'] if item['id']==target),None)
+            if not group: raise ValueError('规则目标代理组不存在')
+            proxy=self.state.get('proxy_entry',{}).get('http_url')
+            if not proxy: raise ValueError('尚未配置统一 HTTP 代理入口')
+            started=time.monotonic()
+            async with httpx.AsyncClient(proxy=proxy,trust_env=False,follow_redirects=False,timeout=15) as client:
+                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.2.10'})
+            control,headers=self._control()
+            async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
+                proxies=await client.get('/proxies'); proxies.raise_for_status()
+            runtime_group=proxies.json().get('proxies',{}).get(group.get('kernel_name'),{}) if group['id']!='direct' else {}
+            return json_response({'verified':True,'host':host,'status_code':response.status_code,
+                                  'elapsed_ms':round((time.monotonic()-started)*1000),'rule':route,
+                                  'group':{'id':group['id'],'name':group['name'],'kernel_name':group.get('kernel_name')},
+                                  'actual_selection':runtime_group.get('now','DIRECT') if isinstance(runtime_group,dict) else 'DIRECT'})
+        except (ValueError,httpx.HTTPError,OSError) as exc:
+            return error_response(str(exc) if isinstance(exc,ValueError) else '统一代理入口实际请求失败')
 
     async def probe(self):
         try:
@@ -1044,12 +1120,14 @@ class ProxyManager(Star):
             if not members: raise ValueError('代理组没有可应用的已验证节点：'+group['name'])
             item={'name':group.get('kernel_name','group-'+group['id']),'type':mode,'proxies':members}
             if group['mode'] in {'url-test','fallback'}:
-                item.update({'url':'https://www.gstatic.com/generate_204','interval':300,'tolerance':50})
+                item.update({'url':group.get('test_url','https://www.gstatic.com/generate_204'),
+                             'interval':group.get('test_interval',300),'tolerance':group.get('tolerance',50)})
+                if group.get('failure_policy','fail-closed')=='fail-closed': item['lazy']=False
             groups.append(item)
         names={item['id']:('DIRECT' if item['id']=='direct' else item.get('kernel_name','group-'+item['id'])) for item in self.state['groups']}
         rules=[]
-        for route in self.state['routes']:
-            if not route['enabled'] or route['target'] not in names: continue
+        for route in self._compiled_rules():
+            if route['target'] not in names: continue
             host=route['host'].removeprefix('*.')
             rules.append(('DOMAIN' if route['match']=='exact' else 'DOMAIN-SUFFIX')+','+host+','+names[route['target']])
         rules.append('MATCH,'+names.get('direct','DIRECT'))
@@ -1203,64 +1281,99 @@ class ProxyManager(Star):
         self.persist_health()
 
     async def node_probe(self):
-        payload=await request.json()
-        return await self._probe_node(payload)
+        try: return json_response(await self._probe_one(await request.json()))
+        except (ValueError,httpx.HTTPError,OSError) as exc: return error_response(str(exc) if isinstance(exc,ValueError) else '测速失败或超时')
 
     async def _probe_node(self,payload:dict):
-        try:
+        result=await self._probe_one(payload)
+        if result.get('status')=='skipped': result['skipped']=True
+        return json_response(result)
+
+    async def _probe_one(self,payload:dict) -> dict:
             if not isinstance(payload,dict): raise ValueError('请求格式无效')
             node_id=ident(payload.get('node_id')); target=str(payload.get('url','https://www.gstatic.com/generate_204'))
-            node=next((item for item in self.state['nodes'] if item['id']==node_id and item['enabled']),None)
-            if not node: raise ValueError('节点不存在或未启用')
+            node=next((item for item in self.state['nodes'] if item['id']==node_id),None)
+            if not node: return {'node_id':node_id,'status':'skipped','reason':'节点不存在'}
+            reason=''
+            if not node.get('enabled'): reason='节点已禁用'
+            elif node.get('excluded'): reason='节点已排除'
+            elif node.get('invalid_reference'): reason='节点引用已失效'
+            elif node.get('support',{}).get('status')!='supported': reason=node.get('support',{}).get('reason') or '协议不支持'
+            if reason: return {'node_id':node_id,'status':'skipped','reason':reason}
             if not safe_url(target): raise ValueError('测速目标只允许 HTTP 或 HTTPS 地址')
-            if node['kind']=='mihomo' and urlparse(node['endpoint']).scheme not in {'http','https','socks5','socks5h'}:
+            native=node['kind']=='mihomo' and urlparse(node['endpoint']).scheme not in {'http','https','socks5','socks5h'}
+            if native:
                 kernel=await self._kernel_status()
-                if kernel['state']!='applied':
-                    self._set_health(node,'pending',None,kernel['message'])
-                    return json_response({'node_id':node_id,'health':self.health[node_id],'skipped':True,'kernel':kernel})
+                if kernel['state']!='applied': return {'node_id':node_id,'status':'skipped','reason':'内核未就绪：'+kernel['message']}
             started=time.monotonic()
-            if node['kind']=='mihomo' and urlparse(node['endpoint']).scheme not in {'http','https','socks5','socks5h'}:
-                # Native Mihomo protocol URIs are measured by the running core when a
-                # controller is configured. HTTP/SOCKS-compatible entries can be tested
-                # directly and must not be blocked by the optional controller setting.
+            try:
+              if native:
                 control,headers=self._control(); timeout=max(1,min(int(payload.get('timeout',5) or 5),15))
                 async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=timeout,trust_env=False) as client:
                     response=await client.get('/proxies/'+quote(node.get('kernel_name',node['id']),safe='')+'/delay',params={'url':target,'timeout':timeout*1000})
                 response.raise_for_status(); data=response.json()
                 if not isinstance(data.get('delay'),int): raise ValueError('Mihomo 控制接口未返回延迟')
                 latency=int(data['delay'])
-            else:
-                async with httpx.AsyncClient(proxy=node['endpoint'],trust_env=False,follow_redirects=False,timeout=10) as client:
+              else:
+                timeout=max(1,min(int(payload.get('timeout',5) or 5),15))
+                async with httpx.AsyncClient(proxy=node['endpoint'],trust_env=False,follow_redirects=False,timeout=timeout) as client:
                     response=await client.get(target)
                 if response.status_code>=400: raise ValueError('HTTP 状态码 '+str(response.status_code))
                 latency=round((time.monotonic()-started)*1000)
-            self._set_health(node,'ok',latency)
-            return json_response({'node_id':node_id,'health':self.health[node_id]})
-        except (ValueError,httpx.HTTPError,OSError) as exc:
-            node=next((item for item in self.state['nodes'] if item['id']==ident(payload.get('node_id'))),None) if isinstance(payload,dict) else None
-            error=exc if isinstance(exc,ValueError) else '测速失败或超时'
-            if node: self._set_health(node,'timeout' if 'timeout' in type(exc).__name__.lower() else 'error',None,str(error))
-            return error_response(str(error))
+              self._set_health(node,'ok',latency)
+              return {'node_id':node_id,'status':'ok','latency_ms':latency,'health':self.health[node_id]}
+            except (ValueError,httpx.HTTPError,OSError) as exc:
+              error=str(exc) if isinstance(exc,ValueError) else '测速失败或超时'
+              status='timeout' if 'timeout' in type(exc).__name__.lower() else 'error'; self._set_health(node,status,None,error)
+              return {'node_id':node_id,'status':status,'reason':error,'health':self.health[node_id]}
 
-    async def nodes_probe(self):
+    async def _run_probe_task(self,task_id:str,node_ids:list[str],target:str,timeout:int,concurrency:int):
+        task=self.probe_tasks[task_id]; semaphore=asyncio.Semaphore(concurrency)
+        async def run(node_id):
+            async with semaphore:
+                if task['cancelled']: return {'node_id':node_id,'status':'cancelled','reason':'任务已取消'}
+                return await self._probe_one({'node_id':node_id,'url':target,'timeout':timeout})
+        pending=[asyncio.create_task(run(node_id)) for node_id in node_ids]
+        try:
+            for future in asyncio.as_completed(pending):
+                result=await future; task['results'].append(result); task['completed']+=1
+                if task['cancelled']:
+                    for item in pending:
+                        if not item.done(): item.cancel()
+                    break
+        finally:
+            if task['cancelled']:
+                finished={item['node_id'] for item in task['results']}
+                task['results'].extend({'node_id':node_id,'status':'cancelled','reason':'任务已取消'} for node_id in node_ids if node_id not in finished)
+                task['completed']=len(task['results'])
+            task['status']='cancelled' if task['cancelled'] else 'completed'; task['finished_at']=int(time.time())
+
+    async def probe_task(self):
         try:
             payload=await request.json(); requested=payload.get('node_ids')
-            nodes=[node for node in self.state['nodes'] if node['enabled'] and not node.get('excluded')]
-            if isinstance(requested,list): nodes=[node for node in nodes if node['id'] in {ident(value) for value in requested}]
-            if not nodes: raise ValueError('没有可测速的节点')
-            semaphore=asyncio.Semaphore(5)
-            async def test(node):
-                async with semaphore:
-                    try: await self._probe_node({'node_id':node['id'],'url':payload.get('url','https://www.gstatic.com/generate_204'),'timeout':payload.get('timeout',5)})
-                    except Exception: pass
-            await asyncio.gather(*(test(node) for node in nodes[:100]))
-            tested=min(len(nodes),100)
-            results=[self.health.get(node['id'],{}) for node in nodes[:tested]]
-            return json_response({'health':self.health,'tested':tested,
-                                  'succeeded':sum(item.get('status')=='ok' for item in results),
-                                  'failed':sum(item.get('status') in {'error','timeout'} for item in results),
-                                  'skipped':sum(item.get('status')=='pending' for item in results)})
+            node_ids=[node['id'] for node in self.state['nodes']] if not isinstance(requested,list) else list(dict.fromkeys(ident(value) for value in requested))
+            if not node_ids: raise ValueError('没有可测速的节点')
+            target=str(payload.get('url','https://www.gstatic.com/generate_204')); timeout=max(1,min(int(payload.get('timeout',5)),15)); concurrency=max(1,min(int(payload.get('concurrency',5)),20))
+            if not safe_url(target): raise ValueError('测速目标只允许 HTTP 或 HTTPS 地址')
+            task_id=uuid.uuid4().hex; self.probe_tasks[task_id]={'id':task_id,'status':'running','total':len(node_ids),'completed':0,'results':[],'cancelled':False,'started_at':int(time.time())}
+            asyncio.create_task(self._run_probe_task(task_id,node_ids,target,timeout,concurrency))
+            return json_response({'task_id':task_id,'total':len(node_ids)})
         except (ValueError,TypeError) as exc: return error_response(str(exc))
+
+    async def probe_task_status(self):
+        payload=await request.json(); task=self.probe_tasks.get(str(payload.get('task_id','')))
+        if not task: return error_response('测速任务不存在或已过期')
+        results=list(task['results']); summary={key:sum(item['status']==key for item in results) for key in ('ok','error','timeout','skipped','cancelled')}
+        return json_response({**task,'summary':summary})
+
+    async def probe_task_cancel(self):
+        payload=await request.json(); task=self.probe_tasks.get(str(payload.get('task_id','')))
+        if not task: return error_response('测速任务不存在或已过期')
+        task['cancelled']=True
+        return json_response({'task_id':task['id'],'status':'cancelling'})
+
+    async def nodes_probe(self):
+        return await self.probe_task()
 
     async def control_status(self):
         try:

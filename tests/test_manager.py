@@ -173,7 +173,8 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(status["state"], "not_configured")
         result = asyncio.run(manager._probe_node({"node_id": "hk-1"}))
         self.assertTrue(result["skipped"])
-        self.assertEqual(manager.health["hk-1"]["status"], "pending")
+        self.assertNotIn("hk-1",manager.health)
+        self.assertIn("内核未就绪",result["reason"])
 
     def test_kernel_status_distinguishes_version_and_runtime_states(self):
         manager = self._manager_for_runtime()
@@ -507,7 +508,10 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(manager.runtime_path.stat().st_mode & 0o777,0o600)
 
     def test_runtime_verification_rejects_wrong_group_members_and_rule_order(self):
-        manager=self._manager_for_runtime(); document=manager._runtime_document()
+        manager=self._manager_for_runtime(); manager.state['rule_groups']=[
+            {'id':'one','name':'One','domains':[{'host':'one.example','match':'exact'}],'priority':1,'target':'hk','enabled':True},
+            {'id':'two','name':'Two','domains':[{'host':'two.example','match':'exact'}],'priority':2,'target':'sg','enabled':True}]
+        document=manager._runtime_document()
         proxies={proxy['name']:{'type':proxy['type']} for proxy in document['proxies']}
         for group in document['proxy-groups']:
             proxies[group['name']]={'type':'URLTest','all':['wrong'],'now':'wrong'}
@@ -522,6 +526,37 @@ class TestConfigurationRules(unittest.TestCase):
              patch.object(self.module.httpx,'AsyncClient',return_value=client):
             result=asyncio.run(manager.runtime_apply())
         self.assertEqual(result['status'],400); client.put.assert_not_awaited()
+
+    def test_probe_task_reports_current_run_skips_without_overwriting_health(self):
+        manager=self._manager_for_runtime(); manager.state['nodes'][0]['excluded']=True
+        manager.health['hk-1']={'status':'ok','latency_ms':9,'checked_at':1}
+        result=asyncio.run(manager._probe_one({'node_id':'hk-1'}))
+        self.assertEqual(result['status'],'skipped'); self.assertIn('排除',result['reason'])
+        self.assertEqual(manager.health['hk-1']['latency_ms'],9)
+
+    def test_probe_task_does_not_truncate_over_one_hundred_nodes(self):
+        manager=self._manager_for_runtime(); manager.probe_tasks={}
+        node_ids=['node-'+str(index) for index in range(125)]
+        manager.probe_tasks['task']={'id':'task','status':'running','total':len(node_ids),'completed':0,'results':[],'cancelled':False,'started_at':1}
+        with patch.object(manager,'_probe_one',AsyncMock(side_effect=lambda payload:{'node_id':payload['node_id'],'status':'skipped','reason':'测试'})):
+            asyncio.run(manager._run_probe_task('task',node_ids,'https://example.com',5,7))
+        self.assertEqual(manager.probe_tasks['task']['completed'],125)
+        self.assertEqual(len(manager.probe_tasks['task']['results']),125)
+
+    def test_auto_group_parameters_and_fail_closed_membership(self):
+        manager=self._manager_for_runtime(); group=next(item for item in manager.state['groups'] if item['id']=='hk')
+        group.update({'test_url':'https://probe.example/204','test_interval':45,'tolerance':17,'failure_policy':'fail-closed'})
+        item=next(item for item in manager._runtime_document()['proxy-groups'] if item['name']=='group-hk')
+        self.assertEqual((item['url'],item['interval'],item['tolerance']),('https://probe.example/204',45,17))
+        self.assertFalse(item['lazy']); self.assertNotIn('DIRECT',item['proxies'])
+
+    def test_rule_group_preview_and_runtime_use_same_order(self):
+        manager=self._manager_for_runtime(); manager.state['rule_groups']=[
+            {'id':'suffix','name':'Meta suffix','domains':[{'host':'facebook.com','match':'suffix'}],'priority':20,'target':'sg','enabled':True},
+            {'id':'exact','name':'Meta exact','domains':[{'host':'graph.facebook.com','match':'exact'}],'priority':10,'target':'hk','enabled':True}]
+        matched=manager._match_rule('graph.facebook.com'); self.assertEqual(matched['rule_group_id'],'exact')
+        self.assertEqual(manager._runtime_document()['rules'][:2],[
+            'DOMAIN,graph.facebook.com,group-hk','DOMAIN-SUFFIX,facebook.com,group-sg'])
 
 
 if __name__ == "__main__":
