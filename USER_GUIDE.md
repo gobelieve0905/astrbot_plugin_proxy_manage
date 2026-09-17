@@ -1,6 +1,8 @@
 # 代理管理中心使用指南
 
-> 本指南记录 0.3.3 的当前操作方式。插件已自管固定版本 Mihomo，但多内核和 AstrBot 全部实际出站流量接入仍未完成。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
+> 本指南记录 0.3.4 的当前操作方式。插件已自管固定版本 Mihomo，并提供桌面与移动端响应式管理界面；多内核和 AstrBot 全部实际出站流量接入仍未完成。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
+
+桌面端使用左侧导航，移动端使用顶部横向导航。页面顶部的“恢复上一版”和“预览并保存”作用于规范化配置；内核的下载、启动、停止和应用操作位于“内核管理”，不会与普通配置保存混在同一操作组。
 
 ## 首次接入
 

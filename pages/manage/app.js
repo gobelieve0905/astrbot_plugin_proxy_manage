@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id)
 const api = window.AstrBotPluginPage
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台策略',control:'内核管理',logs:'连接日志'}
+const subtitles = {overview:'运行状态、节点健康和流量策略总览',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名和目标出口',platforms:'将平台域名模板绑定到出口组',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
 let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importing=false, probeTask=null
 let installPollTimer=null
 
@@ -26,16 +27,18 @@ function verificationPanel(value){
 }
 
 function render(){
-  $('crumb').textContent=titles[tab]; let html=''
+  $('crumb').textContent=titles[tab]; $('page-subtitle').textContent=subtitles[tab]
+  document.querySelectorAll('[data-tab]').forEach(button=>{button.classList.toggle('active',button.dataset.tab===tab);button.setAttribute('aria-current',button.dataset.tab===tab?'page':'false')})
+  $('content').dataset.view=tab; let html=''
   if(tab==='overview'){
     const values=Object.values(state.health||{})
     const ok=values.filter(item=>item.status==='ok').length, bad=values.filter(item=>['error','timeout'].includes(item.status)).length
     const kernelText={not_installed:'未安装',invalid:'校验失败',unsupported:'平台不支持',stopped:'已停止',failed:'运行失败',connection_failed:'连接失败',version_unsupported:'版本不支持',saved:'已保存',pending_apply:'待应用',applied:'已应用',runtime_inconsistent:'运行配置不一致',restore_failed:'恢复失败',fail_closed:'失败关闭'}[kernelStatus.state]||'未检查'
-    const kernelClass=kernelStatus.state==='applied'?'online':'error'
-    html=`<div class="hero"><b>当前配置</b><strong>${esc(state.name)}</strong><span class="${kernelClass}">● 内核：${kernelText}</span><small>${esc(kernelStatus.message||'')}</small></div>
+    const kernelClass=kernelStatus.state==='applied'?'online':(['failed','connection_failed','runtime_inconsistent','restore_failed'].includes(kernelStatus.state)?'error':'neutral')
+    html=`<div class="hero"><div><small>当前配置</small><strong>${esc(state.name)}</strong></div><div class="runtime-state"><span class="${kernelClass}">内核：${kernelText}</span><small>${esc(kernelStatus.message||'')}</small></div></div>
       <div class="cards">${[['subscriptions','订阅'],['nodes','节点'],['groups','代理组'],['routes','规则']].map(([key,label])=>`<article><b>${state[key].length}</b><span>${label}</span></article>`).join('')}</div>
       <div class="cards"><article><b>${ok}</b><span>可用节点</span></article><article><b>${bad}</b><span>异常节点</span></article><article><b>${state.subscriptions.filter(item=>item.enabled&&item.interval).length}</b><span>自动订阅</span></article><article><b>${state.events.length}</b><span>最近事件</span></article></div>
-      <section class="panel"><h2>分流预览</h2><div class="inline"><input id="host" placeholder="api.telegram.org"><button id="preview">查询</button></div><pre id="result">输入域名查看命中的代理组和节点。</pre></section>`
+      <section class="panel"><div class="section-head"><div><small>规则诊断</small><h2>分流预览</h2></div></div><div class="inline"><input id="host" placeholder="api.telegram.org"><button id="preview">查询</button></div><pre id="result">输入域名查看命中的代理组和节点。</pre></section>`
     html+=`<section class="panel"><h2>实际出站验证</h2><p class="muted">验证分别记录入口请求、运行规则与出口证据。只有目标返回出口 IP 且能回读运行选择时，才显示“出口已确认”。</p><div class="inline"><input id="verify-url" value="https://api.ipify.org?format=json"><button id="verify-outbound">验证实际出口</button></div>${verificationPanel(state.application?.verification)}<pre id="verify-result">${esc(state.application?.verification?JSON.stringify(state.application.verification,null,2):'尚未验证。普通 HTTPS 页面可能只能证明入口，不足以确认出口。')}</pre></section>`
     html+=`<section class="panel"><h2>首次使用</h2><div class="steps"><span>1 安装自管内核</span><span>2 导入订阅</span><span>3 筛选并选择节点</span><span>4 建立代理组</span><span>5 配置规则组</span><span>6 应用配置</span><span>7 验证实际出口</span></div></section>`
   } else if(tab==='subscriptions'){

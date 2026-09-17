@@ -1,20 +1,54 @@
-.import-form,.filter{display:grid;grid-template-columns:1fr 160px auto auto;gap:10px;align-items:center;margin:12px 0}
-.filter{grid-template-columns:240px}
-.sub-card,.node-card{border-top:1px solid var(--line);padding:12px 0}
-.sub-card .table{grid-template-columns:1fr .8fr 2fr auto auto}
-.sub-meta,.node-meta{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;color:var(--muted);margin-top:9px}
-.sub-meta .interval{width:92px}
-.node-card .table{grid-template-columns:1.1fr .7fr 1.7fr auto}
-.node-meta b{color:var(--text);font-size:17px}
-.chip{border-radius:999px;padding:2px 8px;background:var(--input);color:var(--muted)}
-.chip.ok{background:var(--soft);color:var(--accent)}
-.chip.error,.chip.timeout{background:#f7e7e7;color:var(--danger)}
-.node-error{margin-top:8px;color:var(--danger);font-size:12px}
-.sub-card details{margin-top:8px}
-.sub-card summary{cursor:pointer;color:var(--muted)}
-.verification-levels{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
-.verification{padding:12px;border:1px solid var(--line);border-radius:6px;display:grid;gap:3px}
-.verification b{font-size:15px}.verification span{color:var(--muted);font-size:12px}.verification code{font-size:12px}
-.verification.passed,.verification.matched,.verification.default,.verification.confirmed{border-color:var(--accent);background:var(--soft)}
-.verification.failed,.verification.unconfirmed{border-color:var(--danger)}
-@media(max-width:700px){.verification-levels{grid-template-columns:1fr}}
+.import-form,
+.filter {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 150px auto auto;
+  gap: 9px;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.filter { grid-template-columns: repeat(4, minmax(130px, 1fr)); }
+#content[data-view="subscriptions"] .filter { grid-template-columns: minmax(180px, 240px); }
+.sub-card .table { grid-template-columns: minmax(140px, 1fr) minmax(120px, .8fr) minmax(240px, 2fr) auto auto; }
+.node-card .table { grid-template-columns: minmax(140px, 1.1fr) auto auto minmax(250px, 1.7fr) auto auto; }
+
+.sub-meta,
+.node-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  align-items: center;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sub-meta .interval { width: 88px; }
+.node-meta b { color: var(--text); font-size: 16px; }
+.chip { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 8px; border-radius: 999px; background: var(--input); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.chip.ok { background: var(--soft); color: var(--accent-strong); }
+.chip.error, .chip.timeout, .chip.invalid { background: var(--danger-soft); color: var(--danger); }
+.chip.pending { background: var(--warning-soft); color: var(--warning); }
+.node-error { margin-top: 9px; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+
+.verification-levels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 14px 0; }
+.verification { display: grid; gap: 4px; min-width: 0; padding: 12px; border-left: 3px solid var(--line-strong); background: var(--input); }
+.verification b { font-size: 14px; }
+.verification span, .verification code { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.verification.passed, .verification.matched, .verification.default, .verification.confirmed { border-color: var(--accent); }
+.verification.failed, .verification.unconfirmed { border-color: var(--danger); }
+.probe-progress { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 10px; align-items: center; margin: 12px 0; }
+.probe-progress progress { width: 100%; accent-color: var(--accent); }
+
+@media (max-width: 980px) {
+  .import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sub-card .table, .node-card .table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 700px) {
+  .import-form, .filter, .sub-card .table, .node-card .table, .verification-levels { grid-template-columns: 1fr; }
+  #content[data-view="subscriptions"] .filter { grid-template-columns: 1fr; }
+  .probe-progress { grid-template-columns: 1fr auto; }
+  .probe-progress progress { grid-column: 1 / -1; }
+}

@@ -75,6 +75,19 @@ class TestConfigurationRules(unittest.TestCase):
             for name in [name for name in sys.modules if name==package_name or name.startswith(package_name+'.')]:
                 sys.modules.pop(name,None)
 
+    def test_management_page_has_responsive_navigation_and_stable_controls(self):
+        root=Path(__file__).resolve().parents[1]/'pages'/'manage'
+        html=(root/'index.html').read_text(encoding='utf-8')
+        script=(root/'app.js').read_text(encoding='utf-8')
+        styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
+        self.assertIn('流量控制 · 0.3.4',html)
+        self.assertIn('aria-label="主导航"',html)
+        self.assertIn("classList.toggle('active'",script)
+        self.assertIn("$('content').dataset.view=tab",script)
+        self.assertIn('@media (max-width: 700px)',styles)
+        self.assertIn('input[type="checkbox"]',styles)
+        self.assertIn('grid-template-columns: minmax(210px, 1fr)',styles)
+
     def test_fixed_artifact_manifest_and_offline_digest_enforcement(self):
         from proxy_manager.runtime.artifacts import ArtifactManager
         with tempfile.TemporaryDirectory() as directory:

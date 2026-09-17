@@ -1,44 +1,23 @@
 .download-status {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 2fr) auto;
+  grid-template-columns: minmax(210px, 1fr) minmax(220px, 2fr) auto;
   gap: 12px;
   align-items: center;
   margin: 16px 0;
-}
-
-.download-status small {
-  display: block;
-}
-
-.download-status progress {
-  width: 100%;
-  accent-color: var(--accent);
-}
-
-.artifact-guide {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-  padding: 12px;
-  margin-bottom: 12px;
-  background: var(--input);
+  padding: 13px;
   border: 1px solid var(--line);
   border-radius: 6px;
+  background: var(--panel);
 }
 
-.artifact-guide code {
-  overflow-wrap: anywhere;
-  color: var(--muted);
-}
+.download-status small { display: block; margin-top: 3px; }
+.download-status progress { width: 100%; accent-color: var(--accent); }
+.artifact-guide { display: grid; grid-template-columns: minmax(180px, auto) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 13px; margin-bottom: 12px; border-left: 3px solid var(--accent); background: var(--input); }
+.artifact-guide b { overflow-wrap: anywhere; }
+.artifact-guide code { color: var(--muted); overflow-wrap: anywhere; font-size: 11px; }
+.artifact-guide a { color: var(--accent-strong); font-weight: 650; white-space: nowrap; }
 
-.artifact-guide a {
-  color: var(--accent);
-}
-
-@media (max-width: 700px) {
-  .download-status,
-  .artifact-guide {
-    grid-template-columns: 1fr;
-  }
+@media (max-width: 800px) {
+  .download-status, .artifact-guide { grid-template-columns: 1fr; }
+  .artifact-guide a { white-space: normal; }
 }
