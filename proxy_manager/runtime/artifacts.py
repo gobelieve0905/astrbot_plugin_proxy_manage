@@ -69,7 +69,7 @@ class ArtifactManager:
         except (OSError,ValueError): return {**base,**public,'state':'invalid','ready':False,'message':'内核安装记录损坏'}
         if meta.get('archive_sha256')!=item['sha256'] or meta.get('binary_sha256')!=digest:
             return {**base,**public,'state':'invalid','ready':False,'message':'内核文件摘要与安装记录不一致'}
-        if self.platform['os']!='windows' and not os.access(self.binary,os.X_OK):
+        if self.platform['os']!='windows' and not self.binary.stat().st_mode & stat.S_IXUSR:
             return {**base,**public,'state':'invalid','ready':False,'message':'内核文件不可执行'}
         return {**base,**public,'state':'installed','ready':True,'message':'固定版本内核已校验',
                 'source':meta.get('source',''),'binary_sha256':digest}

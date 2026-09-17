@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -13,7 +14,26 @@ class KernelSupervisor:
         self.root=data_dir/'runtime'; self.root.mkdir(parents=True,exist_ok=True); self.root.chmod(0o700)
         self.pid_path=self.root/'kernel.pid.json'; self.log_path=self.root/'kernel.log'
         self.health_check=health_check; self.process=None; self.monitor_task=None; self.stopping=False
-        self.binary=None; self.config=None; self.last_error=''; self.restarts=0
+        self.binary=None; self.config=None; self.last_error=''; self.restarts=0; self.orphan_record=None
+        self._recover_stale_pid()
+
+    def _recover_stale_pid(self):
+        try:
+            record=json.loads(self.pid_path.read_text(encoding='utf-8')); pid=int(record.get('pid',0))
+            if pid>1:
+                os.kill(pid,0)
+                recorded=Path(str(record.get('binary','')))
+                proc_cmdline=Path('/proc')/str(pid)/'cmdline'
+                try: executable=Path(proc_cmdline.read_bytes().split(b'\0',1)[0].decode())
+                except (OSError,UnicodeError): executable=Path()
+                if executable==recorded:
+                    self.orphan_record=record
+                    self.last_error='检测到上次运行遗留的内核进程，启动前将安全回收'
+                    return
+        except (FileNotFoundError,ValueError,TypeError,json.JSONDecodeError,ProcessLookupError,PermissionError):
+            pass
+        try: self.pid_path.unlink()
+        except FileNotFoundError: pass
 
     def status(self) -> dict:
         running=bool(self.process and self.process.poll() is None)
@@ -29,6 +49,22 @@ class KernelSupervisor:
 
     async def start(self,binary:Path,config:Path,timeout:float=12):
         if self.process and self.process.poll() is None: return self.status()
+        if self.orphan_record:
+            recorded=Path(str(self.orphan_record.get('binary','')))
+            if recorded!=binary:
+                raise RuntimeError('PID 记录中的内核路径与当前固定制品不一致，拒绝终止未知进程')
+            pid=int(self.orphan_record['pid'])
+            try:
+                os.killpg(pid,signal.SIGTERM)
+                for _attempt in range(20):
+                    await asyncio.sleep(.1)
+                    try: os.kill(pid,0)
+                    except ProcessLookupError: break
+                else: os.killpg(pid,signal.SIGKILL)
+            except ProcessLookupError: pass
+            self.orphan_record=None
+            try: self.pid_path.unlink()
+            except FileNotFoundError: pass
         self.binary=binary; self.config=config; self.stopping=False; self.last_error=''
         try: await self._spawn(timeout)
         except Exception as exc:

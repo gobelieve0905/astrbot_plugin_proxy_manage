@@ -28,6 +28,8 @@ from .importers.subscription import parse_subscription, summary, traffic_header
 from .runtime.transaction import verified_recovery_document
 from .runtime.artifacts import ArtifactInstallTask, ArtifactManager, MAX_ARCHIVE_SIZE
 from .runtime.supervisor import KernelSupervisor
+from .traffic.safe_http import fetch_public_url, validate_public_url
+from .traffic.inventory import traffic_inventory
 
 
 class ProxyManager(Star):
@@ -38,7 +40,7 @@ class ProxyManager(Star):
         self.data_dir.mkdir(parents=True,exist_ok=True)
         self.path=self.data_dir/'config.json'
         self.backup=self.data_dir/'config.previous.json'
-        self.migration_backup=self.data_dir/'config.pre-v3.json'
+        self.migration_backup=self.data_dir/'config.pre-v4.json'
         self.health_path=self.data_dir/'health.json'
         self.events_path=self.data_dir/'events.jsonl'
         self.runtime_path=self.data_dir/'runtime-application.json'
@@ -47,7 +49,7 @@ class ProxyManager(Star):
             if private_path.exists():
                 try: private_path.chmod(0o600)
                 except OSError: logger.warning('代理中心私有文件权限收紧失败：'+private_path.name)
-        self.lock=asyncio.Lock(); self.refresh_lock=asyncio.Lock(); self.apply_lock=asyncio.Lock()
+        self.refresh_lock=asyncio.Lock(); self.operation_lock=asyncio.Lock()
         self.state=self._load(); self.health=self._load_health()
         self._bind_owned_runtime()
         self.artifacts=ArtifactManager(self.data_dir,self._adapter().id)
@@ -97,23 +99,28 @@ class ProxyManager(Star):
         return await self.supervisor.start(self.artifacts.binary,self.kernel_config_path)
 
     async def _activate_installed_kernel(self):
-        await self.supervisor.stop()
-        process=await self._start_owned_kernel()
+        async with self.operation_lock:
+            await self.supervisor.stop()
+            process=await self._start_owned_kernel()
         self.event({'action':'kernel_install','result':'ok','version':self.artifacts.manifest.get('version'),
                     'source':self.artifacts.status().get('source','')})
         return process
 
     def _load(self) -> dict:
-        from_disk=False
+        from_disk=False; recovered_from_backup=False
         try:
             raw=json.loads(self.path.read_text(encoding='utf-8')); from_disk=True
         except (OSError,ValueError):
-            try: raw=json.loads(self.config.get('config_json','{}'))
-            except (TypeError,ValueError): raw={}
-        normalized=self._normalize(raw)
-        if from_disk and isinstance(raw,dict) and int(raw.get('version',0) or 0)<3:
             try:
-                if not self.migration_backup.exists():
+                raw=json.loads(self.backup.read_text(encoding='utf-8')); from_disk=True; recovered_from_backup=True
+                logger.warning('代理中心主配置损坏，已读取最近配置备份')
+            except (OSError,ValueError):
+                try: raw=json.loads(self.config.get('config_json','{}'))
+                except (TypeError,ValueError): raw={}
+        normalized=self._normalize(raw)
+        if from_disk and isinstance(raw,dict) and (recovered_from_backup or int(raw.get('version',0) or 0)<4):
+            try:
+                if int(raw.get('version',0) or 0)<4 and not self.migration_backup.exists():
                     self.migration_backup.write_text(json.dumps(raw,ensure_ascii=False,indent=2),encoding='utf-8')
                     self.migration_backup.chmod(0o600)
                 temp=self.path.with_suffix('.migration.tmp')
@@ -132,11 +139,21 @@ class ProxyManager(Star):
         return validate_state(value)
 
     def _load_runtime_application(self) -> dict:
-        try:
-            value=json.loads(self.runtime_path.read_text(encoding='utf-8'))
-            return value if isinstance(value,dict) else {}
-        except (OSError,ValueError):
-            return {}
+        def load(path):
+            try:
+                value=json.loads(path.read_text(encoding='utf-8'))
+                return value if isinstance(value,dict) else {}
+            except (OSError,ValueError): return {}
+        current=load(self.runtime_path)
+        if current.get('status') in {'fail_closed','restore_failed','saved'}:
+            return current
+        if self._verified_recovery_document(current):
+            return current
+        recovered=load(self.runtime_backup)
+        if self._verified_recovery_document(recovered):
+            logger.warning('运行修订记录不完整，已读取最近一份已验证备份')
+            return {**recovered,'message':'主运行修订记录不完整，已恢复最近一份已验证备份'}
+        return current if isinstance(current,dict) else {}
 
     def _persist_runtime_application(self,value:dict):
         if self.runtime_path.exists():
@@ -202,6 +219,7 @@ class ProxyManager(Star):
         result['application']={key:application.get(key) for key in (
             'status','saved_revision','applied_revision','updated_at','message','verification'
         )}
+        result['traffic_inventory']=traffic_inventory(self.state,application)
         return result
 
     async def persist(self,state:dict):
@@ -243,6 +261,10 @@ class ProxyManager(Star):
         }}
         self.events=(self.events+[item])[-100:]
         try:
+            if self.events_path.exists() and self.events_path.stat().st_size>1024*1024:
+                rotated=self.events_path.with_suffix('.jsonl.1')
+                if rotated.exists(): rotated.unlink()
+                self.events_path.replace(rotated)
             with self.events_path.open('a',encoding='utf-8') as stream:
                 stream.write(json.dumps(item,ensure_ascii=False)+'\n')
             try: self.events_path.chmod(0o600)
@@ -273,7 +295,7 @@ class ProxyManager(Star):
             payload=await request.json()
             if not isinstance(payload,dict): raise ValueError('配置格式无效')
             self._restore_redacted(payload); candidate=self._validate(payload)
-            async with self.lock:
+            async with self.operation_lock:
                 previous=self.state
                 try: await self.persist(candidate)
                 except Exception:
@@ -286,7 +308,7 @@ class ProxyManager(Star):
     async def rollback(self):
         try:
             if not self.backup.exists(): raise ValueError('没有可恢复的上一版配置')
-            async with self.lock:
+            async with self.operation_lock:
                 candidate=self._validate(json.loads(self.backup.read_text(encoding='utf-8')))
                 await self.persist(candidate)
             return json_response(self.snapshot())
@@ -327,7 +349,8 @@ class ProxyManager(Star):
     def _record_outbound_verification(self,result:dict):
         """Persist the last redacted verification evidence without changing its runtime revision."""
         application=copy.deepcopy(getattr(self,'runtime_application',{}))
-        application['verification']=redact_diagnostics({**result,'at':int(time.time())})
+        application['verification']=redact_diagnostics({**result,'at':int(time.time()),
+                                                        'runtime_revision':application.get('applied_revision','')})
         try:
             self._persist_runtime_application(application)
         except OSError:
@@ -343,32 +366,56 @@ class ProxyManager(Star):
         except (ValueError,TypeError) as exc: return error_response(str(exc))
 
     async def verify_outbound(self):
+        async with self.operation_lock:
+            return await self._verify_outbound()
+
+    async def _verify_outbound(self):
         result={'verified':False,'entry':{'state':'not_started','message':'尚未发起请求'},
                 'rule':{'state':'not_started','message':'尚未核对运行规则'},
                 'exit':{'state':'unconfirmed','message':'尚未取得可验证出口证据'}}
         try:
             payload=await request.json(); url=str(payload.get('url','')); parsed=urlsplit(url)
             if parsed.scheme!='https' or not parsed.hostname: raise ValueError('实际出站验证只允许 HTTPS 地址')
+            await validate_public_url(url,https_only=True)
             host=safe_host(parsed.hostname); route=self._match_rule(host); target=route['target'] if route else 'direct'
             group=next((item for item in self.state['groups'] if item['id']==target),None)
             if not group: raise ValueError('规则目标代理组不存在')
+            kernel=await self._kernel_status()
+            if kernel.get('state')!='applied':
+                result['rule']={'state':'unconfirmed','message':'内核运行状态未通过核对：'+str(kernel.get('message','未知'))}
+                self._record_outbound_verification(result)
+                return json_response(result)
+            adapter=self._adapter()
+            before={item.get('id') for item in await adapter.connection_snapshot(self.state,host)}
             proxy=self.state.get('proxy_entry',{}).get('http_url')
             if not proxy: raise ValueError('尚未配置统一 HTTP 代理入口')
             started=time.monotonic()
             async with httpx.AsyncClient(proxy=proxy,trust_env=False,follow_redirects=False,timeout=15) as client:
-                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.4'})
+                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.5'})
             response.raise_for_status()
             result.update({'host':host,'status_code':response.status_code,
                            'elapsed_ms':round((time.monotonic()-started)*1000),'matched_rule':route,
                            'group':{'id':group['id'],'name':group['name'],'kernel_name':group.get('kernel_name')}})
             result['entry']={'state':'passed','message':'统一代理入口已返回 HTTPS 响应'}
-            kernel=await self._kernel_status()
-            if kernel.get('state')!='applied':
-                result['rule']={'state':'unconfirmed','message':'入口请求成功，但内核运行状态未通过核对：'+str(kernel.get('message','未知'))}
+            trace=None
+            for _attempt in range(5):
+                current=await adapter.connection_snapshot(self.state,host)
+                trace=next((item for item in current if item.get('id') not in before),None)
+                if trace: break
+                await asyncio.sleep(.05)
+            result['trace']={'request_correlated':bool(trace)}
+            expected_rule='DOMAIN' if route and route['match']=='exact' else ('DOMAIN-SUFFIX' if route else 'MATCH')
+            expected_payload=(route['host'].removeprefix('*.') if route else '')
+            rule_matched=bool(trace and trace.get('rule')==expected_rule and (
+                expected_rule=='MATCH' or trace.get('rule_payload')==expected_payload
+            ))
+            if not rule_matched:
+                result['rule']={'state':'unconfirmed','message':'未取得这次请求对应的内核规则命中记录'}
                 self._record_outbound_verification(result)
-                self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'kernel_not_applied'})
+                self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'request_trace_missing'})
                 return json_response(result)
-            result['rule']={'state':'matched' if route else 'default','message':'命中显式规则' if route else '命中受管理的默认 MATCH 规则'}
+            result['trace']={**trace,'request_correlated':True}
+            result['rule']={'state':'matched' if route else 'default','message':'内核连接记录证明本次请求命中了'+('显式规则' if route else '默认 MATCH 规则')}
             try:
                 body=response.json()
                 value=body.get('ip') if isinstance(body,dict) else None
@@ -380,19 +427,23 @@ class ProxyManager(Star):
                 self._record_outbound_verification(result)
                 self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'exit_ip_missing'})
                 return json_response(result)
-            actual_selection='DIRECT'
+            actual_selection='DIRECT'; chains=trace.get('chains',[])
             if group['id']!='direct':
                 try:
                     actual_selection=await self._adapter().group_selection(self.state, group)
                 except (ValueError,httpx.HTTPError,OSError,TypeError):
                     actual_selection=''
-            if not actual_selection:
-                result['exit']={'state':'unconfirmed','message':'已取得出口 IP，但无法回读运行代理组的实际选择'}
+            expected_group='DIRECT' if group['id']=='direct' else group.get('kernel_name','group-'+group['id'])
+            chain_confirmed=(group['id']=='direct' and 'DIRECT' in chains) or (
+                group['id']!='direct' and bool(actual_selection) and expected_group in chains and actual_selection in chains
+            )
+            if not chain_confirmed:
+                result['exit']={'state':'unconfirmed','message':'已取得出口 IP，但请求连接记录无法证明预期代理组和节点链路'}
                 self._record_outbound_verification(result)
                 self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'selection_unavailable'})
                 return json_response(result)
             result['actual_selection']=actual_selection
-            result['exit']={'state':'confirmed','ip':exit_ip,'message':'出口 IP 与运行代理组实际选择均已取得'}
+            result['exit']={'state':'confirmed','ip':exit_ip,'message':'同一请求的出口 IP、规则和内核代理链均已确认'}
             result['verified']=True
             self._record_outbound_verification(result)
             self.event({'action':'verify_outbound','result':'confirmed','host':host,'selection':actual_selection})
@@ -411,6 +462,7 @@ class ProxyManager(Star):
             payload=await request.json(); group,node=self.resolve(str(payload.get('group_id','direct')))
             target=str(payload.get('url','https://www.gstatic.com/generate_204'))
             if not safe_url(target): raise ValueError('诊断目标只允许 HTTP 或 HTTPS 地址')
+            await validate_public_url(target)
             started=time.monotonic()
             async with httpx.AsyncClient(proxy=node and node['endpoint'],trust_env=False,timeout=12) as client:
                 response=await client.get(target)
@@ -454,8 +506,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.4'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.5'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -526,14 +577,13 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.4'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.5'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
             if not nodes:
                 raise ValueError('未解析出支持的代理节点（发现协议：'+', '.join(sorted(discovered))+'）')
-            async with self.lock:
+            async with self.operation_lock:
                 subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
                 if not subscription: raise ValueError('订阅已在刷新时被删除')
                 previous=copy.deepcopy(self.state); previous_health=copy.deepcopy(self.health)
@@ -567,7 +617,7 @@ class ProxyManager(Star):
                 if attempt+1<attempts: await asyncio.sleep(2)
         subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
         if subscription:
-            async with self.lock:
+            async with self.operation_lock:
                 self._record_subscription_error(subscription,str(last_error))
                 await self.persist(self.state)
         self.event({'action':'subscription_refresh','subscription_id':subscription_id,'result':'failed','message':safe_error(last_error)[:200]})
@@ -583,7 +633,7 @@ class ProxyManager(Star):
     async def subscription_import(self):
         try:
             payload=await request.json(); preview_id=str(payload.get('preview_id','')); imported=[]
-            async with self.lock:
+            async with self.operation_lock:
                 preview=self.previews.get(preview_id)
                 if not preview or int(time.time())-int(preview.get('at',0))>=900:
                     self.previews.pop(preview_id,None); raise ValueError('导入预览已过期，请重新预览')
@@ -676,10 +726,12 @@ class ProxyManager(Star):
             return error_response(str(exc),400)
 
     async def kernel_start(self):
-        try: return json_response(await self._start_owned_kernel())
+        try:
+            async with self.operation_lock: return json_response(await self._start_owned_kernel())
         except (ValueError,OSError,RuntimeError) as exc: return error_response(str(exc),500)
 
-    async def kernel_stop(self): return json_response(await self.supervisor.stop())
+    async def kernel_stop(self):
+        async with self.operation_lock: return json_response(await self.supervisor.stop())
 
     def _runtime_document(self) -> dict:
         adapter=self._adapter()
@@ -724,7 +776,7 @@ class ProxyManager(Star):
             return error_response(str(exc))
 
     async def runtime_apply(self):
-        async with self.apply_lock:
+        async with self.operation_lock:
             try:
                 kernel=await self._kernel_status()
                 if kernel['state'] in {'not_configured','connection_failed','auth_failed','version_unsupported'}:
@@ -800,11 +852,12 @@ class ProxyManager(Star):
             elif node.get('invalid_reference'): reason='节点引用已失效'
             elif node.get('support',{}).get('status')!='supported': reason=node.get('support',{}).get('reason') or '协议不支持'
             if reason: return {'node_id':node_id,'status':'skipped','reason':reason}
-            if not safe_url(target): raise ValueError('测速目标只允许 HTTP 或 HTTPS 地址')
             native=urlparse(node['endpoint']).scheme not in {'http','https','socks5','socks5h'}
             if native:
                 kernel=await self._kernel_status()
                 if kernel['state']!='applied': return {'node_id':node_id,'status':'skipped','reason':'内核未就绪：'+kernel['message']}
+            if not safe_url(target): raise ValueError('测速目标只允许 HTTP 或 HTTPS 地址')
+            await validate_public_url(target)
             started=time.monotonic()
             try:
               timeout=max(1,min(int(payload.get('timeout',5) or 5),15))
@@ -906,8 +959,9 @@ class ProxyManager(Star):
             if not group or not node or node_id not in group.get('node_ids',[]): raise ValueError('代理组或节点引用无效')
             if not node.get('enabled') or node.get('excluded') or node.get('invalid_reference') or node.get('support',{}).get('status','supported')!='supported':
                 raise ValueError('节点当前不可用于切换')
-            await adapter.select(self.state, group, node)
-            group['selected']=node_id; await self.persist(self.state)
+            async with self.operation_lock:
+                await adapter.select(self.state, group, node)
+                group['selected']=node_id; await self.persist(self.state)
             self.event({'action':'control_select','group_id':group_id,'node_id':node_id,'result':'ok','adapter':adapter.id})
             return json_response({'ok':True})
         except ValueError as exc: return error_response(str(exc))
@@ -916,11 +970,21 @@ class ProxyManager(Star):
     async def _auto_loop(self):
         while True:
             now=int(time.time())
+            self._cleanup_runtime_records(now)
             due=[item for item in self.state['subscriptions'] if item['enabled'] and item['interval'] and item['next_refresh_at']<=now]
             for subscription in due:
                 try: await self._refresh_with_retry(subscription['id'],2)
                 except Exception: pass
             await asyncio.sleep(30)
+
+    def _cleanup_runtime_records(self,now:int|None=None):
+        now=int(now or time.time()); live_ids={node['id'] for node in self.state['nodes']}
+        if any(node_id not in live_ids for node_id in self.health):
+            self.health={node_id:value for node_id,value in self.health.items() if node_id in live_ids}
+            self.persist_health()
+        self.probe_tasks={task_id:task for task_id,task in self.probe_tasks.items()
+                          if task.get('status')=='running' or now-int(task.get('finished_at',task.get('started_at',now)) or now)<3600}
+        self.previews={key:value for key,value in self.previews.items() if now-int(value.get('at',0) or 0)<900}
 
     async def initialize(self):
         if self.auto_task and not self.auto_task.done(): self.auto_task.cancel()
@@ -928,7 +992,7 @@ class ProxyManager(Star):
         try: await self._start_owned_kernel()
         except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
             logger.warning('代理管理中心自管内核未启动：'+safe_error(exc))
-        logger.info('代理管理中心 0.3.4 已加载')
+        logger.info('代理管理中心 0.3.5 已加载')
 
     async def terminate(self):
         if self.auto_task:

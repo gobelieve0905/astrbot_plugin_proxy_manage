@@ -52,3 +52,7 @@ class CoreAdapter(ABC):
 
     async def group_selection(self, state: dict, group: dict) -> str:
         return ''
+
+    async def connection_snapshot(self, state: dict, host: str) -> list[dict]:
+        """Return redacted active connection evidence for one destination host."""
+        raise NotImplementedError

@@ -37,6 +37,14 @@
 .verification span, .verification code { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .verification.passed, .verification.matched, .verification.default, .verification.confirmed { border-color: var(--accent); }
 .verification.failed, .verification.unconfirmed { border-color: var(--danger); }
+.traffic-inventory { display: grid; gap: 10px; }
+.traffic-inventory article { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 6px 14px; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.traffic-inventory article div { display: grid; gap: 3px; }
+.traffic-inventory article p { grid-column: 1 / -1; margin: 0; color: var(--muted); }
+.traffic-state { align-self: start; font-weight: 700; }
+.traffic-state.managed { color: var(--accent-strong); }
+.traffic-state.not_connected { color: var(--danger); }
+.traffic-state.unknown { color: var(--muted); }
 .probe-progress { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 10px; align-items: center; margin: 12px 0; }
 .probe-progress progress { width: 100%; accent-color: var(--accent); }
 
@@ -51,4 +59,6 @@
   #content[data-view="subscriptions"] .filter { grid-template-columns: 1fr; }
   .probe-progress { grid-template-columns: 1fr auto; }
   .probe-progress progress { grid-column: 1 / -1; }
+  .traffic-inventory article { grid-template-columns: 1fr; }
+  .traffic-inventory article p { grid-column: auto; }
 }

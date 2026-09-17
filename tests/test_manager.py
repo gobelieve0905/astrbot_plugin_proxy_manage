@@ -80,7 +80,9 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.4',html)
+        self.assertIn('流量控制 · 0.3.5',html)
+        self.assertIn('平台域名模板',html)
+        self.assertIn('traffic_inventory',script)
         self.assertIn('aria-label="主导航"',html)
         self.assertIn("classList.toggle('active'",script)
         self.assertIn("$('content').dataset.view=tab",script)
@@ -204,6 +206,23 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertTrue(self.module.safe_url("socks5://mihomo:7891"))
         self.assertFalse(self.module.safe_url("http://user:password@proxy:8080"))
 
+    def test_user_controlled_urls_reject_private_and_metadata_addresses(self):
+        from proxy_manager.traffic.safe_http import validate_public_url
+        for value in ('http://127.0.0.1/admin','http://10.0.0.1/','http://169.254.169.254/latest/meta-data/'):
+            with self.assertRaisesRegex(ValueError,'禁止访问'):
+                asyncio.run(validate_public_url(value))
+
+    def test_public_fetch_revalidates_redirect_destination(self):
+        from proxy_manager.traffic.safe_http import fetch_public_url
+        request=self.module.httpx.Request('GET','https://1.1.1.1/sub')
+        response=self.module.httpx.Response(302,headers={'location':'http://127.0.0.1/admin'},request=request)
+        client=AsyncMock(); client.__aenter__.return_value=client; client.build_request=Mock(return_value=request)
+        client.send=AsyncMock(return_value=response)
+        with patch('proxy_manager.traffic.safe_http.httpx.AsyncClient',return_value=client):
+            with self.assertRaisesRegex(ValueError,'禁止访问'):
+                asyncio.run(fetch_public_url('https://1.1.1.1/sub'))
+        client.send.assert_awaited_once()
+
     def test_snapshot_redacts_node_endpoint(self):
         manager = self.module.ProxyManager.__new__(self.module.ProxyManager)
         manager.state = {"nodes": [{"id": "n1", "endpoint": "socks5://secret:7890"}], "subscriptions": [], "control": {"secret": ""}}
@@ -274,7 +293,7 @@ class TestConfigurationRules(unittest.TestCase):
             manager.path = Path(directory) / "config.json"; manager.backup = Path(directory) / "config.previous.json"; manager.state = {}
             state = {"nodes": [], "groups": [{"id": "direct", "name": "直连", "mode": "direct", "node_ids": [], "selected": "", "enabled": True}], "routes": [], "subscriptions": [], "platforms": {}, "control": {"enabled": False, "url": "", "secret": "", "timeout": 8}}
             asyncio.run(manager.persist(state))
-            self.assertEqual(json.loads(manager.path.read_text())["version"], 3)
+            self.assertEqual(json.loads(manager.path.read_text())["version"], 4)
             self.assertEqual(manager.path.stat().st_mode & 0o777, 0o600)
             asyncio.run(manager.persist(state))
             self.assertEqual(manager.backup.stat().st_mode & 0o777, 0o600)
@@ -327,7 +346,7 @@ class TestConfigurationRules(unittest.TestCase):
         manager.runtime_path = Path(manager._test_dir.name) / "runtime-application.json"
         manager.runtime_backup = Path(manager._test_dir.name) / "runtime-application.previous.json"
         manager.runtime_application = {}
-        manager.lock = asyncio.Lock(); manager.refresh_lock = asyncio.Lock(); manager.apply_lock = asyncio.Lock(); manager.previews = {}
+        manager.refresh_lock = asyncio.Lock(); manager.operation_lock = asyncio.Lock(); manager.previews = {}; manager.probe_tasks = {}
         return manager
 
     def test_kernel_not_configured_is_explicit(self):
@@ -506,6 +525,7 @@ class TestConfigurationRules(unittest.TestCase):
         client = AsyncMock(); client.__aenter__.return_value = client
         client.get = AsyncMock(return_value=response)
         with patch.object(manager, '_kernel_status', AsyncMock(return_value={'state': 'applied','message':'已应用'})), \
+             patch('proxy_manager.plugin.validate_public_url', new=AsyncMock()), \
              patch.object(self.module.httpx, 'AsyncClient', return_value=client):
             asyncio.run(manager._probe_node({'node_id': 'hk-1'}))
             asyncio.run(manager._probe_node({'node_id': 'sg-1'}))
@@ -520,6 +540,13 @@ class TestConfigurationRules(unittest.TestCase):
         before = helper('sub-a', 'anytls://token@example.com:443?sni=example.com#旧名称')
         after = helper('sub-a', 'anytls://token@example.com:443?sni=example.com#新名称')
         self.assertEqual(before, after)
+
+    def test_transport_path_and_sni_are_part_of_stable_identity(self):
+        helper=self.module.ProxyManager._stable_node_id
+        first=helper('sub-a','vless://uuid@example.com:443?type=ws&path=%2Fa&sni=one.example')
+        second=helper('sub-a','vless://uuid@example.com:443?type=ws&path=%2Fb&sni=one.example')
+        third=helper('sub-a','vless://uuid@example.com:443?type=ws&path=%2Fa&sni=two.example')
+        self.assertEqual(len({first,second,third}),3)
 
     def test_vmess_display_name_and_subscription_order_do_not_change_identity(self):
         helper = self.module.ProxyManager._stable_node_id
@@ -544,16 +571,16 @@ class TestConfigurationRules(unittest.TestCase):
             with patch.object(self.module.StarTools,'get_data_dir',return_value=root):
                 first=self.module.ProxyManager(context,{})
                 new_id=first.state['nodes'][0]['id']
-                self.assertEqual(first.state['version'],3)
+                self.assertEqual(first.state['version'],4)
                 self.assertEqual(first.state['groups'][1]['node_ids'],[new_id])
                 self.assertEqual(first.state['groups'][1]['selected'],new_id)
                 self.assertEqual(first.state['subscriptions'][0]['node_ids'],[new_id])
                 self.assertIn(new_id,first.health); self.assertNotIn('old-id',first.health)
-                backup=(root/'config.pre-v3.json').read_text(); self.assertEqual(json.loads(backup)['version'],2)
-                self.assertEqual((root/'config.pre-v3.json').stat().st_mode & 0o777,0o600)
+                backup=(root/'config.pre-v4.json').read_text(); self.assertEqual(json.loads(backup)['version'],2)
+                self.assertEqual((root/'config.pre-v4.json').stat().st_mode & 0o777,0o600)
                 second=self.module.ProxyManager(context,{})
                 self.assertEqual(second.state['nodes'][0]['id'],new_id)
-                self.assertEqual((root/'config.pre-v3.json').read_text(),backup)
+                self.assertEqual((root/'config.pre-v4.json').read_text(),backup)
 
     def test_refresh_preserves_excluded_node_preferences(self):
         manager = self._manager_for_runtime()
@@ -597,8 +624,7 @@ class TestConfigurationRules(unittest.TestCase):
         manager=self._manager_for_runtime(); manager.state=manager._normalize(manager.state)
         before_nodes=copy.deepcopy(manager.state['nodes']); before_groups=copy.deepcopy(manager.state['groups'])
         response=self.module.httpx.Response(503,request=self.module.httpx.Request('GET','https://sub.example/hk'))
-        client=AsyncMock(); client.__aenter__.return_value=client; client.get=AsyncMock(return_value=response)
-        with patch.object(self.module.httpx,'AsyncClient',return_value=client):
+        with patch('proxy_manager.plugin.fetch_public_url',new=AsyncMock(return_value=response)):
             with self.assertRaisesRegex(ValueError,'订阅请求失败'):
                 asyncio.run(manager._refresh_with_retry('sub-hk',attempts=1))
         self.assertEqual(manager.state['nodes'],before_nodes); self.assertEqual(manager.state['groups'],before_groups)
@@ -807,6 +833,38 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(manager._runtime_document()['rules'][:2],[
             'DOMAIN,graph.facebook.com,group-hk','DOMAIN-SUFFIX,facebook.com,group-sg'])
 
+    def test_dynamic_traffic_inventory_never_infers_takeover_from_configuration_alone(self):
+        from proxy_manager.traffic.inventory import traffic_inventory
+        manager=self._manager_for_runtime(); entry=manager.state['proxy_entry']['http_url']
+        pending=traffic_inventory(manager.state,{}, {'http_proxy':entry,'https_proxy':entry})
+        self.assertEqual(pending[0]['status'],'unknown')
+        verified={'status':'applied','saved_revision':'r1','applied_revision':'r1',
+                  'verification':{'verified':True,'runtime_revision':'r1','trace':{'request_correlated':True}}}
+        managed=traffic_inventory(manager.state,verified, {'http_proxy':entry,'https_proxy':entry})
+        self.assertEqual(managed[0]['status'],'managed')
+        self.assertTrue(all(item['status']=='not_connected' for item in managed[1:-1]))
+        self.assertEqual(managed[-1]['status'],'managed')
+
+    def test_runtime_application_uses_verified_backup_when_primary_is_incomplete(self):
+        manager=self._manager_for_runtime(); document=manager._runtime_document(); revision=manager._runtime_revision(document)
+        manager.runtime_path.write_text('{broken',encoding='utf-8')
+        manager.runtime_backup.write_text(json.dumps({'status':'applied','applied_revision':revision,'document':document}),encoding='utf-8')
+        recovered=manager._load_runtime_application()
+        self.assertEqual(recovered['applied_revision'],revision); self.assertIn('已恢复',recovered['message'])
+
+    def test_runtime_record_cleanup_removes_expired_tasks_and_stale_health(self):
+        manager=self._manager_for_runtime(); manager.health={'hk-1':{'status':'ok'},'removed':{'status':'error'}}
+        manager.probe_tasks={'old':{'status':'completed','finished_at':1},'live':{'status':'running','started_at':1}}
+        manager.previews={'old':{'at':1},'new':{'at':9500}}
+        manager._cleanup_runtime_records(10000)
+        self.assertEqual(set(manager.health),{'hk-1'}); self.assertEqual(set(manager.probe_tasks),{'live'}); self.assertEqual(set(manager.previews),{'new'})
+
+    def test_event_log_rotates_before_unbounded_growth(self):
+        manager=self._manager_for_runtime(); manager.events_path.write_bytes(b'x'*(1024*1024+1))
+        manager.event({'action':'rotation','result':'ok'})
+        self.assertTrue(manager.events_path.with_suffix('.jsonl.1').exists())
+        self.assertLess(manager.events_path.stat().st_size,1024)
+
     def test_outbound_verification_keeps_entry_rule_and_exit_evidence_separate(self):
         manager=self._manager_for_runtime(); manager.state['rule_groups']=[
             {'id':'ip','name':'IP','domains':[{'host':'api.ipify.org','match':'exact'}],'priority':1,'target':'hk','enabled':True}]
@@ -815,7 +873,10 @@ class TestConfigurationRules(unittest.TestCase):
         entry=AsyncMock(); entry.__aenter__.return_value=entry; entry.get=AsyncMock(return_value=response)
         control=AsyncMock(); control.__aenter__.return_value=control; control.get=AsyncMock(return_value=proxies)
         fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'url':'https://api.ipify.org?format=json'}))
-        with patch('proxy_manager.plugin.request',fake_request), patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
+        adapter=manager._adapter(); trace={'id':'new','host':'api.ipify.org','rule':'DOMAIN','rule_payload':'api.ipify.org','chains':['node-hk-1','group-hk']}
+        with patch('proxy_manager.plugin.request',fake_request), patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
+             patch.object(adapter,'connection_snapshot',AsyncMock(side_effect=[[],[trace]])), \
              patch.object(self.module.httpx,'AsyncClient',side_effect=[entry,control]):
             result=asyncio.run(manager.verify_outbound())
         self.assertTrue(result['verified']); self.assertEqual(result['entry']['state'],'passed')
@@ -827,11 +888,14 @@ class TestConfigurationRules(unittest.TestCase):
         response=self.module.httpx.Response(204,content=b'',request=self.module.httpx.Request('GET','https://www.gstatic.com/generate_204'))
         entry=AsyncMock(); entry.__aenter__.return_value=entry; entry.get=AsyncMock(return_value=response)
         fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'url':'https://www.gstatic.com/generate_204'}))
-        with patch('proxy_manager.plugin.request',fake_request), patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
-             patch.object(self.module.httpx,'AsyncClient',return_value=entry):
+        adapter=manager._adapter()
+        with patch('proxy_manager.plugin.request',fake_request), patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
+             patch.object(adapter,'connection_snapshot',AsyncMock(return_value=[])), \
+             patch.object(self.module.httpx,'AsyncClient',return_value=entry), patch('proxy_manager.plugin.asyncio.sleep',new=AsyncMock()):
             result=asyncio.run(manager.verify_outbound())
         self.assertFalse(result['verified']); self.assertEqual(result['entry']['state'],'passed')
-        self.assertEqual(result['rule']['state'],'default'); self.assertEqual(result['exit']['state'],'unconfirmed')
+        self.assertEqual(result['rule']['state'],'unconfirmed'); self.assertEqual(result['exit']['state'],'unconfirmed')
 
 
 if __name__ == "__main__":

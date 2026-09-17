@@ -86,13 +86,19 @@ def identity_material(protocol: str, endpoint: str='', connection: object=None) 
             parsed=urlsplit(endpoint); host=(parsed.hostname or '').lower(); port=parsed.port
             principal=unquote(parsed.username or '')
             if host and port and (principal or protocol in HTTP_PROTOCOLS):
-                return json.dumps([protocol,host,port,principal],separators=(',',':'))
+                query=sorted(parse_qsl(parsed.query,keep_blank_values=True))
+                return json.dumps([protocol,host,port,principal,parsed.path,query],separators=(',',':'),ensure_ascii=False)
         except (TypeError,ValueError): pass
     if isinstance(connection,dict):
         server=str(connection.get('server','')).lower(); port=connection.get('port')
         principal=connection.get('username') or connection.get('user') or connection.get('uuid')
         if server and port and (principal or protocol in HTTP_PROTOCOLS):
-            return json.dumps([protocol,server,port,str(principal or '')],separators=(',',':'))
+            transport={key:value for key,value in connection.items() if str(key).lower() not in {
+                'name','ps','remark','display_name','password','passwd','credential','token',
+                'server','port','username','user','uuid',
+            }}
+            return json.dumps([protocol,server,port,str(principal or ''),transport],sort_keys=True,
+                              separators=(',',':'),ensure_ascii=False)
     return canonical_connection(protocol,endpoint,connection)
 
 

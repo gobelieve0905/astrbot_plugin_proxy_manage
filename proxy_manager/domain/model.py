@@ -194,7 +194,7 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
     timeout=int(control.get('timeout',8) or 8)
     entry=source.get('proxy_entry') if isinstance(source.get('proxy_entry'),dict) else {}
     return {
-        'version':3, 'migration':{'stable_identity':1,'core_adapter':1}, 'name':str(source.get('name','默认配置'))[:80],
+        'version':4, 'migration':{'stable_identity':2,'core_adapter':1}, 'name':str(source.get('name','默认配置'))[:80],
         'nodes':nodes, 'groups':groups, 'routes':routes, 'rule_groups':rule_groups, 'platforms':platforms,
         'subscriptions':subscriptions,
         'control':{'enabled':bool(control.get('enabled',False)),'url':str(control.get('url','')).rstrip('/')[:300],

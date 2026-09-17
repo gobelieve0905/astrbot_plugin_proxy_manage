@@ -245,3 +245,24 @@ class MihomoAdapter(CoreAdapter):
         async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
             version=await client.get('/version'); version.raise_for_status(); proxies=await client.get('/proxies'); proxies.raise_for_status()
         return {'version':version.json(),'proxies':proxies.json().get('proxies',{})}
+
+    async def connection_snapshot(self, state: dict, host: str) -> list[dict]:
+        control,headers=self.control(state)
+        async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
+            response=await client.get('/connections'); response.raise_for_status()
+        result=[]
+        for item in response.json().get('connections',[]):
+            if not isinstance(item,dict): continue
+            metadata=item.get('metadata') if isinstance(item.get('metadata'),dict) else {}
+            observed=str(metadata.get('host') or metadata.get('destinationIP') or '').rstrip('.').lower()
+            if observed!=host.rstrip('.').lower(): continue
+            result.append({
+                'id':str(item.get('id','')),
+                'host':observed,
+                'destination_port':str(metadata.get('destinationPort','')),
+                'network':str(metadata.get('network','')),
+                'rule':str(item.get('rule','')).upper().replace('_','-'),
+                'rule_payload':str(item.get('rulePayload','')).rstrip('.').lower(),
+                'chains':[str(value) for value in item.get('chains',[]) if isinstance(value,str)],
+            })
+        return result
