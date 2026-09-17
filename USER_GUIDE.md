@@ -1,5 +1,7 @@
 # 代理管理中心使用指南
 
+> 本指南记录 0.2.10 的当前操作方式。当前版本仍依赖外部准备的 Mihomo，尚未达到插件自管可插拔内核和统一接管 AstrBot 实际出站流量的最终产品形态。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
+
 ## 首次接入
 
 1. 准备插件专用 Mihomo 1.19 或更高版本实例。控制接口和代理入口只能位于回环地址、受限内部网络或受保护通道；不要向公网发布端口。为支持容器间访问，专用配置会启用 Mihomo `allow-lan` 并绑定内部网络接口，因此部署层网络隔离是必要条件。
