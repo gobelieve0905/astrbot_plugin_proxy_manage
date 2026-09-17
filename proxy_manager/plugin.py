@@ -30,6 +30,7 @@ from .runtime.artifacts import ArtifactInstallTask, ArtifactManager, MAX_ARCHIVE
 from .runtime.supervisor import KernelSupervisor
 from .traffic.safe_http import fetch_public_url, validate_public_url
 from .traffic.inventory import traffic_inventory
+from .traffic.astrbot import AstrBotProxyTransaction
 
 
 class ProxyManager(Star):
@@ -52,6 +53,7 @@ class ProxyManager(Star):
         self.refresh_lock=asyncio.Lock(); self.operation_lock=asyncio.Lock()
         self.state=self._load(); self.health=self._load_health()
         self._bind_owned_runtime()
+        self.astrbot_proxy=AstrBotProxyTransaction(self.data_dir)
         self.artifacts=ArtifactManager(self.data_dir,self._adapter().id)
         self.supervisor=KernelSupervisor(self.data_dir,self._kernel_health_check)
         self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
@@ -197,6 +199,9 @@ class ProxyManager(Star):
             ('kernel-install-cancel',self.kernel_install_cancel,['POST']), ('kernel-upload',self.kernel_upload,['POST']),
             ('kernel-start',self.kernel_start,['POST']), ('kernel-stop',self.kernel_stop,['POST']),
             ('verify-outbound',self.verify_outbound,['POST']),
+            ('astrbot-proxy-enable',self.astrbot_proxy_enable,['POST']),
+            ('astrbot-proxy-restore',self.astrbot_proxy_restore,['POST']),
+            ('verify-astrbot-egress',self.verify_astrbot_egress,['POST']),
         )
         for name,handler,methods in routes:
             self.context.register_web_api(base+'/'+name,handler,methods,'代理管理中心')
@@ -219,7 +224,9 @@ class ProxyManager(Star):
         result['application']={key:application.get(key) for key in (
             'status','saved_revision','applied_revision','updated_at','message','verification'
         )}
-        result['traffic_inventory']=traffic_inventory(self.state,application)
+        astrbot=self.astrbot_proxy.status(self.state['proxy_entry']['http_url']) if hasattr(self,'astrbot_proxy') else {}
+        result['astrbot_proxy']=astrbot
+        result['traffic_inventory']=traffic_inventory(self.state,application,astrbot=astrbot)
         return result
 
     async def persist(self,state:dict):
@@ -369,12 +376,40 @@ class ProxyManager(Star):
         async with self.operation_lock:
             return await self._verify_outbound()
 
-    async def _verify_outbound(self):
+    async def astrbot_proxy_enable(self):
+        try:
+            async with self.operation_lock:
+                status=self.astrbot_proxy.enable(self.state['proxy_entry']['http_url'])
+            self.event({'action':'astrbot_proxy_enable','result':'pending_restart'})
+            return json_response(status)
+        except (ValueError, OSError) as exc:
+            return error_response(str(exc) if isinstance(exc,ValueError) else 'AstrBot 全局代理配置写入失败',500)
+
+    async def astrbot_proxy_restore(self):
+        try:
+            async with self.operation_lock:
+                status=self.astrbot_proxy.restore(self.state['proxy_entry']['http_url'])
+            self.event({'action':'astrbot_proxy_restore','result':'pending_restart'})
+            return json_response(status)
+        except (ValueError, OSError) as exc:
+            return error_response(str(exc) if isinstance(exc,ValueError) else 'AstrBot 全局代理恢复失败',500)
+
+    async def verify_astrbot_egress(self):
+        async with self.operation_lock:
+            status=self.astrbot_proxy.status(self.state['proxy_entry']['http_url'])
+            if not status.get('effective'):
+                return error_response('AstrBot 当前进程尚未使用插件入口；请先完成接入并重启 AstrBot')
+            payload=await request.json()
+            return await self._verify_outbound(str(payload.get('url','')),scope='astrbot-core',use_environment=True)
+
+    async def _verify_outbound(self, url:str|None=None, *, scope:str='explicit-entry', use_environment:bool=False):
         result={'verified':False,'entry':{'state':'not_started','message':'尚未发起请求'},
                 'rule':{'state':'not_started','message':'尚未核对运行规则'},
-                'exit':{'state':'unconfirmed','message':'尚未取得可验证出口证据'}}
+                'exit':{'state':'unconfirmed','message':'尚未取得可验证出口证据'},'scope':scope}
         try:
-            payload=await request.json(); url=str(payload.get('url','')); parsed=urlsplit(url)
+            if url is None:
+                payload=await request.json(); url=str(payload.get('url',''))
+            parsed=urlsplit(url)
             if parsed.scheme!='https' or not parsed.hostname: raise ValueError('实际出站验证只允许 HTTPS 地址')
             await validate_public_url(url,https_only=True)
             host=safe_host(parsed.hostname); route=self._match_rule(host); target=route['target'] if route else 'direct'
@@ -388,15 +423,17 @@ class ProxyManager(Star):
             adapter=self._adapter()
             before={item.get('id') for item in await adapter.connection_snapshot(self.state,host)}
             proxy=self.state.get('proxy_entry',{}).get('http_url')
-            if not proxy: raise ValueError('尚未配置统一 HTTP 代理入口')
+            if not use_environment and not proxy: raise ValueError('尚未配置统一 HTTP 代理入口')
             started=time.monotonic()
-            async with httpx.AsyncClient(proxy=proxy,trust_env=False,follow_redirects=False,timeout=15) as client:
-                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.5'})
+            client_options={'trust_env':use_environment,'follow_redirects':False,'timeout':15}
+            if not use_environment: client_options['proxy']=proxy
+            async with httpx.AsyncClient(**client_options) as client:
+                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.6'})
             response.raise_for_status()
             result.update({'host':host,'status_code':response.status_code,
                            'elapsed_ms':round((time.monotonic()-started)*1000),'matched_rule':route,
                            'group':{'id':group['id'],'name':group['name'],'kernel_name':group.get('kernel_name')}})
-            result['entry']={'state':'passed','message':'统一代理入口已返回 HTTPS 响应'}
+            result['entry']={'state':'passed','message':'AstrBot 进程继承的全局代理已返回 HTTPS 响应' if use_environment else '统一代理入口已返回 HTTPS 响应'}
             trace=None
             for _attempt in range(5):
                 current=await adapter.connection_snapshot(self.state,host)
@@ -412,7 +449,7 @@ class ProxyManager(Star):
             if not rule_matched:
                 result['rule']={'state':'unconfirmed','message':'未取得这次请求对应的内核规则命中记录'}
                 self._record_outbound_verification(result)
-                self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'request_trace_missing'})
+                self.event({'action':'verify_outbound','scope':scope,'result':'unconfirmed','host':host,'reason':'request_trace_missing'})
                 return json_response(result)
             result['trace']={**trace,'request_correlated':True}
             result['rule']={'state':'matched' if route else 'default','message':'内核连接记录证明本次请求命中了'+('显式规则' if route else '默认 MATCH 规则')}
@@ -425,7 +462,7 @@ class ProxyManager(Star):
             if not exit_ip:
                 result['exit']={'state':'unconfirmed','message':'目标未返回可验证的出口 IP；入口和规则状态不能证明实际出口'}
                 self._record_outbound_verification(result)
-                self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'exit_ip_missing'})
+                self.event({'action':'verify_outbound','scope':scope,'result':'unconfirmed','host':host,'reason':'exit_ip_missing'})
                 return json_response(result)
             actual_selection='DIRECT'; chains=trace.get('chains',[])
             if group['id']!='direct':
@@ -440,21 +477,21 @@ class ProxyManager(Star):
             if not chain_confirmed:
                 result['exit']={'state':'unconfirmed','message':'已取得出口 IP，但请求连接记录无法证明预期代理组和节点链路'}
                 self._record_outbound_verification(result)
-                self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'selection_unavailable'})
+                self.event({'action':'verify_outbound','scope':scope,'result':'unconfirmed','host':host,'reason':'selection_unavailable'})
                 return json_response(result)
             result['actual_selection']=actual_selection
             result['exit']={'state':'confirmed','ip':exit_ip,'message':'同一请求的出口 IP、规则和内核代理链均已确认'}
             result['verified']=True
             self._record_outbound_verification(result)
-            self.event({'action':'verify_outbound','result':'confirmed','host':host,'selection':actual_selection})
+            self.event({'action':'verify_outbound','scope':scope,'result':'confirmed','host':host,'selection':actual_selection})
             return json_response(result)
         except ValueError as exc:
             return error_response(str(exc))
         except (httpx.HTTPError,OSError) as exc:
-            result['entry']={'state':'failed','message':'统一代理入口请求失败'}
+            result['entry']={'state':'failed','message':'AstrBot 全局代理请求失败，未回落到直连' if use_environment else '统一代理入口请求失败'}
             result['error']=safe_error(exc)
             self._record_outbound_verification(result)
-            self.event({'action':'verify_outbound','result':'failed','message':safe_error(exc)})
+            self.event({'action':'verify_outbound','scope':scope,'result':'failed','message':safe_error(exc)})
             return json_response(result)
 
     async def probe(self):
@@ -506,7 +543,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.5'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.6'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -577,7 +614,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.5'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.6'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -992,7 +1029,10 @@ class ProxyManager(Star):
         try: await self._start_owned_kernel()
         except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
             logger.warning('代理管理中心自管内核未启动：'+safe_error(exc))
-        logger.info('代理管理中心 0.3.5 已加载')
+        status=self.astrbot_proxy.mark_started(self.state['proxy_entry']['http_url'])
+        if status.get('status') in {'pending_restart','restart_required','drifted'}:
+            logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
+        logger.info('代理管理中心 0.3.6 已加载')
 
     async def terminate(self):
         if self.auto_task:
@@ -1000,6 +1040,9 @@ class ProxyManager(Star):
             try: await self.auto_task
             except asyncio.CancelledError: pass
             self.auto_task=None
+        # Do not restore AstrBot's global proxy here: a reload/restart must fail closed,
+        # not silently revert live requests to an older direct or external path.
+        self.event({'action':'plugin_terminate','result':'proxy_configuration_retained'})
         await self.install_task.stop(); await self.supervisor.stop()
 
     async def on_message(self,event:AstrMessageEvent): return

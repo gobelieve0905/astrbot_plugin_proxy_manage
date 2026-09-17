@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import json
 import importlib.util
+import os
 import sys
 import tempfile
 import types
@@ -80,7 +81,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.5',html)
+        self.assertIn('流量控制 · 0.3.6',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('aria-label="主导航"',html)
@@ -840,10 +841,58 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(pending[0]['status'],'unknown')
         verified={'status':'applied','saved_revision':'r1','applied_revision':'r1',
                   'verification':{'verified':True,'runtime_revision':'r1','trace':{'request_correlated':True}}}
-        managed=traffic_inventory(manager.state,verified, {'http_proxy':entry,'https_proxy':entry})
+        verified['verification']['scope']='astrbot-core'
+        managed=traffic_inventory(manager.state,verified, {'http_proxy':entry,'https_proxy':entry},
+                                  {'effective':True,'configured':True})
         self.assertEqual(managed[0]['status'],'managed')
         self.assertTrue(all(item['status']=='not_connected' for item in managed[1:-1]))
         self.assertEqual(managed[-1]['status'],'managed')
+
+    def test_astrbot_proxy_transaction_backs_up_narrows_and_restores(self):
+        from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); config=root/'cmd_config.json'; data=root/'plugin'; data.mkdir()
+            original={'http_proxy':'http://legacy:7890','no_proxy':['localhost','10.*','.feishu.cn'],'other':True}
+            config.write_text(json.dumps(original),encoding='utf-8'); config.chmod(0o640)
+            transaction=AstrBotProxyTransaction(data,config)
+            pending=transaction.enable('http://127.0.0.1:17890')
+            current=json.loads(config.read_text())
+            self.assertEqual(current['http_proxy'],'http://127.0.0.1:17890')
+            self.assertEqual(tuple(current['no_proxy']),INTERNAL_NO_PROXY)
+            self.assertTrue(current['other']); self.assertEqual(pending['status'],'pending_restart')
+            self.assertEqual(config.stat().st_mode & 0o777,0o640)
+            restored=transaction.restore('http://127.0.0.1:17890')
+            self.assertEqual(json.loads(config.read_text()),original)
+            self.assertEqual(restored['status'],'restore_pending_restart')
+            self.assertEqual(transaction.path.stat().st_mode & 0o777,0o600)
+
+    def test_astrbot_proxy_transaction_marks_restart_effective(self):
+        from proxy_manager.traffic.astrbot import AstrBotProxyTransaction
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); config=root/'cmd_config.json'; data=root/'plugin'; data.mkdir()
+            config.write_text('{}',encoding='utf-8')
+            transaction=AstrBotProxyTransaction(data,config); entry='http://127.0.0.1:17890'
+            transaction.enable(entry)
+            active=transaction.mark_started(entry)
+            self.assertFalse(active['effective'])
+            with patch.dict(os.environ,{'http_proxy':entry,'https_proxy':entry},clear=False):
+                active=transaction.mark_started(entry)
+            self.assertEqual(active['status'],'active'); self.assertTrue(active['effective'])
+
+    def test_astrbot_core_verification_uses_process_proxy_and_fails_closed(self):
+        manager=self._manager_for_runtime(); entry=manager.state['proxy_entry']['http_url']
+        manager.astrbot_proxy=types.SimpleNamespace(status=lambda *_args:{'effective':True})
+        fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'url':'https://api.ipify.org?format=json'}))
+        client=AsyncMock(); client.__aenter__.return_value=client
+        client.get=AsyncMock(side_effect=self.module.httpx.ConnectError('kernel stopped'))
+        with patch('proxy_manager.plugin.request',fake_request), patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
+             patch.object(manager._adapter(),'connection_snapshot',AsyncMock(return_value=[])), \
+             patch.object(self.module.httpx,'AsyncClient',return_value=client) as factory:
+            result=asyncio.run(manager.verify_astrbot_egress())
+        self.assertFalse(result['verified']); self.assertEqual(result['scope'],'astrbot-core')
+        self.assertIn('未回落到直连',result['entry']['message'])
+        self.assertNotIn('proxy',factory.call_args.kwargs); self.assertTrue(factory.call_args.kwargs['trust_env'])
 
     def test_runtime_application_uses_verified_backup_when_primary_is_incomplete(self):
         manager=self._manager_for_runtime(); document=manager._runtime_document(); revision=manager._runtime_revision(document)

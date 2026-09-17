@@ -45,6 +45,8 @@
 .traffic-state.managed { color: var(--accent-strong); }
 .traffic-state.not_connected { color: var(--danger); }
 .traffic-state.unknown { color: var(--muted); }
+.proxy-status { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 14px; align-items: baseline; }
+.proxy-status code { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--muted); }
 .probe-progress { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 10px; align-items: center; margin: 12px 0; }
 .probe-progress progress { width: 100%; accent-color: var(--accent); }
 
