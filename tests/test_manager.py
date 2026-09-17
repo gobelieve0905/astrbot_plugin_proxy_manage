@@ -885,13 +885,20 @@ class TestConfigurationRules(unittest.TestCase):
         from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); config=root/'cmd_config.json'; data=root/'plugin'; data.mkdir()
+            mcp=root/'data'/'mcp_server.json'; mcp.parent.mkdir()
+            mcp.write_text(json.dumps({'mcpServers':{
+                'internal':{'url':'http://custom-mcp:6186/mcp'},
+                'private':{'url':'http://10.0.0.8/mcp'},
+                'external':{'url':'https://api.example.com/mcp'},
+            }}),encoding='utf-8')
             original={'http_proxy':'http://legacy:7890','no_proxy':['localhost','10.*','.feishu.cn'],'other':True}
             config.write_text(json.dumps(original),encoding='utf-8'); config.chmod(0o640)
-            transaction=AstrBotProxyTransaction(data,config)
+            with patch.dict(os.environ,{'ASTRBOT_ROOT':str(root)},clear=False): transaction=AstrBotProxyTransaction(data,config)
             pending=transaction.enable('http://127.0.0.1:17890')
             current=json.loads(config.read_text())
             self.assertEqual(current['http_proxy'],'http://127.0.0.1:17890')
-            self.assertEqual(tuple(current['no_proxy']),INTERNAL_NO_PROXY)
+            self.assertEqual(tuple(current['no_proxy']),INTERNAL_NO_PROXY+('10.0.0.8','custom-mcp'))
+            self.assertNotIn('api.example.com',current['no_proxy'])
             self.assertTrue(current['other']); self.assertEqual(pending['status'],'pending_restart')
             self.assertEqual(config.stat().st_mode & 0o777,0o640)
             restored=transaction.restore('http://127.0.0.1:17890')

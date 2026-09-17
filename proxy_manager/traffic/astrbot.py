@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import time
+import ipaddress
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
-INTERNAL_NO_PROXY = ('localhost', '127.0.0.1', '::1', 'applovin', 'applovin-account2')
+INTERNAL_NO_PROXY = ('localhost', '127.0.0.1', '::1')
 PROXY_KEYS = ('http_proxy', 'no_proxy')
 
 
@@ -17,6 +19,7 @@ class AstrBotProxyTransaction:
         self.path = data_dir / 'astrbot-proxy-transaction.json'
         root = Path(os.environ.get('ASTRBOT_ROOT', '/astrbot'))
         self.config_path = config_path or root / 'data' / 'cmd_config.json'
+        self.mcp_config_path = root / 'data' / 'mcp_server.json'
         if self.path.exists():
             try:
                 self.path.chmod(0o600)
@@ -73,9 +76,35 @@ class AstrBotProxyTransaction:
         return restored
 
     @staticmethod
-    def _managed(config: dict, entry: str) -> bool:
+    def _trusted_internal_host(host: str) -> bool:
+        value=host.rstrip('.').lower()
+        if value=='localhost' or value.endswith('.local'):
+            return True
+        try:
+            address=ipaddress.ip_address(value)
+            return address.is_loopback or address.is_private or address.is_link_local
+        except ValueError:
+            return bool(value) and '.' not in value and all(part and part.replace('-','').replace('_','').isalnum() for part in value.split('.'))
+
+    def _internal_mcp_hosts(self) -> tuple[str,...]:
+        try:
+            value=json.loads(self.mcp_config_path.read_text(encoding='utf-8-sig'))
+            servers=value.get('mcpServers',{}) if isinstance(value,dict) else {}
+        except (OSError,ValueError):
+            servers={}
+        hosts=set()
+        for server in servers.values() if isinstance(servers,dict) else ():
+            if not isinstance(server,dict): continue
+            host=urlsplit(str(server.get('url',''))).hostname
+            if host and self._trusted_internal_host(host): hosts.add(host.rstrip('.').lower())
+        return tuple(sorted(hosts))
+
+    def _expected_no_proxy(self) -> tuple[str,...]:
+        return tuple(dict.fromkeys((*INTERNAL_NO_PROXY,*self._internal_mcp_hosts())))
+
+    def _managed(self, config: dict, entry: str) -> bool:
         return (str(config.get('http_proxy') or '').rstrip('/') == entry.rstrip('/') and
-                tuple(config.get('no_proxy') or []) == INTERNAL_NO_PROXY)
+                tuple(config.get('no_proxy') or []) == self._expected_no_proxy())
 
     def status(self, entry: str, environ: dict | None = None) -> dict:
         environ = environ if environ is not None else os.environ
@@ -101,6 +130,7 @@ class AstrBotProxyTransaction:
             'restart_required': status in {'pending_restart', 'restore_pending_restart', 'restart_required', 'drifted'},
             'entry': entry,
             'no_proxy': list(config.get('no_proxy') or []),
+            'expected_no_proxy': list(self._expected_no_proxy()),
             'backup_available': bool(record.get('backup')),
             'message': {
                 'active': 'AstrBot 当前进程已使用插件稳定入口',
@@ -119,7 +149,7 @@ class AstrBotProxyTransaction:
             record['created_at'] = int(time.time())
         candidate = dict(config)
         candidate['http_proxy'] = entry
-        candidate['no_proxy'] = list(INTERNAL_NO_PROXY)
+        candidate['no_proxy'] = list(self._expected_no_proxy())
         self._write_json(self.config_path, candidate)
         self._store({**record, 'status': 'pending_restart', 'entry': entry, 'updated_at': int(time.time())})
         return self.status(entry)
