@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import sys
 import tempfile
@@ -44,6 +45,64 @@ class TestConfigurationRules(unittest.TestCase):
         manager.events = []; manager.health = {}
         self.assertEqual(manager.snapshot()["nodes"][0]["endpoint"], "socks5://[configured]")
 
+    def test_redacted_snapshot_round_trip_preserves_complete_credentials(self):
+        manager = self.module.ProxyManager.__new__(self.module.ProxyManager)
+        raw = {
+            'nodes': [{'id':'old','name':'AnyTLS','protocol':'anytls','kind':'mihomo',
+                       'endpoint':'anytls://user:node-pass@example.com:443?sni=example.com#HK',
+                       'connection':{'uri':'anytls://user:node-pass@example.com:443?sni=example.com#HK',
+                                     'server':'example.com','username':'user','password':'node-pass',
+                                     'tls':{'token':'nested-token'}},
+                       'subscription_id':'sub-a','enabled':True}],
+            'groups': [{'id':'direct','name':'直连','mode':'direct','node_ids':[],'selected':'','enabled':True}],
+            'routes': [], 'platforms': {},
+            'subscriptions': [{'id':'sub-a','name':'A','url':'https://sub.example/list?token=sub-token',
+                               'enabled':True,'interval':60,'node_ids':[]}],
+            'control': {'enabled':True,'url':'http://controller:9090','secret':'control-secret','timeout':8},
+            'proxy_entry': {'http_url':'http://proxy-user:proxy-pass@proxy:7890',
+                            'socks_url':'socks5://sock-user:sock-pass@proxy:7891','source':'configured'},
+        }
+        manager.state = manager._normalize(raw); manager.health = {}; manager.events = []
+        public = manager.snapshot()
+        serialized = json.dumps(public, ensure_ascii=False)
+        for secret in ('node-pass','nested-token','sub-token','control-secret','proxy-pass','sock-pass'):
+            self.assertNotIn(secret, serialized)
+        payload = copy.deepcopy(public)
+        manager._restore_redacted(payload)
+        restored = manager._validate(payload)
+        node = restored['nodes'][0]
+        self.assertEqual(node['endpoint'], manager.state['nodes'][0]['endpoint'])
+        self.assertEqual(node['connection'], manager.state['nodes'][0]['connection'])
+        self.assertEqual(restored['subscriptions'][0]['url'], manager.state['subscriptions'][0]['url'])
+        self.assertEqual(restored['control']['secret'], 'control-secret')
+        self.assertEqual(restored['proxy_entry'], manager.state['proxy_entry'])
+
+    def test_mask_keep_empty_clear_and_new_value_replace_are_distinct(self):
+        manager = self._manager_for_runtime()
+        manager.state['nodes'][0]['connection'] = {'password':'old-pass','token':'old-token'}
+        manager.state['proxy_entry'] = {'http_url':'http://old-proxy:7890','socks_url':'socks5://old-proxy:7891','source':'configured'}
+        manager.state['control']['secret'] = 'old-secret'
+        payload = manager.snapshot()
+        payload['control']['secret'] = ''
+        payload['proxy_entry']['http_url'] = ''
+        payload['proxy_entry']['socks_url'] = 'socks5://new-proxy:1080'
+        payload['nodes'][0]['connection']['password'] = 'new-pass'
+        payload['nodes'][0]['connection']['token'] = ''
+        manager._restore_redacted(payload)
+        self.assertEqual(payload['control']['secret'], '')
+        self.assertEqual(payload['proxy_entry']['http_url'], '')
+        self.assertEqual(payload['proxy_entry']['socks_url'], 'socks5://new-proxy:1080')
+        self.assertEqual(payload['nodes'][0]['endpoint'], manager.state['nodes'][0]['endpoint'])
+        self.assertEqual(payload['nodes'][0]['connection'], {'password':'new-pass','token':''})
+
+    def test_public_diagnostics_redact_urls_tokens_and_authorization(self):
+        manager = self._manager_for_runtime()
+        manager.health = {'hk-1': {'status':'error','error':'GET anytls://user:pass@host:443 failed token=abc'}}
+        manager.events = [{'at':1,'message':'Authorization: Bearer top-secret password=hunter2'}]
+        serialized = json.dumps(manager.snapshot(), ensure_ascii=False)
+        for secret in ('user:pass','abc','top-secret','hunter2'):
+            self.assertNotIn(secret, serialized)
+
     def test_persist_is_atomic_and_private(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = self.module.ProxyManager.__new__(self.module.ProxyManager)
@@ -52,6 +111,8 @@ class TestConfigurationRules(unittest.TestCase):
             asyncio.run(manager.persist(state))
             self.assertEqual(json.loads(manager.path.read_text())["version"], 2)
             self.assertEqual(manager.path.stat().st_mode & 0o777, 0o600)
+            asyncio.run(manager.persist(state))
+            self.assertEqual(manager.backup.stat().st_mode & 0o777, 0o600)
 
     def test_stable_node_id_and_error_redaction(self):
         helper = self.module.ProxyManager._stable_node_id

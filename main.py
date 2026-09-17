@@ -28,6 +28,12 @@ KINDS={"http","https","socks5","socks5h","mihomo"}
 MODES={"direct","select","url-test","fallback"}
 MATCHES={"exact","suffix"}
 ADVANCED_SCHEMES={"ss","ssr","vmess","vless","trojan","hysteria","hysteria2","tuic","anytls"}
+CONFIGURED='[configured]'
+SENSITIVE_KEYS={
+    'authorization','auth','password','passwd','secret','token','username','user','uuid','id',
+    'api-key','api_key','apikey','client-id','client_id',
+    'private-key','private_key','client-key','client_key','psk','credential','credentials',
+}
 REGIONS=[
     ("HK",r"香港|港|hk|hong\s*kong"), ("TW",r"台湾|臺灣|台|tw|taiwan"),
     ("JP",r"日本|日|jp|japan"), ("SG",r"新加坡|狮城|sg|singapore"),
@@ -76,7 +82,42 @@ def ident(value: object) -> str:
 def safe_error(value: object) -> str:
     """Keep diagnostics useful without persisting subscription credentials or URLs."""
     text=str(value or '')[:300]
-    return re.sub(r'(?i)(https?|socks5h?)://[^\s]+', lambda m: m.group(1)+'://[redacted]', text)
+    text=re.sub(r'(?i)(https?|socks5h?|ss|ssr|vmess|vless|trojan|hysteria2?|tuic|anytls)://[^\s]+',
+                lambda m: m.group(1)+'://[redacted]',text)
+    text=re.sub(r'(?i)(authorization\s*:\s*bearer|bearer)\s+[^\s,;]+',r'\1 [redacted]',text)
+    return re.sub(r'(?i)\b(password|passwd|secret|token|uuid|username)\s*[=:]\s*[^\s,;]+',
+                  lambda m:m.group(1)+'=[redacted]',text)
+
+
+def redact_config(value: object, key: str='') -> object:
+    """Create a browser-safe copy while preserving enough shape for editing."""
+    if isinstance(value,dict):
+        return {name:redact_config(item,str(name).lower()) for name,item in value.items()}
+    if isinstance(value,list): return [redact_config(item,key) for item in value]
+    if isinstance(value,str):
+        if key in SENSITIVE_KEYS and value: return CONFIGURED
+        if '://' in value and safe_proxy_endpoint(value):
+            return urlparse(value).scheme+'://'+CONFIGURED
+    return value
+
+
+def restore_config(value: object, previous: object) -> object:
+    """A mask keeps the old value; an empty or new value explicitly clears/replaces it."""
+    if isinstance(value,str) and (value==CONFIGURED or value.endswith('://'+CONFIGURED)):
+        return copy.deepcopy(previous)
+    if isinstance(value,dict) and isinstance(previous,dict):
+        return {key:restore_config(item,previous.get(key)) for key,item in value.items()}
+    if isinstance(value,list) and isinstance(previous,list):
+        return [restore_config(item,previous[index] if index<len(previous) else None)
+                for index,item in enumerate(value)]
+    return value
+
+
+def redact_diagnostics(value: object) -> object:
+    if isinstance(value,dict): return {key:redact_diagnostics(item) for key,item in value.items()}
+    if isinstance(value,list): return [redact_diagnostics(item) for item in value]
+    if isinstance(value,(str,Exception)): return safe_error(value)
+    return value
 
 
 def region_of(name: str) -> str:
@@ -266,7 +307,7 @@ class ProxyManager(Star):
             raise ValueError('控制接口地址无效，只允许 HTTP 或 HTTPS')
         for key in ('http_url','socks_url'):
             value=state['proxy_entry'][key]
-            if value and not safe_url(value):
+            if value and not safe_url(value,credentials=True):
                 raise ValueError('代理入口地址无效：'+key)
         if state['control']['deployment']=='dedicated' and state['control']['scope']=='full':
             raise ValueError('插件暂不允许接管独立内核的完整配置，请使用受限配置范围')
@@ -304,22 +345,24 @@ class ProxyManager(Star):
     def snapshot(self) -> dict:
         result=json.loads(json.dumps(self.state))
         for node in result['nodes']:
-            if node['endpoint']: node['endpoint']=urlparse(node['endpoint']).scheme+'://[configured]'
-            if isinstance(node.get('connection'),dict) and node['connection'].get('uri'):
-                node['connection']['uri']=urlparse(node['connection']['uri']).scheme+'://[configured]'
+            if node['endpoint']: node['endpoint']=urlparse(node['endpoint']).scheme+'://'+CONFIGURED
+            node['connection']=redact_config(node.get('connection',{}),'connection')
         for subscription in result['subscriptions']:
-            subscription['url']=urlparse(subscription['url']).scheme+'://[configured]'
-        result['control']['secret']='[configured]' if result['control']['secret'] else ''
+            subscription['url']=urlparse(subscription['url']).scheme+'://'+CONFIGURED
+        result['control']['secret']=CONFIGURED if result['control']['secret'] else ''
         result.setdefault('proxy_entry', {'http_url':'', 'socks_url':'', 'source':'unknown'})
         for key in ('http_url','socks_url'):
-            if result['proxy_entry'][key]: result['proxy_entry'][key]=urlparse(result['proxy_entry'][key]).scheme+'://[configured]'
-        result['health']=self.health
-        result['events']=self.events[-50:]; result['templates']=TEMPLATES
+            if result['proxy_entry'][key]: result['proxy_entry'][key]=urlparse(result['proxy_entry'][key]).scheme+'://'+CONFIGURED
+        result['health']=redact_diagnostics(self.health)
+        result['events']=redact_diagnostics(self.events[-50:]); result['templates']=TEMPLATES
         return result
 
     async def persist(self,state:dict):
         normalized=self._normalize(state)
-        if self.path.exists(): self.backup.write_text(self.path.read_text(encoding='utf-8'),encoding='utf-8')
+        if self.path.exists():
+            self.backup.write_text(self.path.read_text(encoding='utf-8'),encoding='utf-8')
+            try: self.backup.chmod(0o600)
+            except OSError: pass
         temp=self.path.with_suffix('.tmp')
         temp.write_text(json.dumps(normalized,ensure_ascii=False,indent=2),encoding='utf-8')
         try: temp.chmod(0o600)
@@ -330,34 +373,47 @@ class ProxyManager(Star):
         try:
             temp=self.health_path.with_suffix('.tmp')
             temp.write_text(json.dumps(self.health,ensure_ascii=False,indent=2),encoding='utf-8')
+            try: temp.chmod(0o600)
+            except OSError: pass
             temp.replace(self.health_path)
         except OSError:
             logger.warning('节点健康状态写入失败')
 
     def event(self,data:dict):
-        item={'at':int(time.time()),**data}
+        item={'at':int(time.time()),**{
+            key:safe_error(value) if isinstance(value,(str,Exception)) else value for key,value in data.items()
+        }}
         self.events=(self.events+[item])[-100:]
         try:
             with self.events_path.open('a',encoding='utf-8') as stream:
                 stream.write(json.dumps(item,ensure_ascii=False)+'\n')
+            try: self.events_path.chmod(0o600)
+            except OSError: pass
         except OSError:
             logger.warning('代理中心事件写入失败')
 
     def _restore_redacted(self,payload:dict):
         old_nodes={node['id']:node for node in self.state['nodes']}
         for node in payload.get('nodes',[]):
-            if isinstance(node,dict) and node.get('id') in old_nodes and str(node.get('endpoint','')).endswith('://[configured]'):
-                node['endpoint']=old_nodes[node['id']]['endpoint']
+            if isinstance(node,dict) and node.get('id') in old_nodes:
+                previous=old_nodes[node['id']]
+                node['endpoint']=restore_config(node.get('endpoint',''),previous.get('endpoint',''))
+                node['connection']=restore_config(node.get('connection',{}),previous.get('connection',{}))
         old_subs={item['id']:item for item in self.state['subscriptions']}
         for item in payload.get('subscriptions',[]):
-            if isinstance(item,dict) and item.get('id') in old_subs and str(item.get('url','')).endswith('://[configured]'):
-                item['url']=old_subs[item['id']]['url']
+            if isinstance(item,dict) and item.get('id') in old_subs:
+                item['url']=restore_config(item.get('url',''),old_subs[item['id']].get('url',''))
         control=payload.get('control')
-        if isinstance(control,dict) and control.get('secret')=='[configured]':
-            control['secret']=self.state['control']['secret']
+        if isinstance(control,dict):
+            control['secret']=restore_config(control.get('secret',''),self.state['control'].get('secret',''))
+        entry=payload.get('proxy_entry')
+        if isinstance(entry,dict):
+            previous=self.state.get('proxy_entry',{})
+            for key in ('http_url','socks_url'):
+                entry[key]=restore_config(entry.get(key,''),previous.get(key,''))
 
     async def state_page(self): return json_response(self.snapshot())
-    async def events_page(self): return json_response({'events':self.events[-100:]})
+    async def events_page(self): return json_response({'events':redact_diagnostics(self.events[-100:])})
     async def templates(self): return json_response({'templates':TEMPLATES})
 
     async def save(self):
