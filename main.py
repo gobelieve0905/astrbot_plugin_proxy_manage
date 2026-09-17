@@ -18,7 +18,7 @@ from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.api.web import error_response, json_response, request
 
 
-DIRECT = {"id":"direct","name":"直连","mode":"direct","node_ids":[],"selected":"","enabled":True}
+DIRECT = {"id":"direct","name":"直连","kernel_name":"DIRECT","mode":"direct","node_ids":[],"selected":"","enabled":True}
 TEMPLATES = {
     "telegram":{"name":"Telegram","hosts":["api.telegram.org"]},
     "meta":{"name":"Meta","hosts":["graph.facebook.com","graph-video.facebook.com"]},
@@ -278,6 +278,8 @@ class ProxyManager(Star):
             normalized_node={
                 'id':node_id, 'name':str(item.get('name',item.get('display_name',item['id'])))[:120],
                 'display_name':str(item.get('display_name',item.get('name',item['id'])))[:120],
+                'source_name':str(item.get('source_name',item.get('name',item['id'])))[:120],
+                'user_alias':str(item.get('user_alias',''))[:120],
                 'protocol':protocol[:24], 'engine':str(item.get('engine') or ('direct-http' if protocol in {'http','https','socks5','socks5h'} else 'mihomo'))[:24],
                 'kind':str(item.get('kind') or ('mihomo' if protocol in ADVANCED_SCHEMES else protocol))[:24],
                 'endpoint':endpoint, 'connection':connection,
@@ -308,6 +310,7 @@ class ProxyManager(Star):
                 if item.get('endpoint'):
                     endpoint=str(item['endpoint']).strip(); protocol=infer_protocol(item); support_status,support_reason=protocol_support(protocol)
                     nodes.append({'id':node_id,'name':str(item.get('name',item_id))[:120],'display_name':str(item.get('name',item_id))[:120],
+                                  'source_name':str(item.get('name',item_id))[:120],'user_alias':'',
                                   'protocol':protocol,'engine': 'mihomo' if protocol in ADVANCED_SCHEMES else 'direct-http',
                                   'kind':str(item.get('kind') or protocol)[:24], 'endpoint':endpoint,'connection':{'uri':endpoint},
                                   'subscription_id':'','enabled':True,'excluded':False,'exclusion_reason':'','invalid_reference':False,
@@ -324,6 +327,7 @@ class ProxyManager(Star):
                 continue
             groups.append({
                 'id':ident(item['id']), 'name':str(item.get('name',item['id']))[:80],
+                'kernel_name':'DIRECT' if ident(item['id'])=='direct' else 'group-'+ident(item['id']),
                 'mode':item.get('mode') if item.get('mode') in MODES else 'select',
                 'node_ids':list(dict.fromkeys(self._id_aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value))),
                 'selected':self._id_aliases.get(ident(item.get('selected')),ident(item.get('selected'))), 'enabled':bool(item.get('enabled',True)),
@@ -357,7 +361,7 @@ class ProxyManager(Star):
         sub_values=source.get('subscriptions',[]) if isinstance(source.get('subscriptions',[]),list) else []
         for index,item in enumerate(sub_values):
             if not isinstance(item,dict) or not safe_url(item.get('url')): continue
-            interval=int(item.get('interval',60) or 60)
+            interval=int(item['interval']) if item.get('interval') is not None else 60
             interval=0 if interval<=0 else max(5,min(interval,1440))
             errors=[]
             for error in item.get('errors',[]) if isinstance(item.get('errors',[]),list) else []:
@@ -372,7 +376,7 @@ class ProxyManager(Star):
                 'upload':max(0,int(item.get('upload',0) or 0)), 'download':max(0,int(item.get('download',0) or 0)),
                 'total':max(0,int(item.get('total',0) or 0)), 'expire':int(item.get('expire',0) or 0),
                 'last_error':str(item.get('last_error',''))[:300], 'consecutive_errors':max(0,int(item.get('consecutive_errors',0) or 0)),
-                'errors':errors[-20:],
+                'errors':errors[-20:], 'last_diff':copy.deepcopy(item.get('last_diff')) if isinstance(item.get('last_diff'),dict) else {},
             })
 
         control=source.get('control') if isinstance(source.get('control'),dict) else {}
@@ -634,6 +638,7 @@ class ProxyManager(Star):
             status,reason=protocol_support(protocol); notice,notice_reason=suspected_notice(name)
             node_id=self._stable_node_id(subscription_id,endpoint,protocol,connection)
             node={'id':node_id,'name':str(name)[:120],'display_name':str(name)[:120],'protocol':protocol,
+                  'source_name':str(name)[:120],'user_alias':'',
                   'engine':'direct-http' if protocol in {'http','https','socks5','socks5h'} else 'mihomo',
                   'kind':protocol if protocol in {'http','https','socks5','socks5h'} else 'mihomo',
                   'endpoint':endpoint,'connection':copy.deepcopy(connection),'subscription_id':subscription_id,
@@ -725,7 +730,7 @@ class ProxyManager(Star):
             if not isinstance(urls,list) or not urls: raise ValueError('请输入订阅链接')
             if len(urls)>10: raise ValueError('每次最多预览 10 个订阅')
             group=str(payload.get('group','默认'))[:40] or '默认'
-            interval=int(payload.get('interval',60) or 60)
+            interval=int(payload['interval']) if payload.get('interval') is not None else 60
             interval=0 if interval<=0 else max(5,min(interval,1440))
             items=[]; preview_id=''
             for index,url in enumerate(urls):
@@ -752,16 +757,39 @@ class ProxyManager(Star):
     def _replace_subscription_nodes(self,subscription:dict,nodes:list[dict]):
         old=set(subscription['node_ids']); incoming={node['id'] for node in nodes}
         existing={node['id']:node for node in self.state['nodes'] if node['id'] in old}
+        changed=[]; unchanged=[]
         for node in nodes:
             previous=existing.get(node['id'])
             if previous:
                 for key in ('excluded','exclusion_reason'):
                     node[key]=previous.get(key,node.get(key))
+                alias=previous.get('user_alias')
+                if not alias and previous.get('display_name')!=previous.get('source_name'):
+                    alias=previous.get('display_name')
+                if alias:
+                    node['user_alias']=alias; node['display_name']=alias; node['name']=alias
+                if node.get('support',{}).get('status')=='supported': node['enabled']=previous.get('enabled',node['enabled'])
+                node['invalid_reference']=False
+                target=changed if previous.get('parameter_version')!=node.get('parameter_version') else unchanged
+                target.append(self._node_ref(node))
+                if target is changed: self.health.pop(node['id'],None)
         for node in self.state['nodes']:
             if node['id'] in old and node['id'] not in incoming:
                 node['enabled']=False; node['invalid_reference']=True; node['exclusion_reason']='订阅已删除或节点参数已变更'
         self.state['nodes']=[node for node in self.state['nodes'] if node['id'] not in incoming]+nodes
         subscription['node_ids']=[node['id'] for node in nodes]
+        diff={'at':int(time.time()),
+              'added':[self._node_ref(node) for node in nodes if node['id'] not in old],
+              'changed':changed,
+              'deleted':[self._node_ref(existing[node_id]) for node_id in old-incoming if node_id in existing],
+              'unchanged':unchanged}
+        subscription['last_diff']=diff
+        return diff
+
+    @staticmethod
+    def _node_ref(node:dict) -> dict:
+        return {'id':node['id'],'name':node.get('display_name',node.get('name',node['id'])),
+                'protocol':node.get('protocol','unknown'),'parameter_version':node.get('parameter_version','')}
 
     @staticmethod
     def _stable_node_id(subscription_id:str, endpoint:str, protocol:str='', connection:object=None) -> str:
@@ -774,8 +802,8 @@ class ProxyManager(Star):
         subscription['last_error']=safe_error(message)
         subscription['consecutive_errors']=int(subscription.get('consecutive_errors',0))+1
         subscription['errors']=(subscription.get('errors',[])+[{'at':now,'message':safe_error(message)}])[-20:]
-        interval=max(int(subscription.get('interval',60) or 60),5)
-        subscription['next_refresh_at']=now+min(max(interval,300),3600)
+        interval=int(subscription.get('interval',60) if subscription.get('interval') is not None else 60)
+        subscription['next_refresh_at']=now+min(max(interval*60,300),3600) if interval>0 else 0
 
     async def _refresh_subscription(self,subscription_id:str):
         async with self.refresh_lock:
@@ -791,26 +819,27 @@ class ProxyManager(Star):
             async with self.lock:
                 subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
                 if not subscription: raise ValueError('订阅已在刷新时被删除')
-                previous=copy.deepcopy(self.state)
+                previous=copy.deepcopy(self.state); previous_health=copy.deepcopy(self.health)
                 try:
                     for node in nodes:
                         node['id']=self._stable_node_id(subscription_id,node['endpoint'],node.get('protocol',''),node.get('connection'))
                         node['kernel_name']='node-'+node['id']
                         node['subscription_id']=subscription_id
-                    self._replace_subscription_nodes(subscription,nodes)
+                    diff=self._replace_subscription_nodes(subscription,nodes)
                     now=int(time.time()); traffic=self._traffic_header(response.headers)
                     subscription.update({'updated_at':now,'upload':max(0,int(traffic.get('upload',subscription.get('upload',0)) or 0)),
                                          'download':max(0,int(traffic.get('download',subscription.get('download',0)) or 0)),
                                          'total':max(0,int(traffic.get('total',subscription.get('total',0)) or 0)),
                                          'expire':int(traffic.get('expire',subscription.get('expire',0)) or 0),
                                          'last_error':'','consecutive_errors':0})
-                    interval=int(subscription.get('interval',60) or 60)
+                    interval=int(subscription.get('interval',60) if subscription.get('interval') is not None else 60)
                     subscription['next_refresh_at']=now+interval*60 if interval else 0
-                    self.state=self._validate(self.state); await self.persist(self.state)
+                    self.state=self._validate(self.state); await self.persist(self.state); self.persist_health()
                 except Exception:
-                    self.state=previous; raise
-            self.event({'action':'subscription_refresh','subscription_id':subscription_id,'result':'ok','count':len(nodes)})
-            return {'count':len(nodes),'summary':self._summary(nodes,set())}
+                    self.state=previous; self.health=previous_health; raise
+            self.event({'action':'subscription_refresh','subscription_id':subscription_id,'result':'ok','count':len(nodes),
+                        'added':len(diff['added']),'changed':len(diff['changed']),'deleted':len(diff['deleted']),'unchanged':len(diff['unchanged'])})
+            return {'count':len(nodes),'summary':self._summary(nodes,set()),'diff':diff}
 
     async def _refresh_with_retry(self,subscription_id:str,attempts:int=2):
         last_error=''
@@ -836,11 +865,13 @@ class ProxyManager(Star):
 
     async def subscription_import(self):
         try:
-            payload=await request.json(); preview=self.previews.get(str(payload.get('preview_id','')))
-            if not preview: raise ValueError('导入预览已过期，请重新预览')
-            imported=[]
+            payload=await request.json(); preview_id=str(payload.get('preview_id','')); imported=[]
             async with self.lock:
-                previous=copy.deepcopy(self.state)
+                preview=self.previews.get(preview_id)
+                if not preview or int(time.time())-int(preview.get('at',0))>=900:
+                    self.previews.pop(preview_id,None); raise ValueError('导入预览已过期，请重新预览')
+                preview=copy.deepcopy(preview)
+                previous=copy.deepcopy(self.state); previous_health=copy.deepcopy(self.health)
                 try:
                     for item in preview['items']:
                         if not item['nodes']: continue
@@ -864,9 +895,10 @@ class ProxyManager(Star):
                         subscription['updated_at']=now
                         subscription['next_refresh_at']=now+interval*60 if interval else 0
                         imported.append(subscription['id'])
-                    self.state=self._validate(self.state); await self.persist(self.state)
+                    self.state=self._validate(self.state); await self.persist(self.state); self.persist_health()
+                    self.previews.pop(preview_id,None)
                 except Exception:
-                    self.state=previous; raise
+                    self.state=previous; self.health=previous_health; raise
             self.event({'action':'subscription_import','result':'ok','count':len(imported)})
             return json_response(self.snapshot())
         except (ValueError,OSError) as exc: return error_response(str(exc))
@@ -974,11 +1006,11 @@ class ProxyManager(Star):
             mode={'select':'select','url-test':'url-test','fallback':'fallback'}.get(group['mode'],'select')
             members=[runnable[node_id]['kernel_name'] for node_id in group['node_ids'] if node_id in runnable]
             if not members: raise ValueError('代理组没有可应用的已验证节点：'+group['name'])
-            item={'name':group['name'],'type':mode,'proxies':members}
+            item={'name':group.get('kernel_name','group-'+group['id']),'type':mode,'proxies':members}
             if group['mode'] in {'url-test','fallback'}:
                 item.update({'url':'https://www.gstatic.com/generate_204','interval':300,'tolerance':50})
             groups.append(item)
-        names={item['id']:item['name'] for item in self.state['groups']}
+        names={item['id']:('DIRECT' if item['id']=='direct' else item.get('kernel_name','group-'+item['id'])) for item in self.state['groups']}
         rules=[]
         for route in self.state['routes']:
             if not route['enabled'] or route['target'] not in names: continue
@@ -999,8 +1031,10 @@ class ProxyManager(Star):
                 provider['url']=urlparse(provider['url']).scheme+'://[configured]'
             preview['proxies']=redact_config(preview.get('proxies',[]))
             return json_response({'config':preview,'mapping':{
-                node['id']:{'name':node['name'],'kernel_name':node.get('kernel_name'),'subscription_id':node['subscription_id']}
-                for node in self.state['nodes'] if node['enabled']
+                'nodes':{node['id']:{'name':node['name'],'kernel_name':node.get('kernel_name'),'subscription_id':node['subscription_id']}
+                         for node in self.state['nodes'] if node['enabled']},
+                'groups':{group['id']:{'name':group['name'],'kernel_name':group.get('kernel_name')}
+                          for group in self.state['groups'] if group['enabled']},
             },'applied':False})
         except (ValueError,TypeError) as exc:
             return error_response(str(exc))
@@ -1103,19 +1137,46 @@ class ProxyManager(Star):
             control,headers=self._control()
             async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
                 version=await client.get('/version'); version.raise_for_status(); proxies=await client.get('/proxies'); proxies.raise_for_status()
-            return json_response({'version':version.json(),'proxies':proxies.json().get('proxies',{})})
+            runtime=proxies.json().get('proxies',{})
+            nodes={node.get('kernel_name'):node for node in self.state['nodes']}
+            groups=[]
+            for group in self.state['groups']:
+                if group['id']=='direct' or not group.get('enabled',True): continue
+                kernel_name=group.get('kernel_name','group-'+group['id']); current=runtime.get(kernel_name,{})
+                members=[]
+                for node_id in group.get('node_ids',[]):
+                    node=next((item for item in self.state['nodes'] if item['id']==node_id),None)
+                    if not node: continue
+                    available=bool(node.get('enabled') and not node.get('excluded') and not node.get('invalid_reference')
+                                   and node.get('support',{}).get('status','supported')=='supported')
+                    members.append({'id':node['id'],'display_name':node.get('display_name',node.get('name',node['id'])),
+                                    'kernel_name':node.get('kernel_name'),'available':available})
+                selected=nodes.get(current.get('now')) if isinstance(current,dict) else None
+                groups.append({'id':group['id'],'display_name':group['name'],'kernel_name':kernel_name,
+                               'type':current.get('type','') if isinstance(current,dict) else '',
+                               'selected_node_id':selected.get('id','') if selected else '',
+                               'selected_display_name':selected.get('display_name',selected.get('name','')) if selected else '',
+                               'members':members})
+            return json_response({'version':version.json(),'groups':groups})
         except (ValueError,httpx.HTTPError,TypeError): return error_response('控制接口连接失败，请检查地址、密钥和网络')
 
     async def control_select(self):
         try:
             payload=await request.json(); control,headers=self._control()
-            name=str(payload.get('name','')); node=str(payload.get('node',''))
-            if not name or not node: raise ValueError('代理组名称和节点名称不能为空')
+            group_id=ident(payload.get('group_id')); node_id=ident(payload.get('node_id'))
+            group=next((item for item in self.state['groups'] if item['id']==group_id and item['id']!='direct'),None)
+            node=next((item for item in self.state['nodes'] if item['id']==node_id),None)
+            if not group or not node or node_id not in group.get('node_ids',[]): raise ValueError('代理组或节点引用无效')
+            if not node.get('enabled') or node.get('excluded') or node.get('invalid_reference') or node.get('support',{}).get('status','supported')!='supported':
+                raise ValueError('节点当前不可用于切换')
+            name=group.get('kernel_name','group-'+group_id); kernel_node=node.get('kernel_name','node-'+node_id)
             async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
-                response=await client.request('PUT','/proxies/'+quote(name,safe=''),json={'name':node}); response.raise_for_status()
-            self.event({'action':'control_select','group':name,'node':node,'result':'ok'})
+                response=await client.request('PUT','/proxies/'+quote(name,safe=''),json={'name':kernel_node}); response.raise_for_status()
+            group['selected']=node_id; await self.persist(self.state)
+            self.event({'action':'control_select','group_id':group_id,'node_id':node_id,'result':'ok'})
             return json_response({'ok':True})
-        except (ValueError,httpx.HTTPError): return error_response('代理组切换失败，请检查控制接口权限')
+        except ValueError as exc: return error_response(str(exc))
+        except httpx.HTTPError: return error_response('代理组切换失败，请检查控制接口权限')
 
     async def _auto_loop(self):
         while True:

@@ -34,7 +34,7 @@ function render(){
     const shown=current==='全部'?state.subscriptions:state.subscriptions.filter(item=>item.group===current)
     html=`<section class="panel"><div class="bar"><h2>导入订阅</h2><button id="preview-import">预览导入</button></div>
       <textarea id="sub-links" rows="4" placeholder="每行一个 HTTP/HTTPS 订阅链接"></textarea>
-      <div class="import-form"><input id="import-group" value="主力" placeholder="订阅分组"><input id="import-interval" type="number" min="5" max="1440" value="60"><small>间隔分钟，0 表示手动</small><button id="confirm-import" ${importPreview?'':'disabled'}>确认导入</button></div>
+      <div class="import-form"><input id="import-group" value="主力" placeholder="订阅分组"><input id="import-interval" type="number" min="0" max="1440" value="60"><small>间隔分钟，0 表示手动</small><button id="confirm-import" ${importPreview?'':'disabled'}>确认导入</button></div>
       <pre id="import-result">${esc(importPreview?JSON.stringify(importPreview.items.map(item=>({url:item.url,summary:item.summary})),null,2):'导入前会先预览协议、地区、命名规则和订阅流量。')}</pre></section>
       <section class="panel"><div class="bar"><h2>订阅列表</h2><button id="add-subscription">新增订阅</button></div>
       <div class="filter"><select id="group-filter"><option>全部</option>${groups.map(group=>`<option ${group===current?'selected':''}>${esc(group)}</option>`).join('')}</select></div>
@@ -53,9 +53,9 @@ function render(){
   } else if(tab==='platforms'){
     html=`<section class="panel"><h2>平台策略</h2>${Object.entries(state.templates).map(([id,template])=>`<div class="platform"><b>${esc(template.name)}</b><small>${esc(template.hosts.join(' · '))}</small><select data-platform="${esc(id)}">${groupOptions((state.platforms[id]||{}).group_id||'direct')}</select><button data-template="${esc(id)}">应用模板</button></div>`).join('')}</section>`
   } else if(tab==='control'){
-    const groups=Object.entries(controlResult?.proxies||{}).filter(([,group])=>['Selector','URLTest','Fallback','LoadBalance'].includes(group.type))
+    const groups=controlResult?.groups||[]
     html=`<section class="panel"><div class="bar"><h2>Mihomo / Clash 外部控制</h2><div class="actions"><button id="control-status">保存并检查</button><button id="runtime-apply" class="primary">应用代理配置</button></div></div><div class="control-form"><label><input type="checkbox" data-ck="enabled" ${state.control.enabled?'checked':''}> 启用</label><input id="control-url" value="${esc(state.control.url)}" placeholder="控制接口地址，如 http://host:9090"><input id="control-secret" type="password" value="${esc(state.control.secret)}" placeholder="控制接口密钥"><input id="control-timeout" type="number" min="3" max="30" value="${state.control.timeout}"><select id="control-deployment"><option value="existing" ${state.control.deployment==='existing'?'selected':''}>现有内核</option><option value="dedicated" ${state.control.deployment==='dedicated'?'selected':''}>独立内核</option></select><select id="control-scope"><option value="providers-groups-rules" ${state.control.scope==='providers-groups-rules'?'selected':''}>仅管理订阅/代理组/规则</option><option value="full" ${state.control.scope==='full'?'selected':''}>完整配置（暂不支持）</option></select><input id="proxy-http-url" value="${esc(state.proxy_entry?.http_url||'')}" placeholder="实际 HTTP 代理入口，如 http://host:7890"><input id="proxy-socks-url" value="${esc(state.proxy_entry?.socks_url||'')}" placeholder="实际 SOCKS 代理入口（可选）"></div><p class="muted">控制接口用于管理和核对内核；代理入口用于 AstrBot 实际出站，两者地址可以不同。</p></section>
-      ${groups.length?`<section class="panel"><h2>代理组状态</h2>${groups.map(([name,group])=>`<div class="control-group"><b>${esc(name)}</b><small>${esc(group.type)} · ${esc(group.now||'无')}</small><select data-select="${esc(name)}">${(group.all||[]).map(node=>`<option value="${esc(node)}" ${node===group.now?'selected':''}>${esc(node)}</option>`).join('')}</select></div>`).join('')}</section>`:'<section class="panel"><p class="muted">尚未检查，或控制接口没有可切换代理组。</p></section>'}`
+      ${groups.length?`<section class="panel"><h2>代理组状态</h2>${groups.map(group=>`<div class="control-group"><b>${esc(group.display_name)}</b><small>${esc(group.type)} · ${esc(group.selected_display_name||'无')}</small><select data-select="${esc(group.id)}">${group.members.map(node=>`<option value="${esc(node.id)}" ${node.id===group.selected_node_id?'selected':''} ${node.available?'':'disabled'}>${esc(node.display_name)}${node.available?'':'（不可用）'}</option>`).join('')}</select></div>`).join('')}</section>`:'<section class="panel"><p class="muted">尚未检查，或控制接口没有可切换代理组。</p></section>'}`
   } else {
     html=`<section class="panel"><h2>连接日志</h2>${state.events.slice().reverse().map(event=>`<div class="log">${esc(event.action)} · ${esc(event.result||'')}<small>${new Date(event.at*1000).toLocaleString()}</small></div>`).join('')||'<p class="muted">暂无事件。</p>'}</section>`
   }
@@ -67,6 +67,7 @@ function subHtml(item){
     <div class="table"><input data-k="name" value="${esc(item.name)}"><input data-k="group" value="${esc(item.group)}" list="sub-groups"><input data-k="url" value="${esc(item.url)}"><label><input type="checkbox" data-k="enabled" ${item.enabled?'checked':''}>启用</label><button data-del="subscriptions">删除</button></div>
     <div class="sub-meta"><span>${item.node_ids.length} 节点</span><span>${traffic(item)}</span><span>${expiry(item.expire)}</span><span>更新：${time(item.updated_at)}</span><span>下次：${nextRun(item)}</span><input class="interval" type="number" min="0" max="1440" data-k="interval" value="${item.interval}"><button data-refresh="${esc(item.id)}">刷新</button></div>
     ${item.last_error?`<div class="node-error">${esc(item.last_error)}（连续失败 ${item.consecutive_errors} 次）</div>`:''}
+    ${item.last_diff?.at?`<details><summary>最近差异：新增 ${item.last_diff.added?.length||0}、变更 ${item.last_diff.changed?.length||0}、删除 ${item.last_diff.deleted?.length||0}、未变 ${item.last_diff.unchanged?.length||0}</summary><pre>${esc(JSON.stringify(item.last_diff,null,2))}</pre></details>`:''}
     ${item.errors?.length?`<details><summary>错误历史 ${item.errors.length}</summary>${item.errors.slice().reverse().map(error=>`<div class="node-error">${new Date(error.at*1000).toLocaleString()} · ${esc(error.message)}</div>`).join('')}</details>`:''}</div>`
 }
 
@@ -74,7 +75,7 @@ function bind(){
   document.querySelectorAll('[data-k]').forEach(input=>input.addEventListener('change',()=>{
     const row=input.closest('[data-i]'); if(!row)return
     if(tab==='subscriptions'){ const item=state.subscriptions[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value }
-    else if(tab==='nodes'){ const item=state.nodes[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.value; if(input.dataset.k==='name')item.display_name=input.value }
+    else if(tab==='nodes'){ const item=state.nodes[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.value; if(input.dataset.k==='name'){item.display_name=input.value;item.user_alias=input.value} }
     else if(tab==='groups'){ const item=state.groups[Number(row.dataset.i)]; item[input.dataset.k]=input.value }
     else { const item=state.routes[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='number'?Number(input.value):input.value }
   }))
@@ -110,7 +111,7 @@ function bind(){
   $('preview')?.addEventListener('click',async()=>{$('result').textContent=JSON.stringify(await api.apiPost('preview',{host:$('host').value}),null,2)})
   $('control-status')?.addEventListener('click',checkControl)
   $('runtime-apply')?.addEventListener('click',async()=>{try{await saveChanges();await api.apiPost('runtime-apply',{});controlResult=await api.apiGet('control-status');render();note('代理配置已应用并完成运行状态核对')}catch(error){note(error.message,true)}})
-  document.querySelectorAll('[data-select]').forEach(select=>select.addEventListener('change',async()=>{try{await api.apiPost('control-select',{name:select.dataset.select,node:select.value});await checkControl();note('代理组已切换')}catch(error){note(error.message,true)}}))
+  document.querySelectorAll('[data-select]').forEach(select=>select.addEventListener('change',async()=>{try{await api.apiPost('control-select',{group_id:select.dataset.select,node_id:select.value});await checkControl();note('代理组已切换')}catch(error){note(error.message,true)}}))
 }
 
 function readControl(){ if(tab!=='control')return; state.control={enabled:document.querySelector('[data-ck]')?.checked??state.control.enabled,url:$('control-url').value,secret:$('control-secret').value,timeout:Number($('control-timeout').value||8),deployment:$('control-deployment').value,scope:$('control-scope').value}; state.proxy_entry={...(state.proxy_entry||{}),http_url:$('proxy-http-url').value,socks_url:$('proxy-socks-url').value,source:'configured'} }
@@ -118,14 +119,14 @@ async function saveChanges(){ readControl(); state=await api.apiPost('save',stat
 async function previewImport(){
   const urls=$('sub-links').value.split(/\s+/).filter(Boolean); if(!urls.length)return note('请先输入订阅链接',true)
   const button=$('preview-import'); button.disabled=true; note('正在预览订阅...')
-  try{ importPreview=await api.apiPost('subscription-preview',{urls,group:$('import-group').value||'默认',interval:Number($('import-interval').value||60)});render();note('预览完成，请确认后导入') }catch(error){note(error.message,true)}finally{button.disabled=false}
+  try{ importPreview=await api.apiPost('subscription-preview',{urls,group:$('import-group').value||'默认',interval:Number($('import-interval').value)});render();note('预览完成，请确认后导入') }catch(error){note(error.message,true)}finally{button.disabled=false}
 }
 async function confirmImport(){
   if(!importPreview||importing)return; importing=true
   try{ state=await api.apiPost('subscription-import',{preview_id:importPreview.preview_id});original=structuredClone(state);importPreview=null;render();note('订阅导入成功') }catch(error){note(error.message,true)}finally{importing=false}
 }
 async function refreshSubscription(id){
-  try{ note('正在刷新订阅...'); const result=await api.apiPost('subscription-refresh',{id});state=result.snapshot;original=structuredClone(state);render();note('订阅刷新成功') }catch(error){note(error.message,true)}
+  try{ note('正在刷新订阅...'); const result=await api.apiPost('subscription-refresh',{id});state=result.snapshot;original=structuredClone(state);render();const d=result.result.diff;note(`订阅刷新成功：新增 ${d.added.length}、变更 ${d.changed.length}、删除 ${d.deleted.length}、未变 ${d.unchanged.length}`) }catch(error){note(error.message,true)}
 }
 async function checkControl(){
   try{ await saveChanges();controlResult=await api.apiGet('control-status');render();note('控制接口连接成功') }catch(error){note(error.message,true)}

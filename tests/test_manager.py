@@ -140,9 +140,9 @@ class TestConfigurationRules(unittest.TestCase):
                 {"id": "sg-1", "name": "SG 1", "display_name":"SG 1", "protocol":"anytls", "engine":"mihomo", "kind": "mihomo", "endpoint": "anytls://secret2@example.com:443", "connection":{"uri":"anytls://secret2@example.com:443"}, "kernel_name":"node-sg-1", "support":{"status":"supported","reason":""}, "subscription_id": "sub-sg", "enabled": True},
             ],
             "groups": [
-                {"id": "direct", "name": "直连", "mode": "direct", "node_ids": [], "selected": "", "enabled": True},
-                {"id": "hk", "name": "香港自动", "mode": "url-test", "node_ids": ["hk-1"], "selected": "hk-1", "enabled": True},
-                {"id": "sg", "name": "新加坡自动", "mode": "url-test", "node_ids": ["sg-1"], "selected": "sg-1", "enabled": True},
+                {"id": "direct", "name": "直连", "kernel_name":"DIRECT", "mode": "direct", "node_ids": [], "selected": "", "enabled": True},
+                {"id": "hk", "name": "香港自动", "kernel_name":"group-hk", "mode": "url-test", "node_ids": ["hk-1"], "selected": "hk-1", "enabled": True},
+                {"id": "sg", "name": "新加坡自动", "kernel_name":"group-sg", "mode": "url-test", "node_ids": ["sg-1"], "selected": "sg-1", "enabled": True},
             ],
             "routes": [{"id": "meta", "host": "meta.example", "match": "suffix", "target": "hk", "priority": 10, "enabled": True}],
             "subscriptions": [
@@ -158,6 +158,9 @@ class TestConfigurationRules(unittest.TestCase):
         manager.events_path = Path(manager._test_dir.name) / "events.jsonl"
         manager.health = {}
         manager.health_path = Path(manager._test_dir.name) / "health.json"
+        manager.path = Path(manager._test_dir.name) / "config.json"
+        manager.backup = Path(manager._test_dir.name) / "config.previous.json"
+        manager.lock = asyncio.Lock(); manager.refresh_lock = asyncio.Lock(); manager.previews = {}
         return manager
 
     def test_kernel_not_configured_is_explicit(self):
@@ -195,9 +198,9 @@ class TestConfigurationRules(unittest.TestCase):
         document = self._manager_for_runtime()._runtime_document()
         self.assertNotIn("mixed-port", document)
         groups = {item["name"]: item for item in document["proxy-groups"]}
-        self.assertEqual(groups["香港自动"].get("proxies"), ["node-hk-1"])
-        self.assertEqual(groups["新加坡自动"].get("proxies"), ["node-sg-1"])
-        self.assertNotIn("use", groups["香港自动"])
+        self.assertEqual(groups["group-hk"].get("proxies"), ["node-hk-1"])
+        self.assertEqual(groups["group-sg"].get("proxies"), ["node-sg-1"])
+        self.assertNotIn("use", groups["group-hk"])
 
     def test_proxy_entry_is_separate_from_control_endpoint(self):
         manager = self._manager_for_runtime()
@@ -297,9 +300,9 @@ class TestConfigurationRules(unittest.TestCase):
         manager.state['subscriptions'] = manager.state['subscriptions'][:1]
         document = manager._runtime_document()
         groups = {item['name']: item for item in document['proxy-groups']}
-        self.assertEqual(groups['香港自动'].get('proxies'), ['node-hk-1'])
-        self.assertEqual(groups['新加坡自动'].get('proxies'), ['node-sg-1'])
-        self.assertNotIn('use', groups['香港自动'])
+        self.assertEqual(groups['group-hk'].get('proxies'), ['node-hk-1'])
+        self.assertEqual(groups['group-sg'].get('proxies'), ['node-sg-1'])
+        self.assertNotIn('use', groups['group-hk'])
 
     def test_same_name_nodes_use_distinct_kernel_names_for_delay(self):
         manager = self._manager_for_runtime()
@@ -372,6 +375,67 @@ class TestConfigurationRules(unittest.TestCase):
         current = next(node for node in manager.state['nodes'] if node['id'] == old['id'])
         self.assertTrue(current['excluded'])
         self.assertEqual(current['exclusion_reason'], '流量提示')
+
+    def test_subscription_diff_preserves_alias_and_deleted_reference(self):
+        manager = self._manager_for_runtime(); subscription=manager.state['subscriptions'][0]
+        old=manager.state['nodes'][0]
+        old.update({'source_name':'香港 A','display_name':'我的香港','name':'我的香港','user_alias':'我的香港',
+                    'excluded':True,'exclusion_reason':'用户排除','parameter_version':'v1'})
+        subscription['node_ids']=[old['id']]
+        replacement=copy.deepcopy(old); replacement.update({'source_name':'香港 B','display_name':'香港 B','name':'香港 B',
+                                                              'user_alias':'','excluded':False,'parameter_version':'v2'})
+        added=copy.deepcopy(manager.state['nodes'][1]); added['id']='new-node'; added['parameter_version']='new'
+        diff=manager._replace_subscription_nodes(subscription,[replacement,added])
+        current=next(node for node in manager.state['nodes'] if node['id']==old['id'])
+        self.assertEqual(current['display_name'],'我的香港'); self.assertTrue(current['excluded'])
+        self.assertEqual([item['id'] for item in diff['added']],['new-node'])
+        self.assertEqual([item['id'] for item in diff['changed']],[old['id']])
+        removed=manager._replace_subscription_nodes(subscription,[replacement])
+        deleted=next(node for node in manager.state['nodes'] if node['id']=='new-node')
+        self.assertTrue(deleted['invalid_reference']); self.assertFalse(deleted['enabled'])
+        self.assertEqual([item['id'] for item in removed['deleted']],['new-node'])
+
+    def test_manual_interval_zero_stays_manual_after_failure(self):
+        manager=self._manager_for_runtime()
+        normalized=manager._normalize({'subscriptions':[{'id':'manual','url':'https://sub.example/manual','interval':0}]})
+        subscription=normalized['subscriptions'][0]
+        self.assertEqual(subscription['interval'],0)
+        manager._record_subscription_error(subscription,'temporary failure')
+        self.assertEqual(subscription['next_refresh_at'],0)
+
+    def test_failed_refresh_keeps_last_valid_nodes_and_groups(self):
+        manager=self._manager_for_runtime(); manager.state=manager._normalize(manager.state)
+        before_nodes=copy.deepcopy(manager.state['nodes']); before_groups=copy.deepcopy(manager.state['groups'])
+        response=self.module.httpx.Response(503,request=self.module.httpx.Request('GET','https://sub.example/hk'))
+        client=AsyncMock(); client.__aenter__.return_value=client; client.get=AsyncMock(return_value=response)
+        with patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            with self.assertRaisesRegex(ValueError,'订阅请求失败'):
+                asyncio.run(manager._refresh_with_retry('sub-hk',attempts=1))
+        self.assertEqual(manager.state['nodes'],before_nodes); self.assertEqual(manager.state['groups'],before_groups)
+        self.assertTrue(manager.state['subscriptions'][0]['last_error'])
+
+    def test_expired_import_preview_is_rejected_and_removed(self):
+        manager=self._manager_for_runtime(); manager.previews['old']={'at':0,'items':[]}
+        fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'preview_id':'old'}))
+        with patch.object(self.module,'request',fake_request):
+            result=asyncio.run(manager.subscription_import())
+        self.assertEqual(result['status'],400); self.assertNotIn('old',manager.previews)
+
+    def test_control_status_and_select_use_internal_kernel_mapping(self):
+        manager=self._manager_for_runtime(); request=self.module.httpx.Request('GET','http://mihomo:9090/proxies')
+        def response(payload): return self.module.httpx.Response(200,json=payload,request=request)
+        client=AsyncMock(); client.__aenter__.return_value=client
+        client.get=AsyncMock(side_effect=[response({'meta':True,'version':'1.19.0'}),response({'proxies':{'group-hk':{'type':'Selector','now':'node-hk-1'}}})])
+        with patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            status=asyncio.run(manager.control_status())
+        hk=next(group for group in status['groups'] if group['id']=='hk')
+        self.assertEqual(hk['display_name'],'香港自动'); self.assertEqual(hk['selected_node_id'],'hk-1')
+        put_client=AsyncMock(); put_client.__aenter__.return_value=put_client; put_client.request=AsyncMock(return_value=response({}))
+        fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'group_id':'hk','node_id':'hk-1'}))
+        with patch.object(self.module,'request',fake_request), patch.object(self.module.httpx,'AsyncClient',return_value=put_client):
+            result=asyncio.run(manager.control_select())
+        self.assertTrue(result['ok'])
+        put_client.request.assert_awaited_once_with('PUT','/proxies/group-hk',json={'name':'node-hk-1'})
 
     def test_missing_manual_selection_does_not_fall_back_silently(self):
         manager = self._manager_for_runtime()
