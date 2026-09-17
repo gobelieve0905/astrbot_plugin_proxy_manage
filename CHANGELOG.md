@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.3.8 - 2026-09-17
+
+- 审计 AstrBot 4.28.1 的 Provider 独立 `proxy` 字段、Lark/Telegram/Discord 等平台 HTTP/WebSocket/媒体路径、Agent 运行器、插件配置、插件市场/GitHub/PyPI/依赖下载器与显式 `trust_env=false` 风险。
+- 动态流量清单现在展示每类流量的接入方式、是否需要重启、专项验证方法和旁路风险；只读发现当前 Provider、平台和插件配置，不读取或显示凭据，也不修改其专用配置。
+- 审计或配置存在不再推定“已接管”：只有 AstrBot 核心全局 HTTP/HTTPS 保留请求级出口证据，其他路径在逐项验证前显示未接入或无法判定。
+
 - 2026-09-17：AstrBot 全局代理的 `no_proxy` 不再写死 AppLovin MCP 服务名；改为从当前 MCP 配置安全发现回环、私网、`.local` 与容器服务名。公网 MCP 仍必须经过内核规则，配置变化会显示需重新接入和重启。
 
 ## 0.3.7 - 2026-09-17

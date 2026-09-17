@@ -8,9 +8,11 @@ import copy
 import hashlib
 import ipaddress
 import json
+import os
 import secrets
 import time
 import uuid
+from pathlib import Path
 from urllib.parse import urlparse, urlsplit
 
 import httpx
@@ -31,6 +33,7 @@ from .runtime.supervisor import KernelSupervisor
 from .traffic.safe_http import fetch_public_url, validate_public_url
 from .traffic.inventory import traffic_inventory
 from .traffic.astrbot import AstrBotProxyTransaction
+from .traffic.audit import AstrBotTrafficAudit
 
 
 class ProxyManager(Star):
@@ -54,6 +57,7 @@ class ProxyManager(Star):
         self.state=self._load(); self.health=self._load_health()
         self._bind_owned_runtime()
         self.astrbot_proxy=AstrBotProxyTransaction(self.data_dir)
+        self.traffic_audit=AstrBotTrafficAudit(Path(os.environ.get('ASTRBOT_ROOT','/astrbot')))
         self.artifacts=ArtifactManager(self.data_dir,self._adapter().artifact())
         self.supervisor=KernelSupervisor(self.data_dir,self._kernel_health_check)
         self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
@@ -225,7 +229,9 @@ class ProxyManager(Star):
         )}
         astrbot=self.astrbot_proxy.status(self.state['proxy_entry']['http_url']) if hasattr(self,'astrbot_proxy') else {}
         result['astrbot_proxy']=astrbot
-        result['traffic_inventory']=traffic_inventory(self.state,application,astrbot=astrbot)
+        audit=self.traffic_audit.snapshot(self.state['proxy_entry']['http_url']) if hasattr(self,'traffic_audit') else {}
+        result['traffic_audit']=audit
+        result['traffic_inventory']=traffic_inventory(self.state,application,astrbot=astrbot,audit=audit)
         return result
 
     async def persist(self,state:dict):
@@ -445,7 +451,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.7'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.8'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -557,7 +563,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.7'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.8'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -628,7 +634,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.7'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.8'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1076,7 +1082,7 @@ class ProxyManager(Star):
         status=self.astrbot_proxy.mark_started(self.state['proxy_entry']['http_url'])
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.7 已加载')
+        logger.info('代理管理中心 0.3.8 已加载')
 
     async def terminate(self):
         if self.auto_task:

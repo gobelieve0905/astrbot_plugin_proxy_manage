@@ -1,6 +1,6 @@
 # 代理管理中心使用指南
 
-> 本指南记录 0.3.7 的当前操作方式。插件已自管固定版本 Mihomo 和 sing-box，并接入 AstrBot 核心全局 HTTP/HTTPS 流量；多内核同时编排、平台 SDK、部分 Provider、插件及 MCP 外部出站仍未全部接入。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
+> 本指南记录 0.3.8 的当前操作方式。插件已自管固定版本 Mihomo 和 sing-box，并审计 AstrBot 4.28.1 的 Provider、平台、Agent、插件和更新路径；AstrBot 核心全局 HTTP/HTTPS 流量已接入，但平台 SDK、部分 Provider、插件及 MCP 外部出站仍未逐项完成真实验证。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
 
 桌面端使用左侧导航，移动端使用顶部横向导航。页面顶部的“恢复上一版”和“预览并保存”作用于规范化配置；内核的下载、启动、停止和应用操作位于“内核管理”，不会与普通配置保存混在同一操作组。
 
@@ -22,7 +22,7 @@
 
 | 场景 | 接入方式 | 支持状态 |
 | --- | --- | --- |
-| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | AstrBot `http_proxy` 指向统一 HTTP 入口 | 0.3.7 已接入，需重启后做请求级验证 |
+| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | AstrBot `http_proxy` 指向统一 HTTP 入口 | 0.3.8 已接入，需重启后做请求级验证 |
 | 使用 AstrBot 公共 HTTP 客户端且继承核心代理配置的插件 | 使用核心 `http_proxy` | 尚未逐项接入和验证 |
 | 支持独立代理字段的平台适配器 | 在适配器配置中填写统一 HTTP/SOCKS 入口 | 条件支持，应按适配器文档验证 |
 | 支持代理或自定义 HTTP 客户端的模型提供商 | 在对应客户端配置代理 | 条件支持，应执行无业务凭据的受控请求验证 |

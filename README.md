@@ -1,6 +1,6 @@
 # 代理管理中心
 
-当前版本：0.3.7
+当前版本：0.3.8
 
 ## 产品方向
 
@@ -8,7 +8,7 @@
 
 Mihomo 只是候选内核之一，架构不得与任何单一内核绑定。完整的产品不变量、内核适配器契约、流量范围、安全模型和验收标准见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。该文档是后续设计和修改的最高优先级依据。
 
-> 当前 0.3.7 已接入 AstrBot 核心全局 HTTP/HTTPS 流量，并提供插件自管 Mihomo 与 sing-box 适配器。两种内核共用完整契约和稳定入口；平台 SDK、部分 Provider、显式禁用环境代理的插件及 MCP 外部出站仍未全部接入。
+> 当前 0.3.8 已审计 AstrBot 4.28.1 的 Provider、平台、Agent、插件和更新出站路径，并在动态清单中显示接入方式、重启要求、验证方法与旁路风险。AstrBot 核心全局 HTTP/HTTPS 流量已接入；平台 SDK、Provider 专用客户端、第三方插件和 MCP 外部出站仍须逐项真实验证，不能由审计结果推定为已接管。
 
 首次安装、AstrBot 接入范围、协议与部署支持矩阵见 [USER_GUIDE.md](USER_GUIDE.md)。
 

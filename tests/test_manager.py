@@ -83,7 +83,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.7',html)
+        self.assertIn('流量控制 · 0.3.8',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('aria-label="主导航"',html)
@@ -880,6 +880,23 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(managed[0]['status'],'managed')
         self.assertTrue(all(item['status']=='not_connected' for item in managed[1:-1]))
         self.assertEqual(managed[-1]['status'],'managed')
+
+    def test_traffic_audit_discovers_configuration_without_credentials(self):
+        from proxy_manager.traffic.audit import AstrBotTrafficAudit
+        from proxy_manager.traffic.inventory import traffic_inventory
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); config=root/'data'/'cmd_config.json'; config.parent.mkdir()
+            config.write_text(json.dumps({'provider_sources':[{'id':'safe-provider','type':'openai','proxy':'http://127.0.0.1:17890','key':'secret'}],
+                                          'platform':[{'id':'safe-platform','type':'discord','discord_proxy':'http://other:7890','token':'secret'}],
+                                          'plugin_set':{'third-party':True},'agent_runner':{'runner_type':'builtin'}}),encoding='utf-8')
+            audit=AstrBotTrafficAudit(root).snapshot('http://127.0.0.1:17890')
+            self.assertEqual(audit['providers'][0]['proxy'],'stable_entry')
+            self.assertEqual(audit['platforms'][0]['proxy'],'other_proxy')
+            self.assertNotIn('secret',json.dumps(audit))
+            values=traffic_inventory({'proxy_entry':{'http_url':'http://127.0.0.1:17890'}},{},audit=audit)
+            provider=next(value for value in values if value['id']=='provider-proxy')
+            platform=next(value for value in values if value['id']=='platform-sdk')
+            self.assertEqual(provider['status'],'unknown'); self.assertEqual(platform['status'],'not_connected')
 
     def test_astrbot_proxy_transaction_backs_up_narrows_and_restores(self):
         from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY

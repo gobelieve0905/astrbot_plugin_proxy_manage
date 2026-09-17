@@ -5,23 +5,23 @@ import os
 
 TRAFFIC_INVENTORY=[
     {'id':'astrbot-http-proxy','name':'AstrBot 全局 HTTP 代理','restart':True,
-     'method':'设置核心 http_proxy/https_proxy 指向插件稳定入口'},
+     'method':'设置核心 http_proxy/https_proxy 指向插件稳定入口','verification':'AstrBot 进程请求与内核连接记录、规则、链路及出口 IP','bypass_risk':'显式 trust_env=false 或原生 socket 不继承环境'},
     {'id':'provider-proxy','name':'模型 Provider 独立代理','restart':False,
-     'method':'各 Provider 的 proxy 字段接入稳定入口'},
+     'method':'官方 Provider 的 proxy 字段指向稳定入口','verification':'不携带业务凭据的 Provider 专项请求与内核连接记录','bypass_risk':'部分实现显式 trust_env=false，未填写 proxy 时不会继承环境'},
     {'id':'platform-sdk','name':'机器人平台 SDK','restart':True,
-     'method':'飞书/Telegram 等适配器 HTTP 与 WebSocket 代理'},
+     'method':'平台专用 proxy 字段或 SDK 代理能力','verification':'重启适配器后对 HTTP、WebSocket、媒体分别关联内核连接记录','bypass_risk':'SDK 长连接、媒体客户端或 webhook 可能不继承环境'},
     {'id':'plugin-http','name':'插件公共 HTTP 客户端','restart':False,
-     'method':'继承核心代理或显式配置'},
+     'method':'继承核心代理或显式配置','verification':'插件声明接入点并提供无凭据请求级验证','bypass_risk':'第三方插件可使用 trust_env=false、裸 socket 或自建客户端'},
     {'id':'mcp-egress','name':'MCP 外部请求','restart':False,
-     'method':'MCP 进程/容器出口指向稳定入口'},
+     'method':'MCP 进程/容器出口指向稳定入口','verification':'每个 MCP 的无业务凭据出站请求与内核记录','bypass_risk':'MCP 独立进程/容器不继承 AstrBot 环境'},
     {'id':'updates','name':'插件市场与依赖下载','restart':False,
-     'method':'更新组件走统一入口'},
+     'method':'更新组件显式使用稳定入口','verification':'下载请求的内核记录和制品摘要校验','bypass_risk':'市场、GitHub、PyPI 与 pip 安装器是独立进程或客户端'},
     {'id':'recent-verification','name':'最近一次受控验证请求','restart':False,
-     'method':'通过请求级内核连接记录核对规则与出口链路'},
+     'method':'通过请求级内核连接记录核对规则与出口链路','verification':'同次请求的入口、规则、代理链、节点与出口 IP','bypass_risk':'只代表该次受控请求，不代表其他组件'},
 ]
 
 
-def traffic_inventory(state: dict, application: dict, environ: dict|None=None, astrbot: dict|None=None) -> list[dict]:
+def traffic_inventory(state: dict, application: dict, environ: dict|None=None, astrbot: dict|None=None, audit: dict|None=None) -> list[dict]:
     environ=environ if environ is not None else os.environ
     entry=str((state.get('proxy_entry') or {}).get('http_url') or '').rstrip('/')
     configured={str(environ.get(key,'')).rstrip('/') for key in ('http_proxy','https_proxy','HTTP_PROXY','HTTPS_PROXY') if environ.get(key)}
@@ -31,6 +31,7 @@ def traffic_inventory(state: dict, application: dict, environ: dict|None=None, a
                 application.get('status')=='applied' and
                 application.get('saved_revision')==application.get('applied_revision')==verification.get('runtime_revision'))
     astrbot=astrbot if isinstance(astrbot,dict) else {}
+    audit=audit if isinstance(audit,dict) else {}
     values=[]
     for definition in TRAFFIC_INVENTORY:
         item=dict(definition)
@@ -55,6 +56,27 @@ def traffic_inventory(state: dict, application: dict, environ: dict|None=None, a
                              'message':'最近请求由内核规则明确选择 DIRECT' if direct else '最近请求已关联到内核代理组和节点链路'})
             else:
                 item.update({'status':'unknown','message':'尚无完整的请求级规则与出口证据'})
+        elif item['id']=='provider-proxy':
+            providers=audit.get('providers',[])
+            stable=[value for value in providers if value.get('enabled') and value.get('proxy')=='stable_entry']
+            other=[value for value in providers if value.get('enabled') and value.get('proxy')=='other_proxy']
+            if stable:
+                item.update({'status':'unknown','message':'已发现 '+str(len(stable))+' 个 Provider 指向稳定入口；尚无请求级 Provider 证据'})
+            elif other:
+                item.update({'status':'not_connected','message':'已发现 '+str(len(other))+' 个 Provider 使用其他代理入口'})
+            else:
+                item.update({'status':'not_connected','message':'未发现已启用 Provider 的稳定入口专用 proxy 配置'})
+            item['discovered']=providers
+        elif item['id']=='platform-sdk':
+            platforms=audit.get('platforms',[])
+            item.update({'status':'not_connected',
+                         'message':('发现 '+str(len(platforms))+' 个平台；HTTP、WebSocket 和媒体仍需逐项请求级验证' if platforms else '未发现可审计的平台配置'),
+                         'discovered':platforms})
+        elif item['id']=='plugin-http':
+            count=int(audit.get('plugin_count',0) or 0)
+            item.update({'status':'not_connected','message':'发现 '+str(count)+' 个插件配置项；第三方网络实现尚未声明或验证'})
+        elif item['id']=='updates':
+            item.update({'status':'not_connected','message':'插件市场、GitHub、PyPI 和依赖安装器尚未统一接入稳定入口'})
         else:
             item.update({'status':'not_connected','message':'当前版本尚未实现该接入点的配置与验证'})
         values.append(item)
