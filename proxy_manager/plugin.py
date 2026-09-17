@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import copy
 import hashlib
 import ipaddress
 import json
+import secrets
 import time
 import uuid
 from urllib.parse import urlparse, urlsplit
@@ -23,6 +26,8 @@ from .domain.model import compiled_rules, ident, match_rule, normalize_state, va
 from .domain.security import redact_config, redact_diagnostics, restore_config, safe_error, safe_host, safe_url
 from .importers.subscription import parse_subscription, summary, traffic_header
 from .runtime.transaction import verified_recovery_document
+from .runtime.artifacts import ArtifactManager, MAX_ARCHIVE_SIZE
+from .runtime.supervisor import KernelSupervisor
 
 
 class ProxyManager(Star):
@@ -44,6 +49,9 @@ class ProxyManager(Star):
                 except OSError: logger.warning('代理中心私有文件权限收紧失败：'+private_path.name)
         self.lock=asyncio.Lock(); self.refresh_lock=asyncio.Lock(); self.apply_lock=asyncio.Lock()
         self.state=self._load(); self.health=self._load_health()
+        self._bind_owned_runtime()
+        self.artifacts=ArtifactManager(self.data_dir,self._adapter().id)
+        self.supervisor=KernelSupervisor(self.data_dir,self._kernel_health_check)
         self.runtime_application=self._load_runtime_application()
         health_changed=False
         for old_id,new_id in getattr(self,'_id_aliases',{}).items():
@@ -53,6 +61,39 @@ class ProxyManager(Star):
         self.events=self._load_events()
         self.previews={}; self.probe_tasks={}; self.auto_task=None
         self._register_routes()
+
+    def _bind_owned_runtime(self):
+        runtime_dir=self.data_dir/'runtime'; runtime_dir.mkdir(parents=True,exist_ok=True); runtime_dir.chmod(0o700)
+        secret_path=runtime_dir/'control.secret'
+        try: secret=secret_path.read_text(encoding='utf-8').strip()
+        except OSError: secret=''
+        if len(secret)<32:
+            secret=secrets.token_urlsafe(32); secret_path.write_text(secret,encoding='utf-8'); secret_path.chmod(0o600)
+        self.state['control']={'enabled':True,'url':'http://127.0.0.1:19090','secret':secret,'timeout':8,
+                               'deployment':'dedicated','scope':'full','listen':'127.0.0.1:19090','adapter':'mihomo'}
+        self.state['proxy_entry']={'http_url':'http://127.0.0.1:17890','socks_url':'socks5://127.0.0.1:17890','source':'plugin-managed'}
+
+    @property
+    def kernel_config_path(self): return self.data_dir/'runtime'/'config.yaml'
+
+    def _write_kernel_config(self,document:dict):
+        if not hasattr(self,'data_dir'): return
+        import yaml
+        temp=self.kernel_config_path.with_suffix('.tmp')
+        temp.write_text(yaml.safe_dump(document,allow_unicode=True,sort_keys=False),encoding='utf-8'); temp.chmod(0o600)
+        temp.replace(self.kernel_config_path)
+
+    async def _kernel_health_check(self):
+        fetched=await self._adapter().fetch_runtime(self.state)
+        return not fetched.get('state')
+
+    async def _start_owned_kernel(self):
+        artifact=self.artifacts.status()
+        if not artifact.get('ready'): return artifact
+        recovery=self._verified_recovery_document(getattr(self,'runtime_application',{}))
+        document=recovery or self._adapter().fail_closed_document(self.state['control'],self.state['proxy_entry'])
+        self._adapter().validate(document); self._write_kernel_config(document)
+        return await self.supervisor.start(self.artifacts.binary,self.kernel_config_path)
 
     def _load(self) -> dict:
         from_disk=False
@@ -127,6 +168,8 @@ class ProxyManager(Star):
             ('probe-task-cancel',self.probe_task_cancel,['POST']),
             ('runtime-config',self.runtime_config,['GET']), ('runtime-apply',self.runtime_apply,['POST']),
             ('kernel-status',self.kernel_status,['GET']),
+            ('kernel-install',self.kernel_install,['POST']), ('kernel-upload',self.kernel_upload,['POST']),
+            ('kernel-start',self.kernel_start,['POST']), ('kernel-stop',self.kernel_stop,['POST']),
             ('verify-outbound',self.verify_outbound,['POST']),
         )
         for name,handler,methods in routes:
@@ -139,10 +182,10 @@ class ProxyManager(Star):
             node['connection']=redact_config(node.get('connection',{}),'connection')
         for subscription in result['subscriptions']:
             subscription['url']=urlparse(subscription['url']).scheme+'://'+CONFIGURED
-        result['control']['secret']=CONFIGURED if result['control']['secret'] else ''
-        result.setdefault('proxy_entry', {'http_url':'', 'socks_url':'', 'source':'unknown'})
-        for key in ('http_url','socks_url'):
-            if result['proxy_entry'][key]: result['proxy_entry'][key]=urlparse(result['proxy_entry'][key]).scheme+'://'+CONFIGURED
+        result['control']={'managed':True,'adapter':self._adapter().id}
+        result['proxy_entry']={'source':'plugin-managed'}
+        if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
+            result['kernel']={'artifact':self.artifacts.status(),'process':self.supervisor.status()}
         result['health']=redact_diagnostics(self.health)
         result['events']=redact_diagnostics(self.events[-50:]); result['templates']=TEMPLATES
         application=getattr(self,'runtime_application',{})
@@ -153,6 +196,8 @@ class ProxyManager(Star):
 
     async def persist(self,state:dict):
         normalized=self._normalize(state)
+        if hasattr(self,'data_dir'):
+            self.state=normalized; self._bind_owned_runtime(); normalized=self.state
         if self.path.exists():
             self.backup.write_text(self.path.read_text(encoding='utf-8'),encoding='utf-8')
             try: self.backup.chmod(0o600)
@@ -206,14 +251,8 @@ class ProxyManager(Star):
         for item in payload.get('subscriptions',[]):
             if isinstance(item,dict) and item.get('id') in old_subs:
                 item['url']=restore_config(item.get('url',''),old_subs[item['id']].get('url',''))
-        control=payload.get('control')
-        if isinstance(control,dict):
-            control['secret']=restore_config(control.get('secret',''),self.state['control'].get('secret',''))
-        entry=payload.get('proxy_entry')
-        if isinstance(entry,dict):
-            previous=self.state.get('proxy_entry',{})
-            for key in ('http_url','socks_url'):
-                entry[key]=restore_config(entry.get(key,''),previous.get(key,''))
+        payload['control']=copy.deepcopy(self.state['control'])
+        payload['proxy_entry']=copy.deepcopy(self.state['proxy_entry'])
 
     async def state_page(self): return json_response(self.snapshot())
     async def events_page(self): return json_response({'events':redact_diagnostics(self.events[-100:])})
@@ -307,7 +346,7 @@ class ProxyManager(Star):
             if not proxy: raise ValueError('尚未配置统一 HTTP 代理入口')
             started=time.monotonic()
             async with httpx.AsyncClient(proxy=proxy,trust_env=False,follow_redirects=False,timeout=15) as client:
-                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.1'})
+                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.2'})
             response.raise_for_status()
             result.update({'host':host,'status_code':response.status_code,
                            'elapsed_ms':round((time.monotonic()-started)*1000),'matched_rule':route,
@@ -406,7 +445,7 @@ class ProxyManager(Star):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.1'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.2'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -478,7 +517,7 @@ class ProxyManager(Star):
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
             async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.1'})
+                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.2'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -576,6 +615,14 @@ class ProxyManager(Star):
 
     async def _kernel_status(self) -> dict:
         adapter=self._adapter(); control=self.state['control']
+        if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
+            artifact=self.artifacts.status()
+            if not artifact.get('ready'):
+                return {'state':artifact['state'],'ready':False,'adapter':adapter.id,'message':artifact['message'],'artifact':artifact,
+                        'process':self.supervisor.status()}
+            process=self.supervisor.status()
+            if not process.get('ready'):
+                return {'state':process['state'],'ready':False,'adapter':adapter.id,'message':process['message'],'artifact':artifact,'process':process}
         if not control['enabled'] or not control['url']:
             return adapter.inspect(self.state, getattr(self,'runtime_application',{}))
         try:
@@ -590,7 +637,39 @@ class ProxyManager(Star):
             return {'state':'connection_failed','ready':False,'adapter':adapter.id,'message':'无法连接内核控制接口'}
 
     async def kernel_status(self):
-        return json_response(await self._kernel_status())
+        status=await self._kernel_status()
+        if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
+            status.setdefault('artifact',self.artifacts.status()); status.setdefault('process',self.supervisor.status())
+        return json_response(status)
+
+    async def kernel_install(self):
+        try:
+            artifact=await self.artifacts.download(); await self.supervisor.stop(); process=await self._start_owned_kernel()
+            self.event({'action':'kernel_install','result':'ok','version':artifact.get('version'),'source':'official'})
+            return json_response({'artifact':artifact,'process':process})
+        except (ValueError,OSError,httpx.HTTPError,RuntimeError) as exc:
+            self.event({'action':'kernel_install','result':'failed','message':safe_error(exc)})
+            return error_response(str(exc) if isinstance(exc,ValueError) else '内核下载、校验或启动失败',500)
+
+    async def kernel_upload(self):
+        try:
+            length=int(request.headers.get('content-length','0') or 0)
+            if length>MAX_ARCHIVE_SIZE*2: raise ValueError('内核制品请求体过大')
+            if str(request.content_type).split(';',1)[0]=='application/json':
+                payload=await request.json(); body=base64.b64decode(str(payload.get('content','')),validate=True)
+            else: body=await request.body()
+            artifact=self.artifacts.install(bytes(body),'offline'); await self.supervisor.stop(); process=await self._start_owned_kernel()
+            self.event({'action':'kernel_install','result':'ok','version':artifact.get('version'),'source':'offline'})
+            return json_response({'artifact':artifact,'process':process})
+        except (ValueError,OSError,RuntimeError,TypeError,binascii.Error) as exc:
+            self.event({'action':'kernel_install','result':'failed','message':safe_error(exc)})
+            return error_response(str(exc),400)
+
+    async def kernel_start(self):
+        try: return json_response(await self._start_owned_kernel())
+        except (ValueError,OSError,RuntimeError) as exc: return error_response(str(exc),500)
+
+    async def kernel_stop(self): return json_response(await self.supervisor.stop())
 
     def _runtime_document(self) -> dict:
         adapter=self._adapter()
@@ -654,10 +733,12 @@ class ProxyManager(Star):
                                                    'applied_revision':previous.get('applied_revision',''),
                                                    'document':previous.get('document'),'updated_at':int(time.time()),'message':'正在应用候选配置'})
                 try:
+                    self._write_kernel_config(document)
                     await adapter.apply(self.state, document)
                 except (ValueError,httpx.HTTPError,OSError) as apply_error:
                     restored=False; restore_message=''
                     try:
+                        self._write_kernel_config(recovery)
                         await adapter.apply(self.state, recovery)
                         restored=True
                     except (ValueError,httpx.HTTPError,OSError) as restore_error:
@@ -834,7 +915,10 @@ class ProxyManager(Star):
     async def initialize(self):
         if self.auto_task and not self.auto_task.done(): self.auto_task.cancel()
         self.auto_task=asyncio.create_task(self._auto_loop())
-        logger.info('代理管理中心 0.3.1 已加载')
+        try: await self._start_owned_kernel()
+        except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
+            logger.warning('代理管理中心自管内核未启动：'+safe_error(exc))
+        logger.info('代理管理中心 0.3.2 已加载')
 
     async def terminate(self):
         if self.auto_task:
@@ -842,5 +926,6 @@ class ProxyManager(Star):
             try: await self.auto_task
             except asyncio.CancelledError: pass
             self.auto_task=None
+        await self.supervisor.stop()
 
     async def on_message(self,event:AstrMessageEvent): return

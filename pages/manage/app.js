@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id)
 const api = window.AstrBotPluginPage
-const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台策略',control:'控制接口',logs:'连接日志'}
+const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台策略',control:'内核管理',logs:'连接日志'}
 let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importing=false, probeTask=null
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
@@ -29,14 +29,14 @@ function render(){
   if(tab==='overview'){
     const values=Object.values(state.health||{})
     const ok=values.filter(item=>item.status==='ok').length, bad=values.filter(item=>['error','timeout'].includes(item.status)).length
-    const kernelText={not_configured:'未配置',connection_failed:'连接失败',auth_failed:'认证失败',version_unsupported:'版本不支持',saved:'已保存',pending_apply:'待应用',applied:'已应用',runtime_inconsistent:'运行配置不一致',restore_failed:'恢复失败',fail_closed:'失败关闭'}[kernelStatus.state]||'未检查'
+    const kernelText={not_installed:'未安装',invalid:'校验失败',unsupported:'平台不支持',stopped:'已停止',failed:'运行失败',connection_failed:'连接失败',version_unsupported:'版本不支持',saved:'已保存',pending_apply:'待应用',applied:'已应用',runtime_inconsistent:'运行配置不一致',restore_failed:'恢复失败',fail_closed:'失败关闭'}[kernelStatus.state]||'未检查'
     const kernelClass=kernelStatus.state==='applied'?'online':'error'
     html=`<div class="hero"><b>当前配置</b><strong>${esc(state.name)}</strong><span class="${kernelClass}">● 内核：${kernelText}</span><small>${esc(kernelStatus.message||'')}</small></div>
       <div class="cards">${[['subscriptions','订阅'],['nodes','节点'],['groups','代理组'],['routes','规则']].map(([key,label])=>`<article><b>${state[key].length}</b><span>${label}</span></article>`).join('')}</div>
       <div class="cards"><article><b>${ok}</b><span>可用节点</span></article><article><b>${bad}</b><span>异常节点</span></article><article><b>${state.subscriptions.filter(item=>item.enabled&&item.interval).length}</b><span>自动订阅</span></article><article><b>${state.events.length}</b><span>最近事件</span></article></div>
       <section class="panel"><h2>分流预览</h2><div class="inline"><input id="host" placeholder="api.telegram.org"><button id="preview">查询</button></div><pre id="result">输入域名查看命中的代理组和节点。</pre></section>`
     html+=`<section class="panel"><h2>实际出站验证</h2><p class="muted">验证分别记录入口请求、运行规则与出口证据。只有目标返回出口 IP 且能回读运行选择时，才显示“出口已确认”。</p><div class="inline"><input id="verify-url" value="https://api.ipify.org?format=json"><button id="verify-outbound">验证实际出口</button></div>${verificationPanel(state.application?.verification)}<pre id="verify-result">${esc(state.application?.verification?JSON.stringify(state.application.verification,null,2):'尚未验证。普通 HTTPS 页面可能只能证明入口，不足以确认出口。')}</pre></section>`
-    html+=`<section class="panel"><h2>首次使用</h2><div class="steps"><span>1 连接专用内核</span><span>2 导入订阅</span><span>3 筛选并选择节点</span><span>4 建立代理组</span><span>5 配置规则组</span><span>6 应用配置</span><span>7 验证实际出口</span></div></section>`
+    html+=`<section class="panel"><h2>首次使用</h2><div class="steps"><span>1 安装自管内核</span><span>2 导入订阅</span><span>3 筛选并选择节点</span><span>4 建立代理组</span><span>5 配置规则组</span><span>6 应用配置</span><span>7 验证实际出口</span></div></section>`
   } else if(tab==='subscriptions'){
     const groups=[...new Set(state.subscriptions.map(item=>item.group))]; const current=$('#group-filter')?.value||'全部'
     const shown=current==='全部'?state.subscriptions:state.subscriptions.filter(item=>item.group===current)
@@ -67,7 +67,8 @@ function render(){
     html=`<section class="panel"><h2>平台规则模板</h2>${Object.entries(state.templates).map(([id,template])=>{const domains=template.domains||template.hosts.map(host=>({host,match:'exact'}));return `<div class="platform"><b>${esc(template.name)}</b><small>${esc(domains.map(item=>item.match+' '+item.host).join(' · '))}</small><select data-platform="${esc(id)}">${groupOptions((state.platforms[id]||{}).group_id||'direct')}</select><button data-template="${esc(id)}">应用或更新模板</button></div>`}).join('')}</section>`
   } else if(tab==='control'){
     const groups=controlResult?.groups||[]
-    html=`<section class="panel"><div class="bar"><h2>Mihomo / Clash 外部控制</h2><div class="actions"><button id="control-status">保存并检查</button><button id="runtime-apply" class="primary">应用代理配置</button></div></div><div class="control-form"><label><input type="checkbox" data-ck="enabled" ${state.control.enabled?'checked':''}> 启用</label><input id="control-url" value="${esc(state.control.url)}" placeholder="插件访问地址，如 http://proxy-core:9090"><input id="control-listen" value="${esc(state.control.listen||'127.0.0.1:9090')}" placeholder="内核监听地址，如 127.0.0.1:9090"><input id="control-secret" type="password" value="${esc(state.control.secret)}" placeholder="控制接口密钥"><input id="control-timeout" type="number" min="3" max="30" value="${state.control.timeout}"><select id="control-deployment"><option value="dedicated" ${state.control.deployment==='dedicated'?'selected':''}>插件专用实例</option><option value="existing" ${state.control.deployment==='existing'?'selected':''}>共享实例（只读核对）</option></select><select id="control-scope"><option value="full" ${state.control.scope==='full'?'selected':''}>专用实例完整配置</option><option value="providers-groups-rules" ${state.control.scope==='providers-groups-rules'?'selected':''}>共享实例指定范围（暂不允许写入）</option></select><input id="proxy-http-url" value="${esc(state.proxy_entry?.http_url||'')}" placeholder="实际 HTTP 代理入口，如 http://proxy-core:7890"><input id="proxy-socks-url" value="${esc(state.proxy_entry?.socks_url||'')}" placeholder="实际 SOCKS 代理入口（可选）"></div><p class="muted">控制接口用于管理和核对内核；代理入口用于 AstrBot 实际出站，两者地址可以不同。插件只写入专用实例；共享实例在具备可信完整基线、合并和恢复能力前保持只读。</p></section>
+    const artifact=kernelStatus.artifact||state.kernel?.artifact||{}, process=kernelStatus.process||state.kernel?.process||{}
+    html=`<section class="panel"><div class="bar"><h2>插件自管内核</h2><div class="actions"><button id="kernel-install">下载安装</button><button id="kernel-start">启动</button><button id="kernel-stop">停止</button><button id="runtime-apply" class="primary">应用代理配置</button></div></div><div class="cards"><article><b>${esc(artifact.version||'--')}</b><span>固定版本</span></article><article><b>${esc(artifact.platform?.os||'--')} / ${esc(artifact.platform?.arch||'--')}</b><span>${esc(artifact.platform?.libc||'平台')}</span></article><article><b>${esc(artifact.state||'未知')}</b><span>制品状态</span></article><article><b>${esc(process.state||'未知')}</b><span>进程状态</span></article></div><div class="inline"><input id="kernel-file" type="file" accept=".gz,.zip"><button id="kernel-upload">校验并安装离线制品</button><button id="control-status">刷新运行状态</button></div><p class="muted">控制密钥、监听地址和稳定代理入口由插件内部生成并仅绑定回环地址，不需要手工配置。</p></section>
       ${groups.length?`<section class="panel"><h2>代理组状态</h2>${groups.map(group=>`<div class="control-group"><b>${esc(group.display_name)}</b><small>${esc(group.type)} · ${esc(group.selected_display_name||'无')}</small><select data-select="${esc(group.id)}">${group.members.map(node=>`<option value="${esc(node.id)}" ${node.id===group.selected_node_id?'selected':''} ${node.available?'':'disabled'}>${esc(node.display_name)}${node.available?'':'（不可用）'}</option>`).join('')}</select></div>`).join('')}</section>`:'<section class="panel"><p class="muted">尚未检查，或控制接口没有可切换代理组。</p></section>'}`
   } else {
     html=`<section class="panel"><h2>连接日志</h2>${state.events.slice().reverse().map(event=>`<div class="log">${esc(event.action)} · ${esc(event.result||'')}<small>${new Date(event.at*1000).toLocaleString()}</small></div>`).join('')||'<p class="muted">暂无事件。</p>'}</section>`
@@ -129,11 +130,15 @@ function bind(){
   $('preview')?.addEventListener('click',async()=>{$('result').textContent=JSON.stringify(await api.apiPost('preview',{host:$('host').value}),null,2)})
   $('verify-outbound')?.addEventListener('click',async()=>{try{const result=await api.apiPost('verify-outbound',{url:$('verify-url').value});state.application={...(state.application||{}),verification:result};render();note(result.verified?'出口已确认':'验证未能确认实际出口，请查看三个层级的证据',!result.verified)}catch(error){note(error.message,true)}})
   $('control-status')?.addEventListener('click',checkControl)
+  $('kernel-install')?.addEventListener('click',()=>kernelAction('kernel-install','正在下载并校验固定版本内核...'))
+  $('kernel-start')?.addEventListener('click',()=>kernelAction('kernel-start','正在启动内核...'))
+  $('kernel-stop')?.addEventListener('click',()=>kernelAction('kernel-stop','正在停止内核...'))
+  $('kernel-upload')?.addEventListener('click',uploadKernel)
   $('runtime-apply')?.addEventListener('click',async()=>{try{await saveChanges();await api.apiPost('runtime-apply',{});controlResult=await api.apiGet('control-status');render();note('代理配置已应用并完成运行状态核对')}catch(error){note(error.message,true)}})
   document.querySelectorAll('[data-select]').forEach(select=>select.addEventListener('change',async()=>{try{await api.apiPost('control-select',{group_id:select.dataset.select,node_id:select.value});await checkControl();note('代理组已切换')}catch(error){note(error.message,true)}}))
 }
 
-function readControl(){ if(tab!=='control')return; state.control={enabled:document.querySelector('[data-ck]')?.checked??state.control.enabled,url:$('control-url').value,listen:$('control-listen').value,secret:$('control-secret').value,timeout:Number($('control-timeout').value||8),deployment:$('control-deployment').value,scope:$('control-scope').value}; state.proxy_entry={...(state.proxy_entry||{}),http_url:$('proxy-http-url').value,socks_url:$('proxy-socks-url').value,source:'configured'} }
+function readControl(){}
 async function saveChanges(){ readControl(); state=await api.apiPost('save',state); original=structuredClone(state) }
 async function previewImport(){
   const urls=$('sub-links').value.split(/\s+/).filter(Boolean); if(!urls.length)return note('请先输入订阅链接',true)
@@ -148,8 +153,10 @@ async function refreshSubscription(id){
   try{ note('正在刷新订阅...'); const result=await api.apiPost('subscription-refresh',{id});state=result.snapshot;original=structuredClone(state);render();const d=result.result.diff;note(`订阅刷新成功：新增 ${d.added.length}、变更 ${d.changed.length}、删除 ${d.deleted.length}、未变 ${d.unchanged.length}`) }catch(error){note(error.message,true)}
 }
 async function checkControl(){
-  try{ await saveChanges();controlResult=await api.apiGet('control-status');render();note('控制接口连接成功') }catch(error){note(error.message,true)}
+  try{ kernelStatus=await api.apiGet('kernel-status');controlResult=kernelStatus.ready?await api.apiGet('control-status'):null;render();note(kernelStatus.message,!kernelStatus.ready) }catch(error){note(error.message,true)}
 }
+async function kernelAction(route,message){try{note(message);await api.apiPost(route,{});await load();note('内核状态已更新')}catch(error){note(error.message,true)}}
+async function uploadKernel(){const file=$('kernel-file')?.files?.[0];if(!file)return note('请选择与当前平台匹配的固定版本制品',true);if(file.size>64*1024*1024)return note('制品超过 64 MiB 限制',true);try{note('正在校验离线制品...');const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',',2)[1]);reader.onerror=reject;reader.readAsDataURL(file)});await api.apiPost('kernel-upload',{content});await load();note('离线制品已校验并安装')}catch(error){note(error.message,true)}}
 async function startProbe(nodeIds){
   try{const started=await api.apiPost('probe-task',{node_ids:nodeIds,timeout:5,concurrency:5});probeTask={id:started.task_id,total:started.total,completed:0,status:'running'};render();note('测速任务已开始');pollProbe()}catch(error){note(error.message,true)}
 }

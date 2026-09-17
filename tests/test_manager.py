@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import copy
+import gzip
+import hashlib
 import json
 import importlib.util
 import sys
@@ -8,7 +10,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 def install_astrbot_stubs():
@@ -73,6 +75,76 @@ class TestConfigurationRules(unittest.TestCase):
             for name in [name for name in sys.modules if name==package_name or name.startswith(package_name+'.')]:
                 sys.modules.pop(name,None)
 
+    def test_fixed_artifact_manifest_and_offline_digest_enforcement(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+        with tempfile.TemporaryDirectory() as directory:
+            manager=ArtifactManager(Path(directory),'mihomo')
+            self.assertEqual(manager.manifest['version'],'1.19.31')
+            self.assertIn(manager.platform['libc'],{'glibc','musl','none'})
+            if manager.selected() is None: self.skipTest('测试平台不在固定制品清单中')
+            archive=gzip.compress(b'fixed-test-binary')
+            selected=manager.manifest['artifacts'][manager.selected()['key']]
+            selected.update({'format':'gz','sha256':hashlib.sha256(archive).hexdigest(),'name':'fixture.gz'})
+            status=manager.install(archive,'offline')
+            self.assertTrue(status['ready']); self.assertEqual(status['source'],'offline')
+            before=manager.binary.read_bytes()
+            with self.assertRaisesRegex(ValueError,'SHA-256'):
+                manager.install(archive+b'tampered','offline')
+            self.assertEqual(manager.binary.read_bytes(),before)
+            self.assertEqual(manager.binary.stat().st_mode & 0o777,0o700)
+
+    def test_internal_runtime_secret_is_stable_and_not_client_configurable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager=self.module.ProxyManager.__new__(self.module.ProxyManager)
+            manager.data_dir=Path(directory); manager.state={'control':{},'proxy_entry':{}}
+            manager._bind_owned_runtime(); first=manager.state['control']['secret']
+            manager._bind_owned_runtime()
+            self.assertEqual(manager.state['control']['secret'],first); self.assertGreaterEqual(len(first),32)
+            self.assertEqual(manager.state['control']['listen'],'127.0.0.1:19090')
+            self.assertEqual(manager.state['proxy_entry']['http_url'],'http://127.0.0.1:17890')
+            self.assertEqual((Path(directory)/'runtime'/'control.secret').stat().st_mode & 0o777,0o600)
+
+    def test_kernel_supervisor_times_out_and_terminates_process(self):
+        from proxy_manager.runtime.supervisor import KernelSupervisor
+        process=Mock(pid=1234,returncode=None)
+        process.poll.side_effect=[None,0]
+        process.wait.return_value=0
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor=KernelSupervisor(Path(directory),AsyncMock(return_value=False))
+            with patch('proxy_manager.runtime.supervisor.subprocess.Popen',return_value=process), \
+                 patch('proxy_manager.runtime.supervisor.asyncio.sleep',new=AsyncMock()):
+                with self.assertRaisesRegex(RuntimeError,'健康检查超时'):
+                    asyncio.run(supervisor.start(Path(directory)/'core',Path(directory)/'config.yaml',0))
+            process.terminate.assert_called_once_with()
+            self.assertFalse(supervisor.pid_path.exists())
+            self.assertEqual(supervisor.status()['state'],'failed')
+
+    def test_kernel_supervisor_restarts_after_crash(self):
+        from proxy_manager.runtime.supervisor import KernelSupervisor
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor=KernelSupervisor(Path(directory),AsyncMock(return_value=True))
+            supervisor.process=Mock(returncode=17); supervisor.process.poll.return_value=17
+            supervisor.binary=Path(directory)/'core'; supervisor.config=Path(directory)/'config.yaml'
+            async def respawn(_timeout): supervisor.stopping=True
+            supervisor._spawn=AsyncMock(side_effect=respawn)
+            with patch('proxy_manager.runtime.supervisor.asyncio.sleep',new=AsyncMock()):
+                asyncio.run(supervisor._monitor())
+            self.assertEqual(supervisor.restarts,1)
+            self.assertEqual(supervisor.last_error,'内核异常退出，代码 17')
+            supervisor._spawn.assert_awaited_once_with(12)
+
+    def test_kernel_supervisor_stop_cancels_monitor_and_removes_pid(self):
+        from proxy_manager.runtime.supervisor import KernelSupervisor
+        process=Mock(pid=1234,returncode=None); process.poll.return_value=None; process.wait.return_value=0
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor=KernelSupervisor(Path(directory),AsyncMock(return_value=True)); supervisor.process=process
+            supervisor.last_error='旧故障'
+            supervisor.pid_path.write_text('{"pid":1234}',encoding='utf-8')
+            result=asyncio.run(supervisor.stop())
+            process.terminate.assert_called_once_with()
+            self.assertFalse(supervisor.pid_path.exists())
+            self.assertEqual(result['state'],'stopped')
+
     def test_normalized_nodes_record_executor_and_adapter_set(self):
         manager=self._manager_for_runtime()
         node=manager._normalize({'nodes':[{'id':'a','name':'AnyTLS','protocol':'anytls','endpoint':'anytls://secret@example.com:443'}]})['nodes'][0]
@@ -136,9 +208,9 @@ class TestConfigurationRules(unittest.TestCase):
         payload['nodes'][0]['connection']['password'] = 'new-pass'
         payload['nodes'][0]['connection']['token'] = ''
         manager._restore_redacted(payload)
-        self.assertEqual(payload['control']['secret'], '')
-        self.assertEqual(payload['proxy_entry']['http_url'], '')
-        self.assertEqual(payload['proxy_entry']['socks_url'], 'socks5://new-proxy:1080')
+        self.assertEqual(payload['control']['secret'], 'old-secret')
+        self.assertEqual(payload['proxy_entry']['http_url'], 'http://old-proxy:7890')
+        self.assertEqual(payload['proxy_entry']['socks_url'], 'socks5://old-proxy:7891')
         self.assertEqual(payload['nodes'][0]['endpoint'], manager.state['nodes'][0]['endpoint'])
         self.assertEqual(payload['nodes'][0]['connection'], {'password':'new-pass','token':''})
 
@@ -263,7 +335,7 @@ class TestConfigurationRules(unittest.TestCase):
     def test_runtime_groups_must_follow_selected_node_members(self):
         document = self._manager_for_runtime()._runtime_document()
         self.assertEqual(document["mixed-port"],7890)
-        self.assertTrue(document['allow-lan']); self.assertEqual(document['bind-address'],'*')
+        self.assertFalse(document['allow-lan']); self.assertEqual(document['bind-address'],'127.0.0.1')
         groups = {item["name"]: item for item in document["proxy-groups"]}
         self.assertEqual(groups["group-hk"].get("proxies"), ["node-hk-1"])
         self.assertEqual(groups["group-sg"].get("proxies"), ["node-sg-1"])

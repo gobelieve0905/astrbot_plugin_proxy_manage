@@ -24,7 +24,7 @@ class MihomoAdapter(CoreAdapter):
         }
 
     def artifact(self) -> dict:
-        return {'status':'unsupported','message':'Mihomo 自管制品尚未实现；当前仍连接外部准备的专用实例'}
+        return {'status':'managed','manifest':'mihomo_artifacts.json'}
 
     @staticmethod
     def _typed_query_value(value:str):
@@ -94,7 +94,7 @@ class MihomoAdapter(CoreAdapter):
             document['external-controller']=control.get('listen','127.0.0.1:9090')
             document['secret']=control.get('secret','')
             port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
-            if port: document.update({'mixed-port':port,'allow-lan':True,'bind-address':'*'})
+            if port: document.update({'mixed-port':port,'allow-lan':False,'bind-address':'127.0.0.1'})
         yaml.safe_load(yaml.safe_dump(document,allow_unicode=True,sort_keys=False))
         return document
 
@@ -151,7 +151,7 @@ class MihomoAdapter(CoreAdapter):
                   'rules':['MATCH,REJECT'],'external-controller':control.get('listen','127.0.0.1:9090'),'secret':control.get('secret','')}
         port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
         if port: document['mixed-port']=port
-        if port: document.update({'allow-lan':True,'bind-address':'*'})
+        if port: document.update({'allow-lan':False,'bind-address':'127.0.0.1'})
         return document
 
     def control(self, state: dict) -> tuple[dict,dict]:
