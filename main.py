@@ -5,6 +5,7 @@ import asyncio
 import base64
 import copy
 import hashlib
+import ipaddress
 import json
 import re
 import time
@@ -211,7 +212,7 @@ def identity_material(protocol: str, endpoint: str='', connection: object=None) 
     return canonical_connection(protocol,endpoint,connection)
 
 
-@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.2.10')
+@register('astrbot_plugin_proxy_manage','gobelieve','Clash Verge 风格代理管理中心','0.3.0')
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -547,7 +548,9 @@ class ProxyManager(Star):
         result['health']=redact_diagnostics(self.health)
         result['events']=redact_diagnostics(self.events[-50:]); result['templates']=TEMPLATES
         application=getattr(self,'runtime_application',{})
-        result['application']={key:application.get(key) for key in ('status','saved_revision','applied_revision','updated_at','message')}
+        result['application']={key:application.get(key) for key in (
+            'status','saved_revision','applied_revision','updated_at','message','verification'
+        )}
         return result
 
     async def persist(self,state:dict):
@@ -561,7 +564,7 @@ class ProxyManager(Star):
         try: temp.chmod(0o600)
         except OSError: pass
         temp.replace(self.path); self.state=normalized
-        if hasattr(self,'runtime_application') and self.runtime_application.get('status')!='restore_failed':
+        if hasattr(self,'runtime_application') and self.runtime_application.get('status') not in {'restore_failed','fail_closed'}:
             try: saved_revision=self._runtime_revision(self._runtime_document())
             except (ValueError,TypeError): saved_revision=''
             applied_revision=self.runtime_application.get('applied_revision','')
@@ -683,6 +686,15 @@ class ProxyManager(Star):
                 return route
         return None
 
+    def _record_outbound_verification(self,result:dict):
+        """Persist the last redacted verification evidence without changing its runtime revision."""
+        application=copy.deepcopy(getattr(self,'runtime_application',{}))
+        application['verification']=redact_diagnostics({**result,'at':int(time.time())})
+        try:
+            self._persist_runtime_application(application)
+        except OSError:
+            logger.warning('实际出站验证状态写入失败')
+
     async def preview(self):
         try:
             host=safe_host((await request.json()).get('host'))
@@ -693,6 +705,9 @@ class ProxyManager(Star):
         except (ValueError,TypeError) as exc: return error_response(str(exc))
 
     async def verify_outbound(self):
+        result={'verified':False,'entry':{'state':'not_started','message':'尚未发起请求'},
+                'rule':{'state':'not_started','message':'尚未核对运行规则'},
+                'exit':{'state':'unconfirmed','message':'尚未取得可验证出口证据'}}
         try:
             payload=await request.json(); url=str(payload.get('url','')); parsed=urlsplit(url)
             if parsed.scheme!='https' or not parsed.hostname: raise ValueError('实际出站验证只允许 HTTPS 地址')
@@ -703,17 +718,59 @@ class ProxyManager(Star):
             if not proxy: raise ValueError('尚未配置统一 HTTP 代理入口')
             started=time.monotonic()
             async with httpx.AsyncClient(proxy=proxy,trust_env=False,follow_redirects=False,timeout=15) as client:
-                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.2.10'})
-            control,headers=self._control()
-            async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
-                proxies=await client.get('/proxies'); proxies.raise_for_status()
-            runtime_group=proxies.json().get('proxies',{}).get(group.get('kernel_name'),{}) if group['id']!='direct' else {}
-            return json_response({'verified':True,'host':host,'status_code':response.status_code,
-                                  'elapsed_ms':round((time.monotonic()-started)*1000),'rule':route,
-                                  'group':{'id':group['id'],'name':group['name'],'kernel_name':group.get('kernel_name')},
-                                  'actual_selection':runtime_group.get('now','DIRECT') if isinstance(runtime_group,dict) else 'DIRECT'})
-        except (ValueError,httpx.HTTPError,OSError) as exc:
-            return error_response(str(exc) if isinstance(exc,ValueError) else '统一代理入口实际请求失败')
+                response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.0'})
+            response.raise_for_status()
+            result.update({'host':host,'status_code':response.status_code,
+                           'elapsed_ms':round((time.monotonic()-started)*1000),'matched_rule':route,
+                           'group':{'id':group['id'],'name':group['name'],'kernel_name':group.get('kernel_name')}})
+            result['entry']={'state':'passed','message':'统一代理入口已返回 HTTPS 响应'}
+            kernel=await self._kernel_status()
+            if kernel.get('state')!='applied':
+                result['rule']={'state':'unconfirmed','message':'入口请求成功，但内核运行状态未通过核对：'+str(kernel.get('message','未知'))}
+                self._record_outbound_verification(result)
+                self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'kernel_not_applied'})
+                return json_response(result)
+            result['rule']={'state':'matched' if route else 'default','message':'命中显式规则' if route else '命中受管理的默认 MATCH 规则'}
+            try:
+                body=response.json()
+                value=body.get('ip') if isinstance(body,dict) else None
+                exit_ip=str(ipaddress.ip_address(str(value))) if value else ''
+            except (ValueError,TypeError,json.JSONDecodeError):
+                exit_ip=''
+            if not exit_ip:
+                result['exit']={'state':'unconfirmed','message':'目标未返回可验证的出口 IP；入口和规则状态不能证明实际出口'}
+                self._record_outbound_verification(result)
+                self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'exit_ip_missing'})
+                return json_response(result)
+            actual_selection='DIRECT'
+            if group['id']!='direct':
+                try:
+                    control,headers=self._control()
+                    async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
+                        proxies=await client.get('/proxies'); proxies.raise_for_status()
+                    runtime_group=proxies.json().get('proxies',{}).get(group.get('kernel_name'),{})
+                    actual_selection=runtime_group.get('now','') if isinstance(runtime_group,dict) else ''
+                except (ValueError,httpx.HTTPError,OSError,TypeError):
+                    actual_selection=''
+            if not actual_selection:
+                result['exit']={'state':'unconfirmed','message':'已取得出口 IP，但无法回读运行代理组的实际选择'}
+                self._record_outbound_verification(result)
+                self.event({'action':'verify_outbound','result':'unconfirmed','host':host,'reason':'selection_unavailable'})
+                return json_response(result)
+            result['actual_selection']=actual_selection
+            result['exit']={'state':'confirmed','ip':exit_ip,'message':'出口 IP 与运行代理组实际选择均已取得'}
+            result['verified']=True
+            self._record_outbound_verification(result)
+            self.event({'action':'verify_outbound','result':'confirmed','host':host,'selection':actual_selection})
+            return json_response(result)
+        except ValueError as exc:
+            return error_response(str(exc))
+        except (httpx.HTTPError,OSError) as exc:
+            result['entry']={'state':'failed','message':'统一代理入口请求失败'}
+            result['error']=safe_error(exc)
+            self._record_outbound_verification(result)
+            self.event({'action':'verify_outbound','result':'failed','message':safe_error(exc)})
+            return json_response(result)
 
     async def probe(self):
         try:
@@ -847,7 +904,7 @@ class ProxyManager(Star):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.10'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.0'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -920,7 +977,7 @@ class ProxyManager(Star):
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
             async with httpx.AsyncClient(timeout=20,follow_redirects=True,trust_env=False,limits=httpx.Limits(max_connections=4)) as client:
-                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.2.10'})
+                response=await client.get(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.0'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1047,6 +1104,12 @@ class ProxyManager(Star):
                   'applied_revision':application.get('applied_revision','')}
             if application.get('status')=='restore_failed':
                 return {**base,'state':'restore_failed','message':'上次应用失败且运行配置恢复失败，请立即检查专用内核'}
+            if application.get('status')=='fail_closed':
+                recovery=application.get('document')
+                errors=self._verify_runtime_data(recovery,runtime,proxies,runtime_rules) if isinstance(recovery,dict) else ['失败关闭配置缺失']
+                if errors:
+                    return {**base,'state':'runtime_inconsistent','message':'失败关闭配置与运行状态不一致：'+errors[0]}
+                return {**base,'state':'fail_closed','ready':False,'message':'候选配置失败；当前仅保留 MATCH,REJECT 的失败关闭配置'}
             if control.get('deployment')!='dedicated':
                 return {**base,'state':'saved','message':'共享内核仅允许检查；缺少可信完整基线，已禁止写入'}
             if not application.get('applied_revision'):
@@ -1152,7 +1215,7 @@ class ProxyManager(Star):
     def _validate_runtime_document(document:dict):
         proxy_names=[item.get('name') for item in document.get('proxies',[])]
         group_names=[item.get('name') for item in document.get('proxy-groups',[])]
-        if not proxy_names or len(proxy_names)!=len(set(proxy_names)) or any(not name for name in proxy_names):
+        if len(proxy_names)!=len(set(proxy_names)) or any(not name for name in proxy_names):
             raise ValueError('候选配置中的内核节点名称为空或重复')
         if len(group_names)!=len(set(group_names)) or any(not name for name in group_names):
             raise ValueError('候选配置中的内核代理组名称为空或重复')
@@ -1199,13 +1262,26 @@ class ProxyManager(Star):
         return errors
 
     @staticmethod
-    def _recovery_document(control:dict,entry:dict) -> dict:
+    def _fail_closed_document(control:dict,entry:dict) -> dict:
         document={'mode':'rule','log-level':'silent','proxies':[],'proxy-providers':{},'proxy-groups':[],
-                  'rules':['MATCH,DIRECT'],'external-controller':control.get('listen','127.0.0.1:9090'),'secret':control.get('secret','')}
+                  'rules':['MATCH,REJECT'],'external-controller':control.get('listen','127.0.0.1:9090'),'secret':control.get('secret','')}
         port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
         if port: document['mixed-port']=port
         if port: document.update({'allow-lan':True,'bind-address':'*'})
         return document
+
+    @classmethod
+    def _verified_recovery_document(cls,application:object) -> dict|None:
+        if not isinstance(application,dict) or application.get('status') not in {'applied','pending_apply'}:
+            return None
+        document=application.get('document')
+        if not isinstance(document,dict) or not application.get('applied_revision'):
+            return None
+        try:
+            cls._validate_runtime_document(document)
+        except (TypeError,ValueError):
+            return None
+        return copy.deepcopy(document) if cls._runtime_revision(document)==application['applied_revision'] else None
 
     async def runtime_config(self):
         try:
@@ -1233,7 +1309,11 @@ class ProxyManager(Star):
                 if control.get('deployment')!='dedicated' or control.get('scope')!='full':
                     raise ValueError('共享内核缺少可信完整基线，禁止写入；请使用插件专用实例和完整配置范围')
                 previous=getattr(self,'runtime_application',{})
-                recovery=copy.deepcopy(previous.get('document')) if isinstance(previous.get('document'),dict) else self._recovery_document(control,self.state['proxy_entry'])
+                recovery=self._verified_recovery_document(previous)
+                recovery_kind='previous_verified' if recovery else 'fail_closed'
+                if recovery is None:
+                    recovery=self._fail_closed_document(control,self.state['proxy_entry'])
+                self._validate_runtime_document(recovery)
                 import yaml
                 candidate_payload={'path':'','payload':yaml.safe_dump(document,allow_unicode=True,sort_keys=False)}
                 recovery_payload={'path':'','payload':yaml.safe_dump(recovery,allow_unicode=True,sort_keys=False)}
@@ -1260,10 +1340,14 @@ class ProxyManager(Star):
                             restored=True
                         except (ValueError,httpx.HTTPError,OSError) as restore_error:
                             restore_message=safe_error(restore_error)
-                        status=('pending_apply' if previous.get('applied_revision') else 'saved') if restored else 'restore_failed'
-                        message='候选配置应用或核对失败，已恢复并重新核对' if restored else '候选配置失败，且运行配置恢复核对失败'
+                        status='pending_apply' if restored and recovery_kind=='previous_verified' else ('fail_closed' if restored else 'restore_failed')
+                        message=(
+                            '候选配置应用或核对失败，已恢复上一份已验证配置并重新核对'
+                            if restored and recovery_kind=='previous_verified' else
+                            ('候选配置失败，未找到已验证配置；已写入并核对 MATCH,REJECT 失败关闭配置' if restored else '候选配置失败，且运行配置恢复核对失败')
+                        )
                         self._persist_runtime_application({'status':status,'saved_revision':revision,
-                                                           'applied_revision':previous.get('applied_revision',''),
+                                                           'applied_revision':previous.get('applied_revision','') if recovery_kind=='previous_verified' else '',
                                                            'document':recovery if restored else previous.get('document'),
                                                            'updated_at':int(time.time()),'message':message})
                         self.event({'action':'runtime_apply','result':status,'message':safe_error(apply_error),'restore':safe_error(restore_message)})
@@ -1436,7 +1520,7 @@ class ProxyManager(Star):
     async def initialize(self):
         if self.auto_task and not self.auto_task.done(): self.auto_task.cancel()
         self.auto_task=asyncio.create_task(self._auto_loop())
-        logger.info('代理管理中心 0.2.10 已加载')
+        logger.info('代理管理中心 0.3.0 已加载')
 
     async def terminate(self):
         if self.auto_task:

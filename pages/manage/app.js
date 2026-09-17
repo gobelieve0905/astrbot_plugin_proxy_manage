@@ -17,19 +17,25 @@ function expiry(value){ if(!value)return '无到期信息'; const days=Math.ceil
 function health(id){ return state.health?.[id]||{status:'unknown',latency_ms:null,error:'',checked_at:0} }
 function statusLabel(item){ return {ok:'可用',error:'异常',timeout:'超时',pending:'待接入内核',unknown:'未检测',invalid:'引用失效'}[item.status]||'未检测' }
 function nextRun(item){ if(!item.enabled||!item.interval)return '手动'; return item.next_refresh_at<=Date.now()/1000?'即将刷新':time(item.next_refresh_at) }
+function verificationPanel(value){
+  const verification=value||{entry:{state:'not_started',message:'尚未验证'},rule:{state:'not_started',message:'尚未验证'},exit:{state:'unconfirmed',message:'尚未验证'}}
+  const labels={passed:'入口请求成功',failed:'入口请求失败',matched:'规则已命中',default:'默认 MATCH 规则',confirmed:'出口已确认',unconfirmed:'无法判定',not_started:'尚未验证'}
+  const levels=[['入口',verification.entry],['规则',verification.rule],['出口',verification.exit]]
+  return `<div class="verification-levels">${levels.map(([label,item])=>`<article class="verification ${esc(item?.state||'not_started')}"><small>${label}</small><b>${esc(labels[item?.state]||'无法判定')}</b><span>${esc(item?.message||'')}</span>${item?.ip?`<code>${esc(item.ip)}</code>`:''}</article>`).join('')}</div>`
+}
 
 function render(){
   $('crumb').textContent=titles[tab]; let html=''
   if(tab==='overview'){
     const values=Object.values(state.health||{})
     const ok=values.filter(item=>item.status==='ok').length, bad=values.filter(item=>['error','timeout'].includes(item.status)).length
-    const kernelText={not_configured:'未配置',connection_failed:'连接失败',auth_failed:'认证失败',version_unsupported:'版本不支持',saved:'已保存',pending_apply:'待应用',applied:'已应用',runtime_inconsistent:'运行配置不一致',restore_failed:'恢复失败'}[kernelStatus.state]||'未检查'
+    const kernelText={not_configured:'未配置',connection_failed:'连接失败',auth_failed:'认证失败',version_unsupported:'版本不支持',saved:'已保存',pending_apply:'待应用',applied:'已应用',runtime_inconsistent:'运行配置不一致',restore_failed:'恢复失败',fail_closed:'失败关闭'}[kernelStatus.state]||'未检查'
     const kernelClass=kernelStatus.state==='applied'?'online':'error'
     html=`<div class="hero"><b>当前配置</b><strong>${esc(state.name)}</strong><span class="${kernelClass}">● 内核：${kernelText}</span><small>${esc(kernelStatus.message||'')}</small></div>
       <div class="cards">${[['subscriptions','订阅'],['nodes','节点'],['groups','代理组'],['routes','规则']].map(([key,label])=>`<article><b>${state[key].length}</b><span>${label}</span></article>`).join('')}</div>
       <div class="cards"><article><b>${ok}</b><span>可用节点</span></article><article><b>${bad}</b><span>异常节点</span></article><article><b>${state.subscriptions.filter(item=>item.enabled&&item.interval).length}</b><span>自动订阅</span></article><article><b>${state.events.length}</b><span>最近事件</span></article></div>
       <section class="panel"><h2>分流预览</h2><div class="inline"><input id="host" placeholder="api.telegram.org"><button id="preview">查询</button></div><pre id="result">输入域名查看命中的代理组和节点。</pre></section>`
-    html+=`<section class="panel"><h2>实际出站验证</h2><div class="inline"><input id="verify-url" value="https://www.gstatic.com/generate_204"><button id="verify-outbound">通过统一入口验证</button></div><pre id="verify-result">请求会真实经过统一代理入口，并回读内核实际选择。</pre></section>`
+    html+=`<section class="panel"><h2>实际出站验证</h2><p class="muted">验证分别记录入口请求、运行规则与出口证据。只有目标返回出口 IP 且能回读运行选择时，才显示“出口已确认”。</p><div class="inline"><input id="verify-url" value="https://api.ipify.org?format=json"><button id="verify-outbound">验证实际出口</button></div>${verificationPanel(state.application?.verification)}<pre id="verify-result">${esc(state.application?.verification?JSON.stringify(state.application.verification,null,2):'尚未验证。普通 HTTPS 页面可能只能证明入口，不足以确认出口。')}</pre></section>`
     html+=`<section class="panel"><h2>首次使用</h2><div class="steps"><span>1 连接专用内核</span><span>2 导入订阅</span><span>3 筛选并选择节点</span><span>4 建立代理组</span><span>5 配置规则组</span><span>6 应用配置</span><span>7 验证实际出口</span></div></section>`
   } else if(tab==='subscriptions'){
     const groups=[...new Set(state.subscriptions.map(item=>item.group))]; const current=$('#group-filter')?.value||'全部'
@@ -121,7 +127,7 @@ function bind(){
     render();note('模板已添加，请选择节点')
   }))
   $('preview')?.addEventListener('click',async()=>{$('result').textContent=JSON.stringify(await api.apiPost('preview',{host:$('host').value}),null,2)})
-  $('verify-outbound')?.addEventListener('click',async()=>{try{$('verify-result').textContent=JSON.stringify(await api.apiPost('verify-outbound',{url:$('verify-url').value}),null,2)}catch(error){note(error.message,true)}})
+  $('verify-outbound')?.addEventListener('click',async()=>{try{const result=await api.apiPost('verify-outbound',{url:$('verify-url').value});state.application={...(state.application||{}),verification:result};render();note(result.verified?'出口已确认':'验证未能确认实际出口，请查看三个层级的证据',!result.verified)}catch(error){note(error.message,true)}})
   $('control-status')?.addEventListener('click',checkControl)
   $('runtime-apply')?.addEventListener('click',async()=>{try{await saveChanges();await api.apiPost('runtime-apply',{});controlResult=await api.apiGet('control-status');render();note('代理配置已应用并完成运行状态核对')}catch(error){note(error.message,true)}})
   document.querySelectorAll('[data-select]').forEach(select=>select.addEventListener('change',async()=>{try{await api.apiPost('control-select',{group_id:select.dataset.select,node_id:select.value});await checkControl();note('代理组已切换')}catch(error){note(error.message,true)}}))

@@ -12,3 +12,9 @@
 .node-error{margin-top:8px;color:var(--danger);font-size:12px}
 .sub-card details{margin-top:8px}
 .sub-card summary{cursor:pointer;color:var(--muted)}
+.verification-levels{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
+.verification{padding:12px;border:1px solid var(--line);border-radius:6px;display:grid;gap:3px}
+.verification b{font-size:15px}.verification span{color:var(--muted);font-size:12px}.verification code{font-size:12px}
+.verification.passed,.verification.matched,.verification.default,.verification.confirmed{border-color:var(--accent);background:var(--soft)}
+.verification.failed,.verification.unconfirmed{border-color:var(--danger)}
+@media(max-width:700px){.verification-levels{grid-template-columns:1fr}}
