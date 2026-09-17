@@ -1,6 +1,6 @@
 # 代理管理中心使用指南
 
-> 本指南记录 0.3.0 的当前操作方式。当前版本已实现安全失败关闭和分层实际出口验证，但仍依赖外部准备的 Mihomo，尚未达到插件自管可插拔内核和统一接管 AstrBot 实际出站流量的最终产品形态。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
+> 本指南记录 0.3.1 的当前操作方式。当前版本已建立可插拔内核适配层，Mihomo 只是默认适配器；仍依赖外部准备的内核实例，尚未达到插件自管多内核和统一接管 AstrBot 实际出站流量的最终产品形态。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
 
 ## 首次接入
 

@@ -34,6 +34,34 @@ class TestConfigurationRules(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         install_astrbot_stubs(); cls.module = __import__("main")
+        from proxy_manager.domain import security, identity
+        cls.module.safe_url = security.safe_url
+        cls.module.safe_error = security.safe_error
+        cls.module.ProxyManager._stable_node_id = staticmethod(__import__('proxy_manager.domain.identity', fromlist=['stable_node_id']).stable_node_id)
+
+
+    def test_core_adapter_contract_keeps_mihomo_logic_inside_adapter(self):
+        from proxy_manager.cores.registry import current_adapter
+        manager=self._manager_for_runtime(); adapter=current_adapter(manager.state)
+        self.assertEqual(adapter.id,'mihomo')
+        document=adapter.render(manager.state)
+        self.assertEqual(document['rules'][-1],'MATCH,DIRECT')
+        self.assertEqual(manager._runtime_document(), document)
+        self.assertEqual(manager._mihomo_proxy(manager.state['nodes'][0])['name'],'node-hk-1')
+        source=Path(__file__).resolve().parents[1]/'proxy_manager'/'plugin.py'
+        text=source.read_text(encoding='utf-8')
+        self.assertNotIn('external-controller', text)
+        self.assertNotIn('skip-cert-verify', text)
+        self.assertNotIn('mixed-port', text)
+        self.assertNotIn('/configs?force=true', text)
+
+    def test_normalized_nodes_record_executor_and_adapter_set(self):
+        manager=self._manager_for_runtime()
+        node=manager._normalize({'nodes':[{'id':'a','name':'AnyTLS','protocol':'anytls','endpoint':'anytls://secret@example.com:443'}]})['nodes'][0]
+        self.assertEqual(node['executor'],'mihomo')
+        self.assertEqual(node['adapters'],['mihomo'])
+        http_node=manager._normalize({'nodes':[{'id':'b','name':'HTTP','protocol':'http','endpoint':'http://proxy.example:8080'}]})['nodes'][0]
+        self.assertEqual(http_node['executor'],'direct-http')
 
     def test_invalid_proxy_scheme_is_rejected(self):
         self.assertFalse(self.module.safe_url("file:///etc/passwd"))
@@ -443,7 +471,7 @@ class TestConfigurationRules(unittest.TestCase):
     def test_expired_import_preview_is_rejected_and_removed(self):
         manager=self._manager_for_runtime(); manager.previews['old']={'at':0,'items':[]}
         fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'preview_id':'old'}))
-        with patch.object(self.module,'request',fake_request):
+        with patch('proxy_manager.plugin.request',fake_request):
             result=asyncio.run(manager.subscription_import())
         self.assertEqual(result['status'],400); self.assertNotIn('old',manager.previews)
 
@@ -458,7 +486,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(hk['display_name'],'香港自动'); self.assertEqual(hk['selected_node_id'],'hk-1')
         put_client=AsyncMock(); put_client.__aenter__.return_value=put_client; put_client.request=AsyncMock(return_value=response({}))
         fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'group_id':'hk','node_id':'hk-1'}))
-        with patch.object(self.module,'request',fake_request), patch.object(self.module.httpx,'AsyncClient',return_value=put_client):
+        with patch('proxy_manager.plugin.request',fake_request), patch.object(self.module.httpx,'AsyncClient',return_value=put_client):
             result=asyncio.run(manager.control_select())
         self.assertTrue(result['ok'])
         put_client.request.assert_awaited_once_with('PUT','/proxies/group-hk',json={'name':'node-hk-1'})
@@ -651,7 +679,7 @@ class TestConfigurationRules(unittest.TestCase):
         entry=AsyncMock(); entry.__aenter__.return_value=entry; entry.get=AsyncMock(return_value=response)
         control=AsyncMock(); control.__aenter__.return_value=control; control.get=AsyncMock(return_value=proxies)
         fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'url':'https://api.ipify.org?format=json'}))
-        with patch.object(self.module,'request',fake_request), patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
+        with patch('proxy_manager.plugin.request',fake_request), patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
              patch.object(self.module.httpx,'AsyncClient',side_effect=[entry,control]):
             result=asyncio.run(manager.verify_outbound())
         self.assertTrue(result['verified']); self.assertEqual(result['entry']['state'],'passed')
@@ -663,7 +691,7 @@ class TestConfigurationRules(unittest.TestCase):
         response=self.module.httpx.Response(204,content=b'',request=self.module.httpx.Request('GET','https://www.gstatic.com/generate_204'))
         entry=AsyncMock(); entry.__aenter__.return_value=entry; entry.get=AsyncMock(return_value=response)
         fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'url':'https://www.gstatic.com/generate_204'}))
-        with patch.object(self.module,'request',fake_request), patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
+        with patch('proxy_manager.plugin.request',fake_request), patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'applied'})), \
              patch.object(self.module.httpx,'AsyncClient',return_value=entry):
             result=asyncio.run(manager.verify_outbound())
         self.assertFalse(result['verified']); self.assertEqual(result['entry']['state'],'passed')
