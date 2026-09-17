@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from proxy_manager.domain.constants import HTTP_PROTOCOLS
+from ..domain.constants import HTTP_PROTOCOLS
 
 _ADAPTERS=None
 

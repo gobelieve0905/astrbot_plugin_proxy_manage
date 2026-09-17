@@ -34,7 +34,7 @@ class CoreAdapter(ABC):
         return hashlib.sha256(json.dumps(document,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()[:16]
 
     def redact(self, document: dict) -> dict:
-        from proxy_manager.domain.security import redact_config
+        from ..domain.security import redact_config
         import copy
         return redact_config(copy.deepcopy(document))
 

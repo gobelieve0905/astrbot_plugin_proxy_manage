@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, quote, unquote, urlsplit
 import httpx
 
 from .base import CoreAdapter
-from proxy_manager.domain.model import compiled_rules
+from ..domain.model import compiled_rules
 
 
 class MihomoAdapter(CoreAdapter):

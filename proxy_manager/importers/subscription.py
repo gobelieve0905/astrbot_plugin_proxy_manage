@@ -8,8 +8,8 @@ from urllib.parse import quote, unquote, urlencode
 
 import httpx
 
-from proxy_manager.domain.identity import parameter_version, protocol_support, region_of, stable_node_id, suspected_notice
-from proxy_manager.domain.model import compatibility_engine, compatibility_kind, executor_for
+from ..domain.identity import parameter_version, protocol_support, region_of, stable_node_id, suspected_notice
+from ..domain.model import compatibility_engine, compatibility_kind, executor_for
 
 
 def decode_subscription(text:str) -> str:

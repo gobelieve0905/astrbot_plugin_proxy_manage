@@ -2,6 +2,7 @@ import asyncio
 import base64
 import copy
 import json
+import importlib.util
 import sys
 import tempfile
 import types
@@ -54,6 +55,20 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertNotIn('skip-cert-verify', text)
         self.assertNotIn('mixed-port', text)
         self.assertNotIn('/configs?force=true', text)
+
+    def test_entry_imports_inside_astrbot_namespace_package(self):
+        root=Path(__file__).resolve().parents[1]
+        package_name='proxy_manager_package_test'
+        package=types.ModuleType(package_name); package.__path__=[str(root)]
+        sys.modules[package_name]=package
+        try:
+            spec=importlib.util.spec_from_file_location(package_name+'.main',root/'main.py')
+            module=importlib.util.module_from_spec(spec); sys.modules[spec.name]=module
+            spec.loader.exec_module(module)
+            self.assertEqual(module.ProxyManager.__module__,package_name+'.main')
+        finally:
+            for name in [name for name in sys.modules if name==package_name or name.startswith(package_name+'.')]:
+                sys.modules.pop(name,None)
 
     def test_normalized_nodes_record_executor_and_adapter_set(self):
         manager=self._manager_for_runtime()

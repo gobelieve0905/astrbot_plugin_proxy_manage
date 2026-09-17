@@ -16,13 +16,13 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import error_response, json_response, request
 
-from proxy_manager.cores.registry import current_adapter
-from proxy_manager.domain.constants import CONFIGURED, TEMPLATES
-from proxy_manager.domain.identity import stable_node_id
-from proxy_manager.domain.model import compiled_rules, ident, match_rule, normalize_state, validate_state
-from proxy_manager.domain.security import redact_config, redact_diagnostics, restore_config, safe_error, safe_host, safe_url
-from proxy_manager.importers.subscription import parse_subscription, summary, traffic_header
-from proxy_manager.runtime.transaction import verified_recovery_document
+from .cores.registry import current_adapter
+from .domain.constants import CONFIGURED, TEMPLATES
+from .domain.identity import stable_node_id
+from .domain.model import compiled_rules, ident, match_rule, normalize_state, validate_state
+from .domain.security import redact_config, redact_diagnostics, restore_config, safe_error, safe_host, safe_url
+from .importers.subscription import parse_subscription, summary, traffic_header
+from .runtime.transaction import verified_recovery_document
 
 
 class ProxyManager(Star):

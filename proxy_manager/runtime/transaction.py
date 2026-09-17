@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import copy
 
-from proxy_manager.cores.registry import current_adapter
-from proxy_manager.domain.model import compiled_rules
+from ..cores.registry import current_adapter
+from ..domain.model import compiled_rules
 
 
 def runtime_revision(document: dict, adapter=None) -> str:
