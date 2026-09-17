@@ -114,6 +114,17 @@ class TestConfigurationRules(unittest.TestCase):
             asyncio.run(manager.persist(state))
             self.assertEqual(manager.backup.stat().st_mode & 0o777, 0o600)
 
+    def test_startup_hardens_existing_private_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / name for name in ('config.json','config.previous.json','health.json','events.jsonl')]
+            for path in paths:
+                path.write_text('{}'); path.chmod(0o644)
+            context = types.SimpleNamespace(register_web_api=lambda *args: None)
+            with patch.object(self.module.StarTools,'get_data_dir',return_value=Path(directory)):
+                manager = self.module.ProxyManager(context,{})
+            self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in paths))
+            if manager.auto_task: manager.auto_task.cancel()
+
     def test_stable_node_id_and_error_redaction(self):
         helper = self.module.ProxyManager._stable_node_id
         self.assertEqual(helper("sub-a", "http://node:80"), helper("sub-a", "http://node:80"))

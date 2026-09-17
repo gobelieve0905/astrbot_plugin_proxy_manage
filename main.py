@@ -139,6 +139,10 @@ class ProxyManager(Star):
         self.backup=self.data_dir/'config.previous.json'
         self.health_path=self.data_dir/'health.json'
         self.events_path=self.data_dir/'events.jsonl'
+        for private_path in (self.path,self.backup,self.health_path,self.events_path):
+            if private_path.exists():
+                try: private_path.chmod(0o600)
+                except OSError: logger.warning('代理中心私有文件权限收紧失败：'+private_path.name)
         self.lock=asyncio.Lock(); self.refresh_lock=asyncio.Lock()
         self.state=self._load(); self.health=self._load_health()
         for old_id,new_id in getattr(self,'_id_aliases',{}).items():
