@@ -894,6 +894,13 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('未回落到直连',result['entry']['message'])
         self.assertNotIn('proxy',factory.call_args.kwargs); self.assertTrue(factory.call_args.kwargs['trust_env'])
 
+    def test_mihomo_connection_snapshot_accepts_null_connections(self):
+        manager=self._manager_for_runtime(); adapter=manager._adapter()
+        response=self.module.httpx.Response(200,json={'connections':None},request=self.module.httpx.Request('GET','http://mihomo/connections'))
+        client=AsyncMock(); client.__aenter__.return_value=client; client.get=AsyncMock(return_value=response)
+        with patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            self.assertEqual(asyncio.run(adapter.connection_snapshot(manager.state,'api.ipify.org')),[])
+
     def test_runtime_application_uses_verified_backup_when_primary_is_incomplete(self):
         manager=self._manager_for_runtime(); document=manager._runtime_document(); revision=manager._runtime_revision(document)
         manager.runtime_path.write_text('{broken',encoding='utf-8')

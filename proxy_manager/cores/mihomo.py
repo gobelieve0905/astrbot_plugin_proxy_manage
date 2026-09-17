@@ -251,7 +251,7 @@ class MihomoAdapter(CoreAdapter):
         async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
             response=await client.get('/connections'); response.raise_for_status()
         result=[]
-        for item in response.json().get('connections',[]):
+        for item in response.json().get('connections') or []:
             if not isinstance(item,dict): continue
             metadata=item.get('metadata') if isinstance(item.get('metadata'),dict) else {}
             observed=str(metadata.get('host') or metadata.get('destinationIP') or '').rstrip('.').lower()
