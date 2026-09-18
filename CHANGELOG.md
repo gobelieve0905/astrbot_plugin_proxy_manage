@@ -1,5 +1,10 @@
 # 更新日志
 
+## Unreleased - 2026-09-19
+
+- 兼容 Mihomo API 返回的 `DomainSuffix` 规则类型，修复包含后缀域名规则的专用内核配置反复回滚为待应用状态。
+- 修正 AstrBot 4.28.1 错误响应的状态码传参方式，避免配置应用失败时错误处理再次抛出 `TypeError`。
+
 ## Unreleased - 2026-09-18
 
 - 修复自管内核监听归属核对：直接读取 Linux socket inode，并仅接受 LISTEN 状态，避免 `Path.resolve()` 对 `/proc` socket 伪链接产生误判。

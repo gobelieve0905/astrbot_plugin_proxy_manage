@@ -931,7 +931,8 @@ class TestConfigurationRules(unittest.TestCase):
         for group in document['proxy-groups']:
             proxies[group['name']]={'type':type_names[group['type']],
                                     'all':group['proxies'],'now':group['proxies'][0]}
-        rules=[{'type':kind.title(),'payload':' '+payload+' ','proxy':' '+target+' '}
+        rules=[{'type':('DomainSuffix' if kind=='DOMAIN-SUFFIX' else kind.title()),
+                'payload':' '+payload+' ','proxy':' '+target+' '}
                for kind,payload,target in manager._expected_rules(document)]
         self.assertEqual(manager._verify_runtime_data(document,{'mode':'rule'},proxies,rules),[])
 

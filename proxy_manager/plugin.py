@@ -417,7 +417,7 @@ class ProxyManager(Star):
             self.event({'action':'save','result':'ok'})
             return json_response(self.snapshot())
         except (ValueError,TypeError) as exc: return error_response(str(exc))
-        except OSError: return error_response('配置保存失败，已保留上一版配置',500)
+        except OSError: return error_response('配置保存失败，已保留上一版配置',status_code=500)
 
     async def rollback(self):
         try:
@@ -490,7 +490,7 @@ class ProxyManager(Star):
             self.event({'action':'astrbot_proxy_enable','result':'pending_restart'})
             return json_response(status)
         except (ValueError, OSError) as exc:
-            return error_response(str(exc) if isinstance(exc,ValueError) else 'AstrBot 全局代理配置写入失败',500)
+            return error_response(str(exc) if isinstance(exc,ValueError) else 'AstrBot 全局代理配置写入失败',status_code=500)
 
     async def astrbot_proxy_restore(self):
         try:
@@ -499,7 +499,7 @@ class ProxyManager(Star):
             self.event({'action':'astrbot_proxy_restore','result':'pending_restart'})
             return json_response(status)
         except (ValueError, OSError) as exc:
-            return error_response(str(exc) if isinstance(exc,ValueError) else 'AstrBot 全局代理恢复失败',500)
+            return error_response(str(exc) if isinstance(exc,ValueError) else 'AstrBot 全局代理恢复失败',status_code=500)
 
     async def verify_astrbot_egress(self):
         async with self.operation_lock:
@@ -881,12 +881,12 @@ class ProxyManager(Star):
             return json_response({'artifact':artifact,'process':process})
         except (ValueError,OSError,RuntimeError,TypeError,binascii.Error) as exc:
             self.event({'action':'kernel_install','result':'failed','message':safe_error(exc)})
-            return error_response(str(exc),400)
+            return error_response(str(exc),status_code=400)
 
     async def kernel_start(self):
         try:
             async with self.operation_lock: return json_response(await self._start_owned_kernel())
-        except (ValueError,OSError,RuntimeError) as exc: return error_response(str(exc),500)
+        except (ValueError,OSError,RuntimeError) as exc: return error_response(str(exc),status_code=500)
 
     async def kernel_stop(self):
         async with self.operation_lock: return json_response(await self._adapter().stop(self.supervisor))
@@ -917,7 +917,7 @@ class ProxyManager(Star):
             self.event({'action':'adapter_select','adapter':adapter_id,'result':'ok'})
             return json_response({'adapter':adapter_id,'artifact':self.artifacts.status(),'process':process})
         except (ValueError,OSError,RuntimeError) as exc:
-            return error_response(str(exc),400)
+            return error_response(str(exc),status_code=400)
 
     def _runtime_document(self) -> dict:
         adapter=self._adapter()
@@ -1004,7 +1004,7 @@ class ProxyManager(Star):
                                                        'document':recovery if restored else previous.get('document'),
                                                        'updated_at':int(time.time()),'message':message})
                     self.event({'action':'runtime_apply','result':status,'message':safe_error(apply_error),'restore':safe_error(restore_message)})
-                    return error_response(message,500)
+                    return error_response(message,status_code=500)
                 application={'status':'applied','adapter':adapter.id,'saved_revision':revision,'applied_revision':revision,
                              'document':document,'updated_at':int(time.time()),'message':'候选配置已应用并完整核对'}
                 self._persist_runtime_application(application)

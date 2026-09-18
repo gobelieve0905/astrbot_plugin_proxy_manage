@@ -151,6 +151,10 @@ class MihomoAdapter(CoreAdapter):
         if not isinstance(value,dict):
             return None
         kind=str(value.get('type','')).strip().upper()
+        kind={
+            'DOMAINSUFFIX':'DOMAIN-SUFFIX',
+            'DOMAIN_SUFFIX':'DOMAIN-SUFFIX',
+        }.get(kind,kind)
         payload=str(value.get('payload','')).strip()
         target=str(value.get('proxy','')).strip()
         if not kind or not target:
