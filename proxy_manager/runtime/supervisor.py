@@ -10,10 +10,11 @@ from pathlib import Path
 
 
 class KernelSupervisor:
-    def __init__(self,data_dir:Path,health_check):
+    def __init__(self,data_dir:Path,health_check,listener_check=None):
         self.root=data_dir/'runtime'; self.root.mkdir(parents=True,exist_ok=True); self.root.chmod(0o700)
         self.pid_path=self.root/'kernel.pid.json'; self.log_path=self.root/'kernel.log'
-        self.health_check=health_check; self.process=None; self.monitor_task=None; self.stopping=False
+        self.health_check=health_check; self.listener_check=listener_check
+        self.process=None; self.monitor_task=None; self.stopping=False
         self.binary=None; self.config=None; self.command=None; self.last_error=''; self.restarts=0; self.orphan_record=None
         self._recover_stale_pid()
 
@@ -88,7 +89,11 @@ class KernelSupervisor:
         while time.monotonic()<deadline:
             if self.process.poll() is not None: raise RuntimeError('内核在启动期间退出，代码 '+str(self.process.returncode))
             try:
-                if await self.health_check(): self.last_error=''; return
+                if await self.health_check() and (
+                    self.listener_check is None
+                    or await self.listener_check(self.process.pid, self.config)
+                ):
+                    self.last_error=''; return
             except Exception: pass
             await asyncio.sleep(.25)
         await self._terminate_process(); raise RuntimeError('内核启动健康检查超时')

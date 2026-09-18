@@ -22,6 +22,7 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import error_response, json_response, request
 
 from .cores.registry import all_adapters, current_adapter
+from .compat import CompatibilityManager, ComponentLease
 from .domain.constants import CONFIGURED, TEMPLATES
 from .domain.identity import stable_node_id
 from .domain.model import compiled_rules, ident, match_rule, normalize_state, validate_state
@@ -59,7 +60,7 @@ class ProxyManager(Star):
         self.astrbot_proxy=AstrBotProxyTransaction(self.data_dir)
         self.traffic_audit=AstrBotTrafficAudit(Path(os.environ.get('ASTRBOT_ROOT','/astrbot')))
         self.artifacts=ArtifactManager(self.data_dir,self._adapter().artifact())
-        self.supervisor=KernelSupervisor(self.data_dir,self._kernel_health_check)
+        self.supervisor=KernelSupervisor(self.data_dir,self._kernel_health_check,self._kernel_listener_check)
         self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
         self.runtime_application=self._load_runtime_application()
         health_changed=False
@@ -68,6 +69,7 @@ class ProxyManager(Star):
                 self.health[new_id]=self.health.pop(old_id); health_changed=True
         if health_changed: self.persist_health()
         self.events=self._load_events(); self.integration_audit={}; self.integration_fingerprint=''
+        self.compatibility=None
         self._refresh_integration_audit(record=False)
         self.previews={}; self.probe_tasks={}; self.auto_task=None
         self._register_routes()
@@ -116,6 +118,8 @@ class ProxyManager(Star):
     def _refresh_integration_audit(self, *, record: bool=True) -> dict:
         http_url,_=self._entry_urls()
         audit=self.traffic_audit.snapshot(http_url,self.state.get('proxy_entry',{}).get('private'))
+        if self.compatibility:
+            audit['compatibility']=self.compatibility.as_public_dict()
         fingerprint=hashlib.sha256(json.dumps({key:audit.get(key) for key in ('providers','platforms','mcps','plugin_integrations')},
                                               ensure_ascii=False,sort_keys=True).encode()).hexdigest()
         changed=bool(self.integration_fingerprint and self.integration_fingerprint!=fingerprint)
@@ -127,6 +131,44 @@ class ProxyManager(Star):
 
     async def _kernel_health_check(self):
         return await self._adapter().healthy(self.state)
+
+    async def _kernel_listener_check(self, pid: int, _config: Path | None) -> bool:
+        """Ensure the health response belongs to the process just spawned."""
+        if not Path('/proc/net/tcp').is_file():
+            return True
+        try:
+            control, _ = self._adapter().control(self.state)
+            port = int(urlsplit(str(control.get('url') or '')).port or 0)
+        except (TypeError, ValueError, AttributeError):
+            return False
+        if pid <= 1 or port <= 0:
+            return False
+        sockets = set()
+        for table in ('/proc/net/tcp', '/proc/net/tcp6'):
+            try:
+                lines=Path(table).read_text(encoding='ascii').splitlines()[1:]
+            except OSError:
+                continue
+            for line in lines:
+                fields=line.split()
+                if len(fields) >= 10:
+                    try:
+                        local_port=int(fields[1].rsplit(':',1)[1],16)
+                    except (IndexError,ValueError):
+                        continue
+                    if local_port == port:
+                        sockets.add(fields[9])
+        if not sockets:
+            return False
+        try:
+            fds=Path('/proc')/str(pid)/'fd'
+            return any(
+                fd.resolve().name.removeprefix('socket:[').removesuffix(']') in sockets
+                for fd in fds.iterdir()
+                if fd.is_symlink()
+            )
+        except (OSError, RuntimeError):
+            return False
 
     async def _start_owned_kernel(self):
         artifact=self.artifacts.status()
@@ -274,6 +316,10 @@ class ProxyManager(Star):
         result['astrbot_proxy']=astrbot
         audit=getattr(self,'integration_audit',{}) if hasattr(self,'traffic_audit') else {}
         result['traffic_audit']=audit
+        compatibility=getattr(self,'compatibility',None)
+        result['compatibility']=compatibility.as_public_dict() if compatibility else {
+            'state':'not_installed','message':'官方兼容层尚未安装','platforms':{},'providers':{}
+        }
         result['traffic_inventory']=traffic_inventory(self.state,application,astrbot=astrbot,audit=audit)
         return result
 
@@ -502,7 +548,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.10'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.11'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -614,7 +660,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.10'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.11'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -685,7 +731,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.10'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.11'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1134,13 +1180,25 @@ class ProxyManager(Star):
             self.astrbot_proxy.apply_process_environment(http_url,socks_url)
         except (ValueError,OSError) as exc:
             logger.warning('AstrBot 默认统一出口配置失败：'+safe_error(exc))
+        try:
+            lease=ComponentLease.from_entry(
+                'astrbot', self.state.get('proxy_entry'),
+                revision=str(self.state.get('version','')),
+            )
+            self.compatibility=CompatibilityManager(self.context,lease)
+            compatibility=await self.compatibility.install()
+            self._refresh_integration_audit(record=False)
+            if compatibility.state != 'installed':
+                logger.warning('AstrBot 官方兼容层未完全安装：'+compatibility.message)
+        except (ImportError,AttributeError,TypeError,ValueError,RuntimeError) as exc:
+            logger.warning('AstrBot 官方兼容层初始化失败：'+safe_error(exc))
         try: await self._start_owned_kernel()
         except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
             logger.warning('代理管理中心自管内核未启动：'+safe_error(exc))
         http_url,socks_url=self._entry_urls(); status=self.astrbot_proxy.mark_started(http_url,socks_url)
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.10 已加载')
+        logger.info('代理管理中心 0.3.11 已加载')
 
     async def terminate(self):
         if self.auto_task:
@@ -1151,6 +1209,10 @@ class ProxyManager(Star):
         # Do not restore AstrBot's global proxy here: a reload/restart must fail closed,
         # not silently revert live requests to an older direct or external path.
         self.event({'action':'plugin_terminate','result':'proxy_configuration_retained'})
+        # Keep official compatibility hooks installed for the lifetime of the
+        # AstrBot process. The proxy configuration is intentionally retained;
+        # stopping the owned kernel then fails closed instead of allowing an
+        # SDK reconnect to silently fall back to direct I/O.
         await self.install_task.stop(); await self.supervisor.stop()
 
     async def on_message(self,event:AstrMessageEvent): return

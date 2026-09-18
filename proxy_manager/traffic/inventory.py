@@ -59,9 +59,21 @@ def traffic_inventory(state: dict, application: dict, environ: dict|None=None, a
                 item.update({'status':'unknown','message':'尚无完整的请求级规则与出口证据'})
         elif item['id']=='provider-proxy':
             providers=audit.get('providers',[])
+            compatibility=audit.get('compatibility',{}) if isinstance(audit.get('compatibility'),dict) else {}
+            supported_types={key for key,value in (compatibility.get('providers') or {}).items()
+                             if isinstance(value,dict) and value.get('state')=='installed'}
             stable=[value for value in providers if value.get('enabled') and value.get('proxy')=='stable_entry']
             other=[value for value in providers if value.get('enabled') and value.get('proxy')=='other_proxy']
-            if stable:
+            unsupported=[value for value in providers if value.get('enabled') and value.get('type') not in supported_types]
+            if compatibility.get('state')=='unsupported':
+                item.update({'status':'not_connected','message':'官方兼容层未启用：'+str(compatibility.get('message') or '运行时版本不受支持')})
+            elif unsupported and compatibility.get('state')=='installed':
+                item.update({'status':'unknown','message':'官方兼容层已接入支持的 Provider，但仍有 '+str(len(unsupported))+' 个 Provider 未适配；尚无请求级 Provider 证据'})
+            elif compatibility.get('state')=='installed':
+                item.update({'status':'unknown','message':'官方兼容层已为 '+str(len(supported_types))+' 类 Provider 注入稳定入口；尚无请求级 Provider 证据'})
+            elif unsupported and stable:
+                item.update({'status':'unknown','message':'已接入 '+str(len(stable))+' 个 Provider，但仍有 '+str(len(unsupported))+' 个 Provider 未适配'})
+            elif stable:
                 item.update({'status':'unknown','message':'已发现 '+str(len(stable))+' 个 Provider 指向稳定入口；尚无请求级 Provider 证据'})
             elif other:
                 item.update({'status':'not_connected','message':'已发现 '+str(len(other))+' 个 Provider 使用其他代理入口'})
@@ -70,15 +82,23 @@ def traffic_inventory(state: dict, application: dict, environ: dict|None=None, a
             else:
                 item.update({'status':'not_connected','message':'未发现已启用 Provider 的稳定入口专用 proxy 配置'})
             item['discovered']=providers
-            item['integration']={'state':policy,'mode':'astrbot-environment',
-                                 'message':'由代理管理插件兼容 AstrBot Provider；未命中规则默认 DIRECT'}
+            item['integration']={'state':'managed' if compatibility.get('state')=='installed' else policy,
+                                 'mode':'runtime-entry',
+                                 'message':'由版本化官方兼容层注入 Provider 稳定入口；未命中规则默认 DIRECT'}
         elif item['id']=='platform-sdk':
             platforms=audit.get('platforms',[])
-            item.update({'status':'unknown' if platforms and astrbot.get('effective') else 'not_connected',
-                         'message':('发现 '+str(len(platforms))+' 个平台；全局代理可能覆盖部分 HTTP，HTTP、WebSocket 和媒体仍需逐项请求级验证' if platforms else '未发现可审计的平台配置'),
+            compatibility=audit.get('compatibility',{}) if isinstance(audit.get('compatibility'),dict) else {}
+            supported_types={key for key,value in (compatibility.get('platforms') or {}).items()
+                             if isinstance(value,dict) and value.get('state')=='installed'}
+            unsupported=[value for value in platforms if value.get('enabled') and value.get('type') not in supported_types]
+            item.update({'status':'unknown' if platforms and (astrbot.get('effective') or compatibility.get('state')=='installed') else 'not_connected',
+                         'message':(('官方兼容层已接入飞书/Telegram；仍有 '+str(len(unsupported))+' 个平台未适配，HTTP、WebSocket 和媒体需请求级验证') if compatibility.get('state')=='installed' and unsupported else
+                                    ('官方兼容层已接入支持的平台；HTTP、WebSocket 和媒体仍需请求级验证' if compatibility.get('state')=='installed' else
+                                     ('发现 '+str(len(platforms))+' 个平台；全局代理可能覆盖部分 HTTP，HTTP、WebSocket 和媒体仍需逐项请求级验证' if platforms else '未发现可审计的平台配置'))),
                          'discovered':platforms})
-            item['integration']={'state':policy,'mode':'astrbot-environment',
-                                 'message':'由代理管理插件兼容 AstrBot 平台适配器；长连接仍需请求级验证'}
+            item['integration']={'state':'managed' if compatibility.get('state')=='installed' else policy,
+                                 'mode':'runtime-entry',
+                                 'message':'由版本化官方兼容层注入平台 SDK 代理；长连接仍需请求级验证'}
         elif item['id']=='plugin-http':
             count=int(audit.get('plugin_count',0) or 0)
             declarations=audit.get('plugin_integrations',[])

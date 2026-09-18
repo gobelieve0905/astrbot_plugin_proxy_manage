@@ -1,6 +1,14 @@
 # 更新日志
 
-## Unreleased
+## Unreleased - 2026-09-18
+
+## 0.3.11 - 2026-09-18
+
+- 搭建版本化 AstrBot 官方兼容层、组件出口租约和可回滚注册机制，不修改 AstrBot 官方源码。
+- 针对 AstrBot 4.28.1、lark-oapi 1.7.3、python-telegram-bot 22.8 和 websockets 15.0.1 增加运行时指纹检查；未知版本明确标记为不兼容。
+- 飞书 HTTP、WebSocket、媒体请求和 Telegram Bot API、轮询、媒体请求通过显式插件稳定入口接入；兼容层安装失败时不伪造已接管状态。
+- 首批 OpenAI Chat/Responses、Embedding 和 vLLM Rerank Provider 使用配置副本注入稳定入口；其他 Provider 保持未适配状态。
+- 修复插件入口的直接生命周期方法，兼容 AstrBot 插件管理器的热重载检查。
 
 ## 0.3.10 - 2026-09-18
 

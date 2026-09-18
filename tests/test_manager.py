@@ -64,6 +64,93 @@ class TestConfigurationRules(unittest.TestCase):
         for module in package.rglob('*.py'):
             self.assertNotIn('from proxy_manager.',module.read_text(encoding='utf-8'),str(module))
 
+    def test_component_lease_is_scoped_and_redacts_nothing_extra(self):
+        from proxy_manager.compat.lease import ComponentLease
+
+        lease = ComponentLease.from_entry(
+            "astrbot",
+            {"http_url": "http://127.0.0.1:17890", "socks_url": "socks5://127.0.0.1:17890"},
+            revision="r1",
+        )
+        child = lease.for_component("platform:telegram")
+        self.assertEqual(child.component_id, "platform:telegram")
+        self.assertEqual(child.http_proxy, lease.http_proxy)
+        self.assertEqual(child.socks_proxy, lease.socks_proxy)
+        self.assertEqual(child.as_public_dict()["no_proxy"], ["localhost", "127.0.0.1", "::1"])
+
+    def test_compatibility_fingerprint_rejects_unknown_runtime(self):
+        from proxy_manager.compat import registry
+
+        with patch.object(registry, "_astrbot_version", return_value="4.29.0"), patch.object(
+            registry,
+            "_package_version",
+            side_effect=lambda name: registry.SUPPORTED_SDK_VERSIONS[name],
+        ):
+            report = registry.inspect_runtime()
+        self.assertEqual(report.state, "unsupported")
+        self.assertIn("AstrBot 4.29.0", report.message)
+
+    def test_telegram_compatibility_sets_bot_and_polling_proxies(self):
+        from proxy_manager.compat.telegram import build_proxy_adapter
+        from proxy_manager.compat.lease import ComponentLease
+
+        module_name = "compat_test_telegram"
+        fake = types.ModuleType(module_name)
+
+        class Builder:
+            def __init__(self):
+                self.values = {}
+                type(self).last = self
+
+            def token(self, value):
+                self.values["token"] = value
+                return self
+
+            def base_url(self, value):
+                self.values["base_url"] = value
+                return self
+
+            def base_file_url(self, value):
+                self.values["base_file_url"] = value
+                return self
+
+            def proxy(self, value):
+                self.values["proxy"] = value
+                return self
+
+            def get_updates_proxy(self, value):
+                self.values["get_updates_proxy"] = value
+                return self
+
+            def build(self):
+                return types.SimpleNamespace(bot=types.SimpleNamespace(base_url="base"), add_handler=lambda *_: None)
+
+        fake.ApplicationBuilder = Builder
+        fake.filters = types.SimpleNamespace(ALL=object())
+        fake.TelegramMessageHandler = lambda **kwargs: kwargs
+        fake.logger = types.SimpleNamespace(debug=lambda *_: None)
+        sys.modules[module_name] = fake
+        try:
+            class Base:
+                __module__ = module_name
+
+                def __init__(self, *_args):
+                    self.config = {"telegram_token": "token"}
+                    self.base_url = "https://api.telegram.org/bot"
+                    self.file_base_url = "https://api.telegram.org/file/bot"
+                    self.message_handler = lambda *_: None
+                    self._build_application()
+
+            adapter_class = build_proxy_adapter(
+                Base,
+                ComponentLease(component_id="telegram", http_proxy="http://127.0.0.1:17890"),
+            )
+            adapter = adapter_class({}, {}, None)
+            self.assertEqual(Builder.last.values["proxy"], "http://127.0.0.1:17890")
+            self.assertEqual(Builder.last.values["get_updates_proxy"], "http://127.0.0.1:17890")
+        finally:
+            sys.modules.pop(module_name, None)
+
     def test_entry_imports_inside_astrbot_namespace_package(self):
         root=Path(__file__).resolve().parents[1]
         package_name='proxy_manager_package_test'
@@ -83,7 +170,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.10',html)
+        self.assertIn('流量控制 · 0.3.11',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('aria-label="主导航"',html)
