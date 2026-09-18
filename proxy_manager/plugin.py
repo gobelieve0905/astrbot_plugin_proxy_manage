@@ -1025,6 +1025,12 @@ class ProxyManager(Star):
         return urlparse(str(node.get('endpoint',''))).scheme.lower() not in DIRECT_PROBE_SCHEMES
 
     @staticmethod
+    def _direct_probe_endpoint(node:dict) -> str:
+        endpoint=str(node.get('endpoint',''))
+        parsed=urlsplit(endpoint)
+        return parsed._replace(scheme='socks5').geturl() if parsed.scheme.lower()=='socks' else endpoint
+
+    @staticmethod
     def _probe_node_is_eligible(node:dict) -> bool:
         return bool(node.get('enabled') and not node.get('excluded') and not node.get('invalid_reference')
                     and node.get('support',{}).get('status')=='supported')
@@ -1075,7 +1081,7 @@ class ProxyManager(Star):
               if native:
                 latency=await self._adapter().probe(self.state, node, target, timeout)
               else:
-                async with httpx.AsyncClient(proxy=node['endpoint'],trust_env=False,follow_redirects=False,timeout=timeout) as client:
+                async with httpx.AsyncClient(proxy=self._direct_probe_endpoint(node),trust_env=False,follow_redirects=False,timeout=timeout) as client:
                     response=await client.get(target)
                 if response.status_code>=400: raise ValueError('HTTP 状态码 '+str(response.status_code))
                 latency=round((time.monotonic()-started)*1000)

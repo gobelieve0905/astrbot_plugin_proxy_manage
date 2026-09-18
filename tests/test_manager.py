@@ -1000,7 +1000,7 @@ class TestConfigurationRules(unittest.TestCase):
              patch.object(self.module.httpx,'AsyncClient',return_value=client) as factory:
             result=asyncio.run(manager._probe_one({'node_id':'hk-1'}))
         self.assertEqual(result['status'],'ok'); kernel.assert_not_awaited()
-        self.assertEqual(factory.call_args.kwargs['proxy'],node['endpoint'])
+        self.assertEqual(factory.call_args.kwargs['proxy'],'socks5://user:pass@example.com:1080')
 
     def test_probe_task_does_not_truncate_over_one_hundred_nodes(self):
         manager=self._manager_for_runtime(); manager.probe_tasks={}
