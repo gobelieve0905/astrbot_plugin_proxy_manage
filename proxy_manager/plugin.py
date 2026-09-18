@@ -151,7 +151,7 @@ class ProxyManager(Star):
                 continue
             for line in lines:
                 fields=line.split()
-                if len(fields) >= 10:
+                if len(fields) >= 10 and fields[3] == '0A':
                     try:
                         local_port=int(fields[1].rsplit(':',1)[1],16)
                     except (IndexError,ValueError):
@@ -163,7 +163,7 @@ class ProxyManager(Star):
         try:
             fds=Path('/proc')/str(pid)/'fd'
             return any(
-                fd.resolve().name.removeprefix('socket:[').removesuffix(']') in sockets
+                os.readlink(fd).removeprefix('socket:[').removesuffix(']') in sockets
                 for fd in fds.iterdir()
                 if fd.is_symlink()
             )

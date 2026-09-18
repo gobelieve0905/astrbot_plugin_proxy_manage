@@ -48,6 +48,55 @@ class KernelSupervisor:
             if backup.exists(): backup.unlink()
             self.log_path.replace(backup)
 
+    @staticmethod
+    def _read_cmdline(pid: int) -> list[str]:
+        try:
+            raw=(Path('/proc')/str(pid)/'cmdline').read_bytes()
+        except (OSError,ValueError):
+            return []
+        return [item.decode('utf-8',errors='replace') for item in raw.split(b'\0') if item]
+
+    def _owned_pids(self, binary: Path, config: Path) -> list[int]:
+        """Find exact plugin-owned core processes left by a reload or crash."""
+        if not Path('/proc').is_dir():
+            return []
+        expected=[str(binary),'-d',str(self.root),'-f',str(config)]
+        result=[]
+        try:
+            entries=list(Path('/proc').iterdir())
+        except OSError:
+            return []
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try: pid=int(entry.name)
+            except ValueError:
+                continue
+            if self._read_cmdline(pid)==expected:
+                result.append(pid)
+        return result
+
+    async def _terminate_pid(self, pid: int):
+        if pid <= 1:
+            return
+        try:
+            os.killpg(pid,signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            try: os.kill(pid,signal.SIGTERM)
+            except (ProcessLookupError,PermissionError): return
+        for _attempt in range(50):
+            await asyncio.sleep(.1)
+            try: os.kill(pid,0)
+            except ProcessLookupError: return
+            except PermissionError: break
+        try: os.killpg(pid,signal.SIGKILL)
+        except ProcessLookupError: return
+        except PermissionError:
+            try: os.kill(pid,signal.SIGKILL)
+            except (ProcessLookupError,PermissionError): return
+
     async def start(self,binary:Path,config:Path,timeout:float=12,command:list[str]|None=None):
         if self.process and self.process.poll() is None: return self.status()
         if self.orphan_record:
@@ -79,6 +128,10 @@ class KernelSupervisor:
         return self.status()
 
     async def _spawn(self,timeout:float):
+        current_pid=self.process.pid if self.process and self.process.poll() is None else 0
+        for pid in self._owned_pids(self.binary,self.config):
+            if pid != current_pid:
+                await self._terminate_pid(pid)
         self._rotate_log(); log=self.log_path.open('ab',buffering=0)
         try:
             self.process=subprocess.Popen(self.command,stdin=subprocess.DEVNULL,
