@@ -244,15 +244,29 @@ class MihomoAdapter(CoreAdapter):
         return {'version':raw_version,'runtime':runtime,'proxies':proxies,'rules':runtime_rules}
 
     async def apply(self, state: dict, document: dict, **_runtime):
+        import asyncio
         import yaml
         control,headers=self.control(state)
         payload={'path':'','payload':yaml.safe_dump(document,allow_unicode=True,sort_keys=False)}
         async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
             response=await client.put('/configs?force=true',json=payload); response.raise_for_status()
-            running=await client.get('/configs'); running.raise_for_status()
-            proxies_response=await client.get('/proxies'); proxies_response.raise_for_status()
-            rules_response=await client.get('/rules'); rules_response.raise_for_status()
-        errors=self.verify(document,running.json(),proxies_response.json().get('proxies',{}),rules_response.json().get('rules',[]))
+            errors=['运行配置尚未完成热加载']
+            for attempt in range(5):
+                try:
+                    running=await client.get('/configs'); running.raise_for_status()
+                    proxies_response=await client.get('/proxies'); proxies_response.raise_for_status()
+                    rules_response=await client.get('/rules'); rules_response.raise_for_status()
+                except StopAsyncIteration:
+                    break
+                errors=self.verify(document,running.json(),proxies_response.json().get('proxies',{}),rules_response.json().get('rules',[]))
+                if not errors:
+                    break
+                retryable = any(isinstance(item,dict) and str(item.get('type','')) in {'Domain','Match'}
+                                for item in rules_response.json().get('rules',[]))
+                if attempt < 4 and retryable:
+                    await asyncio.sleep(0.2)
+                else:
+                    break
         if errors: raise ValueError('；'.join(errors))
 
     async def select(self, state: dict, group: dict, node: dict):
