@@ -1,6 +1,6 @@
 # 代理管理中心使用指南
 
-> 本指南记录 0.3.9 的当前操作方式。插件已提供 AstrBot 回环入口和带随机认证的容器私网入口，并动态审计 MCP 配置；它不会自动修改现有 MCP 进程或容器，没有请求级证据时不会宣称 MCP 已接管。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
+> 本指南记录 0.3.10 的当前操作方式。插件加载时会自动将 AstrBot 的全局 HTTP、HTTPS、通用 SOCKS 代理配置指向插件入口，并检查 Provider、平台、插件和 MCP 的统一接入协议。默认未命中规则是内核 `DIRECT`；没有请求级证据时不会宣称任何组件已接管。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
 
 桌面端使用左侧导航，移动端使用顶部横向导航。页面顶部的“恢复上一版”和“预览并保存”作用于规范化配置；内核的下载、启动、停止和应用操作位于“内核管理”，不会与普通配置保存混在同一操作组。
 
@@ -22,7 +22,7 @@
 
 | 场景 | 接入方式 | 支持状态 |
 | --- | --- | --- |
-| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | AstrBot `http_proxy` 指向统一 HTTP 入口 | 0.3.9 已接入，需重启后做请求级验证 |
+| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | AstrBot `http_proxy`、`https_proxy` 和 `all_proxy` 指向统一入口 | 0.3.10 已接入，需重启后做请求级验证 |
 | 使用 AstrBot 公共 HTTP 客户端且继承核心代理配置的插件 | 使用核心 `http_proxy` | 尚未逐项接入和验证 |
 | 支持独立代理字段的平台适配器 | 在适配器配置中填写统一 HTTP/SOCKS 入口 | 条件支持，应按适配器文档验证 |
 | 支持代理或自定义 HTTP 客户端的模型提供商 | 在对应客户端配置代理 | 条件支持，应执行无业务凭据的受控请求验证 |
@@ -38,6 +38,22 @@
 | 独立 MCP 容器 | 与 AstrBot 加入同一个明确受信的 Docker 私网，使用插件生成的带认证私网入口 | 重建或重启容器；不得用 `ports` 发布代理端口 |
 
 私网入口使用独立随机用户名和密码，凭据保存在插件私有运行目录且权限为 `0600`，不复用内核控制密钥。管理页只显示认证是否就绪、端口和部署提示，不显示凭据。Docker 网络成员都能到达该端口，只有确实受信的容器才应加入该网络；代理认证用于阻止同网未配置凭据的进程使用出口。
+
+## 统一接入协议
+
+外部插件在自身插件目录放置 `proxy_manager_integration.json`，MCP 在自身配置项内放置 `proxy_manager` 对象。两者使用同一份公开、无凭据声明：
+
+```json
+{
+  "protocol": "astrbot.proxy-manager/v1",
+  "mode": "astrbot-environment",
+  "protocols": ["http", "https", "websocket"],
+  "restart": "process",
+  "auto_apply": false
+}
+```
+
+`mode` 只能是 `astrbot-environment`、`private-network` 或 `manual`。前者表示组件遵守 AstrBot 的代理环境；`private-network` 表示独立容器使用认证私网入口；`manual` 表示组件需由其所有者配置。声明只允许上述五个字段，不能包含 URL、用户名、密码、Token 或 Headers；多余字段会被标记为协议无效。插件在加载和之后每 30 秒检查新增或变化的声明，也可在概览点击“重新检查”。协议兼容只代表已纳入策略，仍需实际请求与内核记录才能确认出口。
 
 概览中的动态流量清单使用四类状态：“已接管”必须有请求级证据；“明确直连”表示请求进入内核后由规则选择 `DIRECT`；“未接入”表示组件没有使用插件入口；“无法判定”表示只观察到配置或入口，证据不足。平台域名模板只生成内核规则，不会自动修改平台 SDK。
 

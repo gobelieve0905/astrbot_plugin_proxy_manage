@@ -83,7 +83,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.9',html)
+        self.assertIn('流量控制 · 0.3.10',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('aria-label="主导航"',html)
@@ -946,6 +946,50 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(next(value for value in values if value['id']=='provider-proxy')['status'],'unknown')
         self.assertEqual(next(value for value in values if value['id']=='platform-sdk')['status'],'unknown')
 
+    def test_integration_declaration_is_strict_and_does_not_expose_secrets(self):
+        from proxy_manager.traffic.integration import PROTOCOL, declaration
+        valid=declaration({'protocol':PROTOCOL,'mode':'astrbot-environment',
+                           'protocols':['HTTPS','websocket'],'restart':'process','auto_apply':True})
+        self.assertEqual(valid,{'state':'compatible','mode':'astrbot-environment',
+                                'protocols':['https','websocket'],'restart':'process','auto_apply':True})
+        self.assertEqual(declaration(None)['state'],'missing')
+        for value in (
+            {'protocol':'astrbot.proxy-manager/v2','mode':'astrbot-environment','protocols':['https']},
+            {'protocol':PROTOCOL,'mode':'public-network','protocols':['https']},
+            {'protocol':PROTOCOL,'mode':'manual','protocols':['icmp']},
+            {'protocol':PROTOCOL,'mode':'manual','protocols':['https'],'token':'must-not-leak'},
+        ):
+            result=declaration(value)
+            self.assertEqual(result['state'],'invalid')
+            self.assertNotIn('must-not-leak',json.dumps(result))
+
+    def test_integration_audit_discovers_new_plugin_and_mcp_declarations(self):
+        from proxy_manager.traffic.audit import AstrBotTrafficAudit
+        from proxy_manager.traffic.integration import PROTOCOL
+        from proxy_manager.traffic.inventory import traffic_inventory
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); data=root/'data'; plugin=data/'plugins'/'declared-plugin'; plugin.mkdir(parents=True)
+            config={'plugin_set':{'configured-without-file':True}}
+            (data/'cmd_config.json').write_text(json.dumps(config),encoding='utf-8')
+            (plugin/'proxy_manager_integration.json').write_text(json.dumps({
+                'protocol':PROTOCOL,'mode':'astrbot-environment','protocols':['http','https'],
+                'restart':'process'}),encoding='utf-8')
+            (data/'mcp_server.json').write_text(json.dumps({'mcpServers':{
+                'declared-mcp':{'command':'node','proxy_manager':{
+                    'protocol':PROTOCOL,'mode':'private-network','protocols':['https'],'restart':'container'}},
+            }}),encoding='utf-8')
+            audit=AstrBotTrafficAudit(root).snapshot('http://127.0.0.1:17890',{'port':17891})
+            plugins={item['name']:item for item in audit['plugin_integrations']}
+            self.assertEqual(plugins['declared-plugin']['declaration']['state'],'compatible')
+            self.assertEqual(plugins['configured-without-file']['declaration']['state'],'missing')
+            self.assertEqual(audit['mcps'][0]['declaration']['state'],'compatible')
+            values=traffic_inventory({'proxy_entry':{'http_url':'http://127.0.0.1:17890'}},{},
+                                     astrbot={'configured':True,'effective':True},audit=audit)
+            plugin_item=next(item for item in values if item['id']=='plugin-http')
+            mcp_item=next(item for item in values if item['id']=='mcp-egress')
+            self.assertEqual((plugin_item['integration']['state'],plugin_item['status']),('managed','unknown'))
+            self.assertEqual((mcp_item['integration']['state'],mcp_item['status']),('declared','not_connected'))
+
     def test_astrbot_proxy_transaction_backs_up_narrows_and_restores(self):
         from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
         with tempfile.TemporaryDirectory() as directory:
@@ -956,17 +1000,20 @@ class TestConfigurationRules(unittest.TestCase):
                 'private':{'url':'http://10.0.0.8/mcp'},
                 'external':{'url':'https://api.example.com/mcp'},
             }}),encoding='utf-8')
-            original={'http_proxy':'http://legacy:7890','no_proxy':['localhost','10.*','.feishu.cn'],'other':True}
+            original={'http_proxy':'http://legacy:7890','https_proxy':'http://legacy:7891',
+                      'all_proxy':'socks5://legacy:7892','no_proxy':['localhost','10.*','.feishu.cn'],'other':True}
             config.write_text(json.dumps(original),encoding='utf-8'); config.chmod(0o640)
             with patch.dict(os.environ,{'ASTRBOT_ROOT':str(root)},clear=False): transaction=AstrBotProxyTransaction(data,config)
-            pending=transaction.enable('http://127.0.0.1:17890')
+            pending=transaction.enable('http://127.0.0.1:17890','socks5://127.0.0.1:17890')
             current=json.loads(config.read_text())
             self.assertEqual(current['http_proxy'],'http://127.0.0.1:17890')
+            self.assertEqual(current['https_proxy'],'http://127.0.0.1:17890')
+            self.assertEqual(current['all_proxy'],'socks5://127.0.0.1:17890')
             self.assertEqual(tuple(current['no_proxy']),INTERNAL_NO_PROXY+('10.0.0.8','custom-mcp'))
             self.assertNotIn('api.example.com',current['no_proxy'])
             self.assertTrue(current['other']); self.assertEqual(pending['status'],'pending_restart')
             self.assertEqual(config.stat().st_mode & 0o777,0o640)
-            restored=transaction.restore('http://127.0.0.1:17890')
+            restored=transaction.restore('http://127.0.0.1:17890','socks5://127.0.0.1:17890')
             self.assertEqual(json.loads(config.read_text()),original)
             self.assertEqual(restored['status'],'restore_pending_restart')
             self.assertEqual(transaction.path.stat().st_mode & 0o777,0o600)
@@ -976,13 +1023,26 @@ class TestConfigurationRules(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); config=root/'cmd_config.json'; data=root/'plugin'; data.mkdir()
             config.write_text('{}',encoding='utf-8')
-            transaction=AstrBotProxyTransaction(data,config); entry='http://127.0.0.1:17890'
-            transaction.enable(entry)
-            active=transaction.mark_started(entry)
+            transaction=AstrBotProxyTransaction(data,config); entry='http://127.0.0.1:17890'; socks='socks5://127.0.0.1:17890'
+            transaction.enable(entry,socks)
+            active=transaction.mark_started(entry,socks)
             self.assertFalse(active['effective'])
-            with patch.dict(os.environ,{'http_proxy':entry,'https_proxy':entry},clear=False):
-                active=transaction.mark_started(entry)
+            with patch.dict(os.environ,{'http_proxy':entry,'https_proxy':entry,'all_proxy':socks},clear=False):
+                active=transaction.mark_started(entry,socks)
             self.assertEqual(active['status'],'active'); self.assertTrue(active['effective'])
+
+    def test_astrbot_proxy_transaction_ensure_repairs_incomplete_configuration(self):
+        from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); config=root/'cmd_config.json'; data=root/'plugin'; data.mkdir()
+            entry='http://127.0.0.1:17890'; socks='socks5://127.0.0.1:17890'
+            config.write_text(json.dumps({'http_proxy':entry,'https_proxy':entry,'no_proxy':list(INTERNAL_NO_PROXY)}),encoding='utf-8')
+            transaction=AstrBotProxyTransaction(data,config)
+            status=transaction.ensure(entry,socks)
+            self.assertEqual(status['status'],'pending_restart')
+            self.assertEqual(json.loads(config.read_text())['all_proxy'],socks)
+            with patch.object(transaction,'enable',side_effect=AssertionError('already managed configuration must not be rewritten')):
+                transaction.ensure(entry,socks)
 
     def test_astrbot_core_verification_uses_process_proxy_and_fails_closed(self):
         manager=self._manager_for_runtime(); entry=manager.state['proxy_entry']['http_url']

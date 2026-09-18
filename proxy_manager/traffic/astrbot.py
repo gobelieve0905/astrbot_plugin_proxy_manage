@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 
 INTERNAL_NO_PROXY = ('localhost', '127.0.0.1', '::1')
-PROXY_KEYS = ('http_proxy', 'no_proxy')
+PROXY_KEYS = ('http_proxy', 'https_proxy', 'all_proxy', 'no_proxy')
 
 
 class AstrBotProxyTransaction:
@@ -102,20 +102,24 @@ class AstrBotProxyTransaction:
     def _expected_no_proxy(self) -> tuple[str,...]:
         return tuple(dict.fromkeys((*INTERNAL_NO_PROXY,*self._internal_mcp_hosts())))
 
-    def _managed(self, config: dict, entry: str) -> bool:
+    def _managed(self, config: dict, entry: str, socks_entry: str='') -> bool:
+        socks=socks_entry.rstrip('/') or entry.rstrip('/')
         return (str(config.get('http_proxy') or '').rstrip('/') == entry.rstrip('/') and
+                str(config.get('https_proxy') or '').rstrip('/') == entry.rstrip('/') and
+                str(config.get('all_proxy') or '').rstrip('/') == socks and
                 tuple(config.get('no_proxy') or []) == self._expected_no_proxy())
 
-    def status(self, entry: str, environ: dict | None = None) -> dict:
+    def status(self, entry: str, socks_entry: str='', environ: dict | None = None) -> dict:
         environ = environ if environ is not None else os.environ
         record = self._load()
         try:
             config = self._read_json(self.config_path)
-            configured = self._managed(config, entry)
+            configured = self._managed(config, entry, socks_entry)
         except ValueError:
             config = {}; configured = False
         expected = entry.rstrip('/')
-        effective = configured and all(str(environ.get(key, '')).rstrip('/') == expected for key in ('http_proxy', 'https_proxy'))
+        socks=socks_entry.rstrip('/') or expected
+        effective = configured and all(str(environ.get(key, '')).rstrip('/') == expected for key in ('http_proxy', 'https_proxy')) and str(environ.get('all_proxy', '')).rstrip('/') == socks
         status = record.get('status', 'not_connected')
         if status == 'active' and not effective:
             status = 'restart_required' if configured else 'drifted'
@@ -141,7 +145,7 @@ class AstrBotProxyTransaction:
             }.get(status, 'AstrBot 尚未接入插件稳定入口'),
         }
 
-    def enable(self, entry: str) -> dict:
+    def enable(self, entry: str, socks_entry: str='') -> dict:
         config = self._read_json(self.config_path)
         record = self._load()
         if not record.get('backup'):
@@ -149,27 +153,37 @@ class AstrBotProxyTransaction:
             record['created_at'] = int(time.time())
         candidate = dict(config)
         candidate['http_proxy'] = entry
+        candidate['https_proxy'] = entry
+        candidate['all_proxy'] = socks_entry or entry
         candidate['no_proxy'] = list(self._expected_no_proxy())
         self._write_json(self.config_path, candidate)
         self._store({**record, 'status': 'pending_restart', 'entry': entry, 'updated_at': int(time.time())})
-        return self.status(entry)
+        return self.status(entry, socks_entry)
 
-    def restore(self, entry: str) -> dict:
+    def ensure(self, entry: str, socks_entry: str='') -> dict:
+        try:
+            config=self._read_json(self.config_path)
+            if self._managed(config, entry, socks_entry): return self.status(entry, socks_entry)
+        except ValueError:
+            pass
+        return self.enable(entry, socks_entry)
+
+    def restore(self, entry: str, socks_entry: str='') -> dict:
         record = self._load()
         if not isinstance(record.get('backup'), dict):
             raise ValueError('没有可恢复的 AstrBot 全局代理备份')
         config = self._read_json(self.config_path)
         self._write_json(self.config_path, self._restore(config, record['backup']))
         self._store({**record, 'status': 'restore_pending_restart', 'updated_at': int(time.time())})
-        return self.status(entry)
+        return self.status(entry, socks_entry)
 
-    def mark_started(self, entry: str) -> dict:
-        status = self.status(entry)
+    def mark_started(self, entry: str, socks_entry: str='') -> dict:
+        status = self.status(entry, socks_entry)
         record = self._load()
         if status['effective'] and record.get('status') == 'pending_restart':
             self._store({**record, 'status': 'active', 'activated_at': int(time.time())})
-            return self.status(entry)
+            return self.status(entry, socks_entry)
         if not status['configured'] and record.get('status') == 'restore_pending_restart':
             self._store({**record, 'status': 'restored', 'restored_at': int(time.time())})
-            return self.status(entry)
+            return self.status(entry, socks_entry)
         return status

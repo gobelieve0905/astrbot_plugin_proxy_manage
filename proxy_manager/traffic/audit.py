@@ -5,6 +5,8 @@ import ipaddress
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .integration import declaration, plugin_declarations
+
 
 AUDIT_VERSION='AstrBot 4.28.1'
 
@@ -62,6 +64,7 @@ class AstrBotTrafficAudit:
         for key,item in iterable:
             if not isinstance(item,dict): continue
             locality,label=self._mcp_locality(item)
+            declared=declaration(item.get('proxy_manager'))
             env=item.get('env') if isinstance(item.get('env'),dict) else {}
             proxy=str(env.get('HTTPS_PROXY') or env.get('https_proxy') or env.get('HTTP_PROXY') or env.get('http_proxy') or '')
             parsed=urlsplit(proxy) if proxy else None
@@ -74,6 +77,7 @@ class AstrBotTrafficAudit:
                             'transport':'stdio' if item.get('command') else str(item.get('transport') or urlsplit(str(item.get('url') or '')).scheme or 'unknown')[:24],
                             'locality':locality,'locality_label':label,
                             'proxy':'configured' if connected else ('other_proxy' if proxy else 'unset'),
+                            'declaration':declared,
                             'restart':'重启 MCP 进程' if locality in {'stdio','same_host'} else ('重建或重启容器' if locality=='container' else '由外部服务管理')})
         return results
 
@@ -94,8 +98,10 @@ class AstrBotTrafficAudit:
         plugins=config.get('plugin_set')
         plugin_count=len(plugins) if isinstance(plugins,(dict,list)) else 0
         runner=config.get('agent_runner') if isinstance(config.get('agent_runner'),dict) else {}
+        plugins=config.get('plugin_set')
         return {'version':AUDIT_VERSION,'readable':self.config_path.is_file(),'providers':providers,
                 'platforms':platforms,'plugin_count':plugin_count,
                 'mcps':self._mcps(entry,private),
+                'plugin_integrations':plugin_declarations(self.root,plugins),
                 'agent_runner':str(runner.get('runner_type') or 'unknown')[:80],
                 'computer_runtime':str((config.get('provider_settings') or {}).get('computer_use_runtime') or 'unknown')[:80]}

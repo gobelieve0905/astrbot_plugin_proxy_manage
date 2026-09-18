@@ -33,7 +33,7 @@ def traffic_inventory(state: dict, application: dict, environ: dict|None=None, a
                 application.get('saved_revision')==application.get('applied_revision')==verification.get('runtime_revision'))
     astrbot=astrbot if isinstance(astrbot,dict) else {}
     audit=audit if isinstance(audit,dict) else {}
-    values=[]
+    values=[]; policy='managed' if astrbot.get('configured') else 'pending'
     for definition in TRAFFIC_INVENTORY:
         item=dict(definition)
         if item['id']=='astrbot-http-proxy':
@@ -70,24 +70,50 @@ def traffic_inventory(state: dict, application: dict, environ: dict|None=None, a
             else:
                 item.update({'status':'not_connected','message':'未发现已启用 Provider 的稳定入口专用 proxy 配置'})
             item['discovered']=providers
+            item['integration']={'state':policy,'mode':'astrbot-environment',
+                                 'message':'由代理管理插件兼容 AstrBot Provider；未命中规则默认 DIRECT'}
         elif item['id']=='platform-sdk':
             platforms=audit.get('platforms',[])
             item.update({'status':'unknown' if platforms and astrbot.get('effective') else 'not_connected',
                          'message':('发现 '+str(len(platforms))+' 个平台；全局代理可能覆盖部分 HTTP，HTTP、WebSocket 和媒体仍需逐项请求级验证' if platforms else '未发现可审计的平台配置'),
                          'discovered':platforms})
+            item['integration']={'state':policy,'mode':'astrbot-environment',
+                                 'message':'由代理管理插件兼容 AstrBot 平台适配器；长连接仍需请求级验证'}
         elif item['id']=='plugin-http':
             count=int(audit.get('plugin_count',0) or 0)
-            item.update({'status':'not_connected','message':'发现 '+str(count)+' 个插件配置项；第三方网络实现尚未声明或验证'})
+            declarations=audit.get('plugin_integrations',[])
+            compatible=[value for value in declarations if (value.get('declaration') or {}).get('state')=='compatible']
+            environment=[value for value in compatible if value['declaration'].get('mode')=='astrbot-environment']
+            if environment:
+                integration='managed' if astrbot.get('configured') else 'pending'
+                message='发现 '+str(len(environment))+' 个插件声明遵守 AstrBot 代理环境；尚无请求级证据'
+            elif compatible:
+                integration='declared'; message='发现 '+str(len(compatible))+' 个插件已声明协议，但未声明使用 AstrBot 代理环境'
+            else:
+                integration='needs_protocol'; message='发现 '+str(count)+' 个插件配置项；尚无有效统一接入协议声明'
+            item.update({'status':'unknown' if environment and astrbot.get('configured') else 'not_connected',
+                         'message':message,
+                         'discovered':declarations,
+                         'integration':{'state':integration,
+                                        'mode':'astrbot-environment','message':'第三方插件通过 astrbot.proxy-manager/v1 声明出站兼容性'}})
         elif item['id']=='mcp-egress':
             mcps=audit.get('mcps',[])
             configured=[value for value in mcps if value.get('proxy')=='configured']
+            compatible=[value for value in mcps if (value.get('declaration') or {}).get('state')=='compatible']
+            supported_configured=[value for value in configured if (value.get('declaration') or {}).get('state')=='compatible']
             item.update({'status':'unknown' if configured else 'not_connected',
                          'message':('发现 '+str(len(configured))+' 个 MCP 已配置入口，但尚无请求级出口证据' if configured else
                                     ('发现 '+str(len(mcps))+' 个 MCP，尚未配置或无法安全接入其外部出口' if mcps else '未发现 MCP 配置')),
                          'discovered':mcps})
+            item['integration']={'state':'managed' if supported_configured else ('declared' if compatible else 'needs_protocol'),
+                                 'mode':'protocol','message':'MCP 通过 astrbot.proxy-manager/v1 声明 stdio 或私网入口兼容性'}
         elif item['id']=='updates':
             item.update({'status':'not_connected','message':'插件市场、GitHub、PyPI 和依赖安装器尚未统一接入稳定入口'})
         else:
             item.update({'status':'not_connected','message':'当前版本尚未实现该接入点的配置与验证'})
+        if 'integration' not in item:
+            item['integration']={'state':policy if item['id'] in {'astrbot-http-proxy','updates','recent-verification'} else 'needs_protocol',
+                                 'mode':'astrbot-environment' if item['id']=='astrbot-http-proxy' else '',
+                                 'message':'默认未命中规则由统一内核选择 DIRECT'}
         values.append(item)
     return values
