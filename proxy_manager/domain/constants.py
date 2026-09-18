@@ -1,5 +1,6 @@
 DIRECT = {"id":"direct","name":"直连","kernel_name":"DIRECT","mode":"direct","node_ids":[],"selected":"","enabled":True}
 TEMPLATES = {
+    "feishu":{"name":"飞书 / Lark","domains":[{"host":"open.feishu.cn","match":"exact"},{"host":"open.larksuite.com","match":"exact"},{"host":"feishu.cn","match":"suffix"},{"host":"larksuite.com","match":"suffix"}]},
     "telegram":{"name":"Telegram","domains":[{"host":"api.telegram.org","match":"exact"},{"host":"telegram.org","match":"suffix"},{"host":"t.me","match":"suffix"}]},
     "meta":{"name":"Meta","domains":[{"host":"graph.facebook.com","match":"exact"},{"host":"facebook.com","match":"suffix"},{"host":"fbcdn.net","match":"suffix"},{"host":"instagram.com","match":"suffix"}]},
     "github":{"name":"GitHub","hosts":["api.github.com","github.com","raw.githubusercontent.com"]},

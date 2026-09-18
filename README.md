@@ -67,7 +67,7 @@ AstrBot 核心接入会先备份原有 `http_proxy` 和 `no_proxy`，写入稳�
 ## 0.1.2
 
 - 支持新增、删除和启停代理策略。
-- 支持 Telegram、Meta、GitHub 平台模板。
+- 支持飞书/Lark、Telegram、Meta、GitHub 平台模板。
 - 支持精确/后缀域名匹配、规则冲突检查和保存前变更预览。
 - 配置错误或保存失败时保留上一版配置。
 
