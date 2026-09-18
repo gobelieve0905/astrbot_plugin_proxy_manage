@@ -168,6 +168,13 @@ class AstrBotProxyTransaction:
             pass
         return self.enable(entry, socks_entry)
 
+    def apply_process_environment(self, entry: str, socks_entry: str='') -> None:
+        """Set all supported proxy variables in the running AstrBot process."""
+        os.environ['http_proxy']=entry
+        os.environ['https_proxy']=entry
+        os.environ['all_proxy']=socks_entry or entry
+        os.environ['no_proxy']=','.join(self._expected_no_proxy())
+
     def restore(self, entry: str, socks_entry: str='') -> dict:
         record = self._load()
         if not isinstance(record.get('backup'), dict):

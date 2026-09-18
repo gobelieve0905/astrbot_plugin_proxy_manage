@@ -1031,6 +1031,22 @@ class TestConfigurationRules(unittest.TestCase):
                 active=transaction.mark_started(entry,socks)
             self.assertEqual(active['status'],'active'); self.assertTrue(active['effective'])
 
+    def test_astrbot_proxy_transaction_applies_complete_process_environment(self):
+        from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); config=root/'cmd_config.json'; data=root/'plugin'; data.mkdir()
+            config.write_text('{}',encoding='utf-8')
+            entry='http://127.0.0.1:17890'; socks='socks5://127.0.0.1:17890'
+            transaction=AstrBotProxyTransaction(data,config); transaction.enable(entry,socks)
+            with patch.dict(os.environ,{},clear=True):
+                transaction.apply_process_environment(entry,socks)
+                active=transaction.mark_started(entry,socks)
+                self.assertEqual(os.environ['http_proxy'],entry)
+                self.assertEqual(os.environ['https_proxy'],entry)
+                self.assertEqual(os.environ['all_proxy'],socks)
+                self.assertEqual(os.environ['no_proxy'],','.join(INTERNAL_NO_PROXY))
+            self.assertEqual(active['status'],'active'); self.assertTrue(active['effective'])
+
     def test_astrbot_proxy_transaction_ensure_repairs_incomplete_configuration(self):
         from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
         with tempfile.TemporaryDirectory() as directory:
