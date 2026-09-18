@@ -1130,10 +1130,8 @@ class ProxyManager(Star):
         self.auto_task=asyncio.create_task(self._auto_loop())
         try:
             http_url,socks_url=self._entry_urls()
-            status=self.astrbot_proxy.ensure(http_url,socks_url)
+            self.astrbot_proxy.ensure(http_url,socks_url)
             self.astrbot_proxy.apply_process_environment(http_url,socks_url)
-            if status.get('restart_required'):
-                logger.warning('AstrBot 默认统一出口将在重启后生效：'+status['message'])
         except (ValueError,OSError) as exc:
             logger.warning('AstrBot 默认统一出口配置失败：'+safe_error(exc))
         try: await self._start_owned_kernel()
