@@ -142,8 +142,20 @@ class MihomoAdapter(CoreAdapter):
         result=[]
         for value in document.get('rules',[]):
             parts=value.split(','); kind=parts[0].upper(); target=parts[-1]
-            result.append((kind,','.join(parts[1:-1]),target))
+            result.append((kind,','.join(parts[1:-1]).strip(),target.strip()))
         return result
+
+    @staticmethod
+    def _runtime_rule(value: object) -> tuple[str,str,str] | None:
+        """Normalize the rule shape returned by different Mihomo builds."""
+        if not isinstance(value,dict):
+            return None
+        kind=str(value.get('type','')).strip().upper()
+        payload=str(value.get('payload','')).strip()
+        target=str(value.get('proxy','')).strip()
+        if not kind or not target:
+            return None
+        return kind,payload,target
 
     def verify(self, document: dict, runtime: object, proxies: object, rules: object) -> list[str]:
         errors=[]
@@ -164,7 +176,8 @@ class MihomoAdapter(CoreAdapter):
         actual_rules=[]
         if isinstance(rules,list):
             for rule in rules:
-                if isinstance(rule,dict): actual_rules.append((str(rule.get('type','')).upper(),str(rule.get('payload','')),str(rule.get('proxy',''))))
+                normalized=self._runtime_rule(rule)
+                if normalized is not None: actual_rules.append(normalized)
         if actual_rules!=self.expected_rules(document): errors.append('运行规则内容或顺序不一致')
         return errors
 

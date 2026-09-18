@@ -924,6 +924,17 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(manager.runtime_application['status'],'applied')
         self.assertEqual(manager.runtime_path.stat().st_mode & 0o777,0o600)
 
+    def test_runtime_verification_normalizes_mihomo_rule_fields(self):
+        manager=self._manager_for_runtime(); document=manager._runtime_document()
+        proxies={proxy['name']:{'type':proxy['type']} for proxy in document['proxies']}
+        type_names={'select':'Selector','url-test':'URLTest','fallback':'Fallback'}
+        for group in document['proxy-groups']:
+            proxies[group['name']]={'type':type_names[group['type']],
+                                    'all':group['proxies'],'now':group['proxies'][0]}
+        rules=[{'type':kind.title(),'payload':' '+payload+' ','proxy':' '+target+' '}
+               for kind,payload,target in manager._expected_rules(document)]
+        self.assertEqual(manager._verify_runtime_data(document,{'mode':'rule'},proxies,rules),[])
+
     def test_runtime_verification_rejects_wrong_group_members_and_rule_order(self):
         manager=self._manager_for_runtime(); manager.state['rule_groups']=[
             {'id':'one','name':'One','domains':[{'host':'one.example','match':'exact'}],'priority':1,'target':'hk','enabled':True},
