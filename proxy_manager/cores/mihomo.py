@@ -251,6 +251,7 @@ class MihomoAdapter(CoreAdapter):
         async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=control['timeout'],trust_env=False) as client:
             response=await client.put('/configs?force=true',json=payload); response.raise_for_status()
             errors=['运行配置尚未完成热加载']
+            restarted=False
             for attempt in range(5):
                 try:
                     running=await client.get('/configs'); running.raise_for_status()
@@ -261,6 +262,11 @@ class MihomoAdapter(CoreAdapter):
                 errors=self.verify(document,running.json(),proxies_response.json().get('proxies',{}),rules_response.json().get('rules',[]))
                 if not errors:
                     break
+                if not restarted and _runtime.get('supervisor') and _runtime.get('binary') and _runtime.get('config'):
+                    await self.restart(_runtime['supervisor'],_runtime['binary'],_runtime['config'])
+                    restarted=True
+                    await asyncio.sleep(0.5)
+                    continue
                 retryable = any(isinstance(item,dict) and str(item.get('type','')) in {'Domain','Match'}
                                 for item in rules_response.json().get('rules',[]))
                 if attempt < 4 and retryable:
