@@ -170,7 +170,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.11',html)
+        self.assertIn('流量控制 · 0.3.12',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('aria-label="主导航"',html)
@@ -950,6 +950,57 @@ class TestConfigurationRules(unittest.TestCase):
         result=asyncio.run(manager._probe_one({'node_id':'hk-1'}))
         self.assertEqual(result['status'],'skipped'); self.assertIn('排除',result['reason'])
         self.assertEqual(manager.health['hk-1']['latency_ms'],9)
+
+    def test_probe_task_preflights_kernel_once_for_native_nodes(self):
+        manager=self._manager_for_runtime()
+        manager.probe_tasks={'task':{'id':'task','status':'running','total':2,'completed':0,'results':[],
+                                     'cancelled':False,'started_at':1}}
+        kernel={'state':'applied','message':'已应用'}; received=[]
+
+        async def probe(payload, *, kernel_status=None):
+            received.append((payload['node_id'],kernel_status))
+            return {'node_id':payload['node_id'],'status':'ok','latency_ms':12}
+
+        with patch.object(manager,'_probe_kernel_status',AsyncMock(return_value=kernel)) as preflight, \
+             patch.object(manager,'_probe_one',side_effect=probe):
+            asyncio.run(manager._run_probe_task('task',['hk-1','sg-1'],'https://example.com',5,2))
+        preflight.assert_awaited_once_with()
+        self.assertEqual({node_id for node_id,_ in received},{'hk-1','sg-1'})
+        self.assertTrue(all(status is kernel for _,status in received))
+
+    def test_probe_retries_transient_kernel_connection_failure(self):
+        manager=self._manager_for_runtime(); adapter=manager._adapter()
+        status=AsyncMock(side_effect=[{'state':'connection_failed','message':'暂时不可用'},
+                                      {'state':'applied','message':'已应用'}])
+        with patch.object(manager,'_kernel_status',status), \
+             patch('proxy_manager.plugin.asyncio.sleep',new=AsyncMock()), \
+             patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(adapter,'probe',AsyncMock(return_value=23)):
+            result=asyncio.run(manager._probe_one({'node_id':'hk-1'}))
+        self.assertEqual(result['status'],'ok'); self.assertEqual(status.await_count,2)
+
+    def test_probe_task_keeps_unavailable_kernel_as_skipped(self):
+        manager=self._manager_for_runtime(); adapter=manager._adapter()
+        manager.probe_tasks={'task':{'id':'task','status':'running','total':2,'completed':0,'results':[],
+                                     'cancelled':False,'started_at':1}}
+        with patch.object(manager,'_probe_kernel_status',AsyncMock(return_value={
+            'state':'saved','message':'配置尚未应用'})), patch.object(adapter,'probe',AsyncMock()) as probe:
+            asyncio.run(manager._run_probe_task('task',['hk-1','sg-1'],'https://example.com',5,2))
+        self.assertEqual([item['status'] for item in manager.probe_tasks['task']['results']],['skipped','skipped'])
+        probe.assert_not_awaited()
+
+    def test_socks_scheme_uses_direct_probe_without_kernel_preflight(self):
+        manager=self._manager_for_runtime(); node=manager.state['nodes'][0]
+        node.update({'protocol':'socks','endpoint':'socks://user:pass@example.com:1080',
+                     'connection':{'uri':'socks://user:pass@example.com:1080'}})
+        response=self.module.httpx.Response(204,request=self.module.httpx.Request('GET','https://example.com'))
+        client=AsyncMock(); client.__aenter__.return_value=client; client.get=AsyncMock(return_value=response)
+        with patch.object(manager,'_kernel_status',AsyncMock()) as kernel, \
+             patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(self.module.httpx,'AsyncClient',return_value=client) as factory:
+            result=asyncio.run(manager._probe_one({'node_id':'hk-1'}))
+        self.assertEqual(result['status'],'ok'); kernel.assert_not_awaited()
+        self.assertEqual(factory.call_args.kwargs['proxy'],node['endpoint'])
 
     def test_probe_task_does_not_truncate_over_one_hundred_nodes(self):
         manager=self._manager_for_runtime(); manager.probe_tasks={}

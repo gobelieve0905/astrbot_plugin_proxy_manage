@@ -37,6 +37,10 @@ from .traffic.astrbot import AstrBotProxyTransaction
 from .traffic.audit import AstrBotTrafficAudit
 
 
+DIRECT_PROBE_SCHEMES = frozenset({'http', 'https', 'socks', 'socks5', 'socks5h'})
+PROBE_KERNEL_RETRY_DELAY = 0.2
+
+
 class ProxyManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -71,7 +75,7 @@ class ProxyManager(Star):
         self.events=self._load_events(); self.integration_audit={}; self.integration_fingerprint=''
         self.compatibility=None
         self._refresh_integration_audit(record=False)
-        self.previews={}; self.probe_tasks={}; self.auto_task=None
+        self.previews={}; self.probe_tasks={}; self._probe_kernel_lock=asyncio.Lock(); self.auto_task=None
         self._register_routes()
 
     def _bind_owned_runtime(self):
@@ -548,7 +552,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.11'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.12'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -660,7 +664,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.11'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.12'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -731,7 +735,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.11'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.12'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1016,6 +1020,29 @@ class ProxyManager(Star):
                                  'checked_at':int(time.time()),'target':executor+'-control' if executor not in {'','direct-http'} else 'direct-http'}
         self.persist_health()
 
+    @staticmethod
+    def _probe_uses_kernel(node:dict) -> bool:
+        return urlparse(str(node.get('endpoint',''))).scheme.lower() not in DIRECT_PROBE_SCHEMES
+
+    @staticmethod
+    def _probe_node_is_eligible(node:dict) -> bool:
+        return bool(node.get('enabled') and not node.get('excluded') and not node.get('invalid_reference')
+                    and node.get('support',{}).get('status')=='supported')
+
+    async def _probe_kernel_status(self) -> dict:
+        """Serialize and briefly retry the shared kernel preflight used by probes."""
+        lock=getattr(self,'_probe_kernel_lock',None)
+        if lock is None:
+            lock=asyncio.Lock(); self._probe_kernel_lock=lock
+        async with lock:
+            status={}
+            for attempt in range(2):
+                status=await self._kernel_status()
+                if status.get('state')!='connection_failed' or attempt==1:
+                    return status
+                await asyncio.sleep(PROBE_KERNEL_RETRY_DELAY)
+            return status
+
     async def node_probe(self):
         try: return json_response(await self._probe_one(await request.json()))
         except (ValueError,httpx.HTTPError,OSError) as exc: return error_response(str(exc) if isinstance(exc,ValueError) else '测速失败或超时')
@@ -1025,7 +1052,7 @@ class ProxyManager(Star):
         if result.get('status')=='skipped': result['skipped']=True
         return json_response(result)
 
-    async def _probe_one(self,payload:dict) -> dict:
+    async def _probe_one(self,payload:dict, *, kernel_status:dict|None=None) -> dict:
             if not isinstance(payload,dict): raise ValueError('请求格式无效')
             node_id=ident(payload.get('node_id')); target=str(payload.get('url','https://www.gstatic.com/generate_204'))
             node=next((item for item in self.state['nodes'] if item['id']==node_id),None)
@@ -1036,9 +1063,9 @@ class ProxyManager(Star):
             elif node.get('invalid_reference'): reason='节点引用已失效'
             elif node.get('support',{}).get('status')!='supported': reason=node.get('support',{}).get('reason') or '协议不支持'
             if reason: return {'node_id':node_id,'status':'skipped','reason':reason}
-            native=urlparse(node['endpoint']).scheme not in {'http','https','socks5','socks5h'}
+            native=self._probe_uses_kernel(node)
             if native:
-                kernel=await self._kernel_status()
+                kernel=kernel_status or await self._probe_kernel_status()
                 if kernel['state']!='applied': return {'node_id':node_id,'status':'skipped','reason':'内核未就绪：'+kernel['message']}
             if not safe_url(target): raise ValueError('测速目标只允许 HTTP 或 HTTPS 地址')
             await validate_public_url(target)
@@ -1061,10 +1088,17 @@ class ProxyManager(Star):
 
     async def _run_probe_task(self,task_id:str,node_ids:list[str],target:str,timeout:int,concurrency:int):
         task=self.probe_tasks[task_id]; semaphore=asyncio.Semaphore(concurrency)
+        kernel_status=None
+        if any(self._probe_uses_kernel(node) and self._probe_node_is_eligible(node)
+               for node in self.state['nodes'] if node.get('id') in node_ids):
+            kernel_status=await self._probe_kernel_status()
         async def run(node_id):
             async with semaphore:
                 if task['cancelled']: return {'node_id':node_id,'status':'cancelled','reason':'任务已取消'}
-                return await self._probe_one({'node_id':node_id,'url':target,'timeout':timeout})
+                payload={'node_id':node_id,'url':target,'timeout':timeout}
+                if kernel_status is None:
+                    return await self._probe_one(payload)
+                return await self._probe_one(payload,kernel_status=kernel_status)
         pending=[asyncio.create_task(run(node_id)) for node_id in node_ids]
         try:
             for future in asyncio.as_completed(pending):
@@ -1198,7 +1232,7 @@ class ProxyManager(Star):
         http_url,socks_url=self._entry_urls(); status=self.astrbot_proxy.mark_started(http_url,socks_url)
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.11 已加载')
+        logger.info('代理管理中心 0.3.12 已加载')
 
     async def terminate(self):
         if self.auto_task:
