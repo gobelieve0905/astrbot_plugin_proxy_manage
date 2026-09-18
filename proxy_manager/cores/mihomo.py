@@ -252,6 +252,10 @@ class MihomoAdapter(CoreAdapter):
             response=await client.put('/configs?force=true',json=payload); response.raise_for_status()
             errors=['运行配置尚未完成热加载']
             restarted=False
+            if _runtime.get('supervisor') and _runtime.get('binary') and _runtime.get('config'):
+                await self.restart(_runtime['supervisor'],_runtime['binary'],_runtime['config'])
+                restarted=True
+                await asyncio.sleep(0.5)
             for attempt in range(5):
                 try:
                     running=await client.get('/configs'); running.raise_for_status()
