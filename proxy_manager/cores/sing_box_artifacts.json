@@ -2,6 +2,21 @@
   "adapter": "sing-box",
   "version": "1.14.1",
   "release_api_url": "https://api.github.com/repos/SagerNet/sing-box/releases/latest",
+  "versions": {
+    "1.13.2": {
+      "version": "1.13.2",
+      "artifacts": {
+        "linux-amd64-glibc": {"name":"sing-box-1.13.2-linux-amd64-glibc.tar.gz","format":"tar.gz","binary_path":"sing-box-1.13.2-linux-amd64-glibc/sing-box","size":24073981,"sha256":"49d4195a0a706098f16eedb682a75ab1a19ac91dd9246b384436948f86657482","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.13.2/sing-box-1.13.2-linux-amd64-glibc.tar.gz"}]},
+        "linux-arm64-glibc": {"name":"sing-box-1.13.2-linux-arm64-glibc.tar.gz","format":"tar.gz","binary_path":"sing-box-1.13.2-linux-arm64-glibc/sing-box","size":22179230,"sha256":"1fef9c0c3e4d2aae447cfa43ce797dff486e7528148dd017bd25bf394ef43d40","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.13.2/sing-box-1.13.2-linux-arm64-glibc.tar.gz"}]},
+        "linux-amd64-musl": {"name":"sing-box-1.13.2-linux-amd64-musl.tar.gz","format":"tar.gz","binary_path":"sing-box-1.13.2-linux-amd64-musl/sing-box","size":24101422,"sha256":"7eb9f49e6da3cdd39b0dac9a59b4980a722f830650441228d53122b12d0edb8b","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.13.2/sing-box-1.13.2-linux-amd64-musl.tar.gz"}]},
+        "linux-arm64-musl": {"name":"sing-box-1.13.2-linux-arm64-musl.tar.gz","format":"tar.gz","binary_path":"sing-box-1.13.2-linux-arm64-musl/sing-box","size":22211892,"sha256":"384abe399803228d21a6214599a19d17e831b90f13f2d1d571364fae07368f65","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.13.2/sing-box-1.13.2-linux-arm64-musl.tar.gz"}]},
+        "darwin-amd64": {"name":"sing-box-1.13.2-darwin-amd64.tar.gz","format":"tar.gz","binary_path":"sing-box-1.13.2-darwin-amd64/sing-box","size":19863857,"sha256":"741c768acaafd6f7604c93d7f0b8e5baf6407f07afc5e9add897db7482ba93d1","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.13.2/sing-box-1.13.2-darwin-amd64.tar.gz"}]},
+        "darwin-arm64": {"name":"sing-box-1.13.2-darwin-arm64.tar.gz","format":"tar.gz","binary_path":"sing-box-1.13.2-darwin-arm64/sing-box","size":18343216,"sha256":"d88aa9abd9c43a90094bfbd2aaab7f8d1eeb12c98c8da65d8b1c32fef6ad5985","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.13.2/sing-box-1.13.2-darwin-arm64.tar.gz"}]},
+        "windows-amd64": {"name":"sing-box-1.13.2-windows-amd64.zip","format":"zip","binary_path":"sing-box-1.13.2-windows-amd64/sing-box.exe","size":20010904,"sha256":"56d7200803753936e1dd497c8444d6c4dc5195339437e35ccdec410a5e5d2ae9","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.13.2/sing-box-1.13.2-windows-amd64.zip"}]},
+        "windows-arm64": {"name":"sing-box-1.13.2-windows-arm64.zip","format":"zip","binary_path":"sing-box-1.13.2-windows-arm64/sing-box.exe","size":17973998,"sha256":"b279440c2e64f6db77c1be55c1590f5fa5a0cd7ff61e13e94dc8a5ac810e9ee2","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.13.2/sing-box-1.13.2-windows-arm64.zip"}]}
+      }
+    }
+  },
   "artifacts": {
     "linux-amd64-glibc": {"name":"sing-box-1.14.1-linux-amd64-glibc.tar.gz","format":"tar.gz","binary_path":"sing-box-1.14.1-linux-amd64-glibc/sing-box","size":32478432,"sha256":"4c6c860a96f7fce252d7a10d0608ae4cb7e76bcbe5f3ca9c110a604007090756","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-amd64-glibc.tar.gz"}]},
     "linux-arm64-glibc": {"name":"sing-box-1.14.1-linux-arm64-glibc.tar.gz","format":"tar.gz","binary_path":"sing-box-1.14.1-linux-arm64-glibc/sing-box","size":29671416,"sha256":"3245c373976bca8e61633fdc26b394179d4697c42c18c52ab711cc588b1a57c7","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-arm64-glibc.tar.gz"}]},

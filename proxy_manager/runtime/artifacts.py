@@ -133,8 +133,18 @@ class ArtifactManager:
 
     def status(self) -> dict:
         item=self.selected(); versions=self.available_versions()
+        version_resources={}
+        for version in versions:
+            resource=self._selected_from(self._manifest_for_version(version))
+            if not resource: continue
+            official=next((source for source in resource['sources'] if source['id']=='github'),
+                          resource['sources'][-1] if resource['sources'] else {})
+            version_resources[version]={'artifact':resource['name'],'expected_sha256':resource['sha256'],
+                                        'size':resource.get('size',0),'download_url':official.get('url',''),
+                                        'resource_key':resource.get('key','')}
         base={'adapter':self.manifest.get('adapter',''),'platform':self.platform,'version':self.version,
               'recommended_version':self.recommended_version,'available_versions':versions,
+              'version_resources':version_resources,
               'available_platforms':sorted(str(key) for key in self.manifest.get('artifacts',{})),
               'resource_key':item.get('key','') if item else self._platform_key(),
               'release_api_url':str(self.catalog.get('release_api_url') or ''),
@@ -167,6 +177,16 @@ class ArtifactManager:
                 'update_available':update_available,'message':message,'source':meta.get('source',''),
                 'installed_artifact':installed_item['name'],'installed_sha256':meta.get('binary_sha256',''),
                 'installed_at':meta.get('installed_at',0),'binary_sha256':digest}
+
+    def uninstall(self) -> dict:
+        """Remove only managed installation files and keep update-check history."""
+        installed=bool(self.binary.exists() or self.metadata_path.exists())
+        for path in (self.binary,self.metadata_path,self.previous_binary,self.previous_metadata):
+            try: path.unlink()
+            except FileNotFoundError: pass
+        return {'state':'uninstalled' if installed else 'not_installed','ready':False,
+                'adapter':self.manifest.get('adapter',''),
+                'message':'内核资源已卸载' if installed else '内核资源尚未安装'}
 
     def update_check(self) -> dict:
         try:
@@ -347,17 +367,21 @@ class ArtifactInstallTask:
     def __init__(self,manager:ArtifactManager,on_installed,on_rollback=None):
         self.manager=manager; self.on_installed=on_installed; self.on_rollback=on_rollback
         self.task=None; self.cancel_event=None
-        self.state={'state':'idle','phase':'idle','message':'尚未开始在线安装','updated_at':int(time.time())}
+        self.state={'state':'idle','operation':'install','phase':'idle','progress':0,
+                    'message':'尚未开始资源任务','updated_at':int(time.time())}
 
     def status(self) -> dict: return dict(self.state)
 
     def _update(self,values:dict):
-        self.state={**self.state,**values,'state':'running','updated_at':int(time.time())}
+        downloaded=int(values.get('downloaded',0) or 0); total=int(values.get('total',0) or 0)
+        progress=values.get('progress',min(95,round(downloaded*100/total)) if total else self.state.get('progress',5))
+        self.state={**self.state,**values,'state':'running','progress':progress,'updated_at':int(time.time())}
 
     def start(self) -> dict:
         if self.task and not self.task.done(): return self.status()
         self.cancel_event=asyncio.Event()
-        self.state={'state':'running','phase':'queued','message':'安装任务已创建','downloaded':0,'total':0,
+        self.state={'state':'running','operation':'install','phase':'queued','progress':2,
+                    'message':'安装任务已创建','downloaded':0,'total':0,
                     'updated_at':int(time.time())}
         self.task=asyncio.create_task(self._run())
         return self.status()
@@ -386,8 +410,26 @@ class ArtifactInstallTask:
                         'message':'制品已安装，但内核启动失败：'+str(exc),'artifact':artifact,'updated_at':int(time.time())}
 
     def record_completed(self,artifact,process,message='内核安装并启动成功'):
-        self.state={**self.state,'state':'completed','phase':'completed','message':message,
+        self.state={**self.state,'state':'completed','phase':'completed','progress':100,'message':message,
                     'artifact':artifact,'process':process,'updated_at':int(time.time())}
+
+    def start_uninstall(self,on_uninstall) -> dict:
+        if self.task and not self.task.done(): return self.status()
+        self.cancel_event=None
+        self.state={'state':'running','operation':'uninstall','phase':'preparing','progress':10,
+                    'message':'正在准备卸载内核资源','updated_at':int(time.time())}
+        self.task=asyncio.create_task(self._run_uninstall(on_uninstall))
+        return self.status()
+
+    async def _run_uninstall(self,on_uninstall):
+        try:
+            self._update({'operation':'uninstall','phase':'validating','progress':35,'message':'正在检查内核运行状态'})
+            result=await on_uninstall(self._update)
+            self.state={**self.state,'state':'completed','phase':'completed','progress':100,
+                        'message':result.get('message','内核资源已卸载'),'artifact':result,
+                        'updated_at':int(time.time())}
+        except Exception as exc:
+            self.state={**self.state,'state':'failed','phase':'failed','message':str(exc),'updated_at':int(time.time())}
 
     async def cancel(self) -> dict:
         if self.cancel_event: self.cancel_event.set()

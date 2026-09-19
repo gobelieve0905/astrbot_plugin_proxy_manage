@@ -2,6 +2,19 @@
   "adapter": "mihomo",
   "version": "1.19.31",
   "release_api_url": "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest",
+  "versions": {
+    "1.19.30": {
+      "version": "1.19.30",
+      "artifacts": {
+        "linux-amd64": {"name":"mihomo-linux-amd64-compatible-v1.19.30.gz","format":"gz","size":18899951,"sha256":"db214c7a2517e63c150d123178d16d102e03a241ccdae4e5e07ffbe9cf56c6f9","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-amd64-compatible-v1.19.30.gz"}]},
+        "linux-arm64": {"name":"mihomo-linux-arm64-v1.19.30.gz","format":"gz","size":16965828,"sha256":"58896873736d28628f66de3677c8654fa0f180662523148e136cff4f6e890069","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-arm64-v1.19.30.gz"}]},
+        "darwin-amd64": {"name":"mihomo-darwin-amd64-v1.19.30.gz","format":"gz","size":18271668,"sha256":"99dfcfe454ed58fb95ee4ba222c39defd051b687ad3e5deabb1b9d6be3103e2f","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-darwin-amd64-v1.19.30.gz"}]},
+        "darwin-arm64": {"name":"mihomo-darwin-arm64-v1.19.30.gz","format":"gz","size":16805556,"sha256":"2c7f3a7904fa1cee291e124123e630e7b1ebd13765dd9bf26c0a28432004d9f4","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-darwin-arm64-v1.19.30.gz"}]},
+        "windows-amd64": {"name":"mihomo-windows-amd64-compatible-v1.19.30.zip","format":"zip","size":18529108,"sha256":"289fde5e29d37a5b3326480590d8b3551c5bf7f8737290355c19bce74d57a563","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-windows-amd64-compatible-v1.19.30.zip"}]},
+        "windows-arm64": {"name":"mihomo-windows-arm64-v1.19.30.zip","format":"zip","size":16344535,"sha256":"b37c4b0259e85b020edc4215aa4c86052e21071cf520d4800364b21b4e2fc162","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-windows-arm64-v1.19.30.zip"}]}
+      }
+    }
+  },
   "artifacts": {
     "linux-amd64": {"name":"mihomo-linux-amd64-compatible-v1.19.31.gz","format":"gz","size":22821836,"sha256":"04cf9f09671704f839ddbee2e93069dc831a4123a75281e725d1d96ab9ac1afc","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-amd64-compatible-v1.19.31.gz"}]},
     "linux-arm64": {"name":"mihomo-linux-arm64-v1.19.31.gz","format":"gz","size":20757911,"sha256":"9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-arm64-v1.19.31.gz"}]},

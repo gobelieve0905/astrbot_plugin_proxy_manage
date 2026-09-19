@@ -333,6 +333,7 @@ class ProxyManager(Star):
             ('kernel-status',self.kernel_status,['GET']),
             ('kernel-install',self.kernel_install,['POST']), ('kernel-install-status',self.kernel_install_status,['GET','POST']),
             ('kernel-install-cancel',self.kernel_install_cancel,['POST']), ('kernel-upload',self.kernel_upload,['POST']),
+            ('kernel-uninstall',self.kernel_uninstall,['POST']),
             ('kernel-update-check',self.kernel_update_check,['POST']), ('kernel-update-check-all',self.kernel_update_check_all,['POST']),
             ('core-enable',self.core_enable,['POST']),
             ('kernel-start',self.kernel_start,['POST']), ('kernel-stop',self.kernel_stop,['POST']),
@@ -1009,6 +1010,37 @@ class ProxyManager(Star):
         adapter_id=str(payload.get('adapter') or self._adapter().id)
         return json_response(await self.install_tasks.get(adapter_id,self.install_task).cancel())
 
+    async def kernel_uninstall(self):
+        try:
+            payload=await request.json()
+            adapter_id=str(payload.get('adapter') or self._adapter().id)
+            adapter=all_adapters().get(adapter_id)
+            if not adapter: raise ValueError('不支持或未知的内核适配器：'+adapter_id)
+            task=self.install_tasks.get(adapter_id)
+            if task and task.task and not task.task.done(): return json_response(task.status())
+            manager=ArtifactManager(self.data_dir,adapter.artifact())
+            task=ArtifactInstallTask(manager,lambda: None)
+            self.install_tasks[adapter_id]=task
+            if adapter_id==self._adapter().id:
+                self.install_task=task
+
+            async def uninstall(progress):
+                async with self.operation_lock:
+                    if adapter_id==self._adapter().id and self.supervisor.status().get('ready'):
+                        raise ValueError('当前运行内核不能卸载，请先停止或切换到其他内核')
+                    progress({'operation':'uninstall','phase':'removing','progress':75,'message':'正在删除内核制品和安装记录'})
+                    result=manager.uninstall()
+                    if self._core_enabled(adapter_id):
+                        self._set_core_enabled(adapter_id,False)
+                        await self.persist(self.state)
+                    if adapter_id==self._adapter().id: self.artifacts=manager; self.install_task=task
+                    self.event({'action':'kernel_uninstall','adapter':adapter_id,'result':'ok'})
+                    return result
+
+            return json_response(task.start_uninstall(uninstall))
+        except (ValueError,OSError,RuntimeError) as exc:
+            return error_response(str(exc),status_code=400)
+
     async def kernel_upload(self):
         try:
             payload=await request.json() if str(request.content_type).split(';',1)[0]=='application/json' else {}
@@ -1016,13 +1048,22 @@ class ProxyManager(Star):
             adapter=all_adapters().get(adapter_id)
             if not adapter: raise ValueError('不支持或未知的内核适配器：'+adapter_id)
             manager=ArtifactManager(self.data_dir,adapter.artifact(),str(payload.get('version') or '') or None)
-            task=self.install_tasks.get(adapter_id)
-            if task: await task.cancel()
             length=int(request.headers.get('content-length','0') or 0)
             if length>MAX_ARCHIVE_SIZE*2: raise ValueError('内核制品请求体过大')
+            task=self.install_tasks.get(adapter_id)
+            if task: await task.cancel()
+            if not task:
+                task=ArtifactInstallTask(manager,lambda: None)
+                self.install_tasks[adapter_id]=task
+            task.manager=manager
+            task.state={'state':'running','operation':'install','phase':'uploading','progress':10,
+                        'message':'正在上传离线制品','downloaded':0,'total':length,
+                        'updated_at':int(time.time())}
             if str(request.content_type).split(';',1)[0]=='application/json':
                 body=base64.b64decode(str(payload.get('content','')),validate=True)
             else: body=await request.body()
+            task._update({'phase':'validating','progress':60,'downloaded':len(body),'total':len(body),
+                          'message':'正在校验离线制品'})
             if adapter_id==self._adapter().id: self.artifacts=manager
             artifact=manager.install(bytes(body),'offline')
             try:
@@ -1033,9 +1074,11 @@ class ProxyManager(Star):
                 except Exception: pass
                 raise
             manager.commit()
-            if task: task.record_completed(artifact,process,'离线制品校验、安装成功；运行控制未自动启动')
+            task.record_completed(artifact,process,'离线制品校验、安装成功；运行控制未自动启动')
             return json_response({'artifact':artifact,'process':process})
         except (ValueError,OSError,RuntimeError,TypeError,binascii.Error) as exc:
+            if 'task' in locals() and task:
+                task.state={**task.state,'state':'failed','phase':'failed','message':str(exc),'updated_at':int(time.time())}
             self.event({'action':'kernel_install','result':'failed','message':safe_error(exc)})
             return error_response(str(exc),status_code=400)
 

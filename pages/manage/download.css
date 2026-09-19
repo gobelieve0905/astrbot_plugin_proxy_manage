@@ -1,4 +1,4 @@
-.download-status {
+.kernel-progress {
   display: grid;
   grid-template-columns: minmax(210px, 1fr) minmax(220px, 2fr) auto;
   gap: 12px;
@@ -10,12 +10,10 @@
   background: var(--panel);
 }
 
-.download-status small { display: block; margin-top: 3px; }
-.download-status progress { width: 100%; accent-color: var(--accent); }
-.artifact-guide { display: grid; grid-template-columns: minmax(180px, auto) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 13px; margin-bottom: 12px; border-left: 3px solid var(--accent); background: var(--input); }
-.artifact-guide b { overflow-wrap: anywhere; }
-.artifact-guide code { color: var(--muted); overflow-wrap: anywhere; font-size: 11px; }
-.artifact-guide a { color: var(--accent-strong); font-weight: 650; white-space: nowrap; }
+.kernel-progress b, .kernel-progress span { display: block; overflow-wrap: anywhere; }
+.kernel-progress span, .kernel-progress small { color: var(--muted); font-size: 11px; }
+.kernel-progress progress { width: 100%; accent-color: var(--accent); }
+.offline-install { display: grid; gap: 10px; margin: 16px 0; padding-top: 14px; border-top: 1px solid var(--line); }
 
 .kernel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
 .kernel-card { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: var(--shadow); }
@@ -34,7 +32,10 @@
 .kernel-facts select { margin-top: 3px; padding: 3px 5px; font-size: 13px; }
 .kernel-message { min-height: 42px; margin: 0 0 12px; color: var(--muted); font-size: 13px; }
 .kernel-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.kernel-actions a { color: var(--accent-strong); font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.kernel-actions .danger { color: var(--danger); }
+.kernel-download-url { display: grid; gap: 5px; margin-top: 12px; }
+.kernel-download-url span { color: var(--muted); font-size: 11px; }
+.kernel-download-url code { padding: 8px; background: var(--input); color: var(--accent-strong); font-size: 11px; overflow-wrap: anywhere; user-select: all; }
 .kernel-card details { margin-top: 12px; }
 .kernel-card details code { display: block; margin-top: 8px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .kernel-platform { display: grid; grid-template-columns: auto minmax(100px, 1fr) minmax(110px, 1.3fr) auto minmax(100px, 1fr) minmax(150px, 2fr); gap: 10px; align-items: center; margin-top: 16px; padding: 12px; border: 1px solid var(--line); background: var(--input); }
@@ -42,8 +43,7 @@
 .kernel-platform b { overflow-wrap: anywhere; }
 
 @media (max-width: 800px) {
-  .download-status, .artifact-guide { grid-template-columns: 1fr; }
-  .artifact-guide a { white-space: normal; }
+  .kernel-progress { grid-template-columns: 1fr; }
   .kernel-grid { grid-template-columns: 1fr; }
   .kernel-platform { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

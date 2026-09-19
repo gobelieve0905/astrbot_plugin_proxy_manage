@@ -2,6 +2,19 @@
   "adapter": "xray",
   "version": "26.3.27",
   "release_api_url": "https://api.github.com/repos/XTLS/Xray-core/releases/latest",
+  "versions": {
+    "26.6.27": {
+      "version": "26.6.27",
+      "artifacts": {
+        "linux-amd64": {"name":"Xray-linux-64.zip","format":"zip","binary_path":"xray","size":21197571,"sha256":"b3e5902d06d6282fe53cfa2fc426058b9aeaa429b2c812e20887cd47f26d08bf","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-linux-64.zip"}]},
+        "linux-arm64": {"name":"Xray-linux-arm64-v8a.zip","format":"zip","binary_path":"xray","size":19742958,"sha256":"13a251379bea366c2cf10363ad71e75734193d401f26f518bf0c25e5c8f8c931","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-linux-arm64-v8a.zip"}]},
+        "darwin-amd64": {"name":"Xray-macos-64.zip","format":"zip","binary_path":"xray","size":20890499,"sha256":"e917da78383b631d2bc7f8d9412f619e648fc3cd73a5a0f62f031425e5330ff1","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-macos-64.zip"}]},
+        "darwin-arm64": {"name":"Xray-macos-arm64-v8a.zip","format":"zip","binary_path":"xray","size":19783634,"sha256":"5b63cf477b4281dc0d9d3af4d7b87391ab868a842b430e9ce8957ea0b60ecab7","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-macos-arm64-v8a.zip"}]},
+        "windows-amd64": {"name":"Xray-windows-64.zip","format":"zip","binary_path":"xray.exe","size":21024773,"sha256":"97f16a0701dbf931c9c4375399f8188e31615fdd5c863be5c612f946acd4dd01","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-windows-64.zip"}]},
+        "windows-arm64": {"name":"Xray-windows-arm64-v8a.zip","format":"zip","binary_path":"xray.exe","size":19391652,"sha256":"e9dbd1b54ebcd272691fc67535297315eda642905cf5a5076b495d857c480ecb","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-windows-arm64-v8a.zip"}]}
+      }
+    }
+  },
   "artifacts": {
     "linux-amd64": {"name":"Xray-linux-64.zip","format":"zip","binary_path":"xray","size":21136402,"sha256":"23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip"}]},
     "linux-arm64": {"name":"Xray-linux-arm64-v8a.zip","format":"zip","binary_path":"xray","size":19716427,"sha256":"4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-arm64-v8a.zip"}]},

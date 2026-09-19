@@ -178,6 +178,12 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('core-enable',script)
         self.assertIn('kernel-update-check',script)
         self.assertIn('data-kernel-check',script)
+        self.assertIn('data-kernel-uninstall',script)
+        self.assertIn('kernel-progress',script + styles)
+        self.assertIn('kernel-download-url',script + styles)
+        self.assertNotIn('download-status',script + styles)
+        self.assertNotIn("$('kernel-install')",script)
+        self.assertNotIn("$('kernel-install-cancel')",script)
         self.assertIn('aria-label="主导航"',html)
         self.assertIn("classList.toggle('active'",script)
         self.assertIn("$('content').dataset.view=tab",script)
@@ -224,6 +230,43 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertEqual(status['installed_version'],'1.0.0')
             self.assertEqual(status['recommended_version'],'2.0.0')
             self.assertTrue(status['update_available'])
+
+    def test_artifact_uninstall_is_idempotent_and_preserves_update_check(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+        manifest={'adapter':'fixture','version':'1.0.0','artifacts':{}}
+        with patch('proxy_manager.runtime.artifacts.detect_platform',return_value={'os':'linux','arch':'amd64','libc':'glibc','machine':'x86_64'}), tempfile.TemporaryDirectory() as directory:
+            archive=gzip.compress(b'installed-core')
+            manifest['artifacts']['linux-amd64-glibc']={'name':'core.gz','format':'gz','sha256':hashlib.sha256(archive).hexdigest()}
+            manager=ArtifactManager(Path(directory),manifest)
+            manager.install(archive)
+            manager.update_check_path.write_text('{"state":"up_to_date"}',encoding='utf-8')
+            manager.previous_binary.write_bytes(b'previous')
+            manager.previous_metadata.write_text('{}',encoding='utf-8')
+            result=manager.uninstall()
+            self.assertEqual(result['state'],'uninstalled')
+            self.assertFalse(manager.binary.exists())
+            self.assertFalse(manager.metadata_path.exists())
+            self.assertFalse(manager.previous_binary.exists())
+            self.assertFalse(manager.previous_metadata.exists())
+            self.assertEqual(json.loads(manager.update_check_path.read_text(encoding='utf-8'))['state'],'up_to_date')
+            self.assertEqual(manager.uninstall()['state'],'not_installed')
+
+    def test_artifact_resource_task_exposes_operation_and_progress(self):
+        from proxy_manager.runtime.artifacts import ArtifactInstallTask
+        async def scenario():
+            manager=types.SimpleNamespace(download=AsyncMock(return_value={'ready':True}),commit=lambda: None,rollback=lambda: None)
+            task=ArtifactInstallTask(manager,AsyncMock())
+            initial=task.start()
+            self.assertEqual(initial['operation'],'install')
+            self.assertGreaterEqual(initial['progress'],0)
+            await asyncio.sleep(0.01)
+            self.assertEqual(task.status()['progress'],100)
+            task=ArtifactInstallTask(types.SimpleNamespace(uninstall=lambda: {'message':'done'}),AsyncMock())
+            uninstall=task.start_uninstall(lambda _progress: asyncio.sleep(0, result={'message':'done'}))
+            self.assertEqual(uninstall['operation'],'uninstall')
+            await asyncio.sleep(0.01)
+            self.assertEqual(task.status()['progress'],100)
+        asyncio.run(scenario())
 
     def test_manual_update_check_does_not_download_and_flags_unreviewed_release(self):
         from proxy_manager.runtime.artifacts import ArtifactManager
