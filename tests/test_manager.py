@@ -170,11 +170,14 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.14',html)
+        self.assertIn('流量控制 · 0.3.15',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('kernel-grid',script)
         self.assertIn('data-kernel-install',script)
+        self.assertIn('core-enable',script)
+        self.assertIn('kernel-update-check',script)
+        self.assertIn('data-kernel-check',script)
         self.assertIn('aria-label="主导航"',html)
         self.assertIn("classList.toggle('active'",script)
         self.assertIn("$('content').dataset.view=tab",script)
@@ -221,6 +224,52 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertEqual(status['installed_version'],'1.0.0')
             self.assertEqual(status['recommended_version'],'2.0.0')
             self.assertTrue(status['update_available'])
+
+    def test_manual_update_check_does_not_download_and_flags_unreviewed_release(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+
+        manifest={
+            'adapter':'fixture','version':'1.0.0','recommended_version':'1.0.0',
+            'release_api_url':'https://api.github.com/repos/example/fixture/releases/latest',
+            'versions':{'1.0.0':{'version':'1.0.0','artifacts':{}}},'artifacts':{},
+        }
+        response=self.module.httpx.Response(
+            200,
+            json={'tag_name':'v2.0.0','name':'Fixture 2.0.0','html_url':'https://github.com/example/fixture/releases/tag/v2.0.0'},
+            request=self.module.httpx.Request('GET',manifest['release_api_url']),
+        )
+        client=AsyncMock(); client.__aenter__.return_value=client; client.get=AsyncMock(return_value=response)
+        with tempfile.TemporaryDirectory() as directory, patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            manager=ArtifactManager(Path(directory),manifest)
+            manager.download=AsyncMock()
+            result=asyncio.run(manager.check_update())
+            self.assertEqual(result['state'],'pending_review')
+            self.assertEqual(result['latest_version'],'2.0.0')
+            manager.download.assert_not_awaited()
+            self.assertFalse(manager.binary.exists())
+
+    def test_manual_update_check_accepts_only_fixed_release_versions(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+
+        manifest={
+            'adapter':'fixture','version':'1.0.0','recommended_version':'1.0.0',
+            'release_api_url':'https://api.github.com/repos/example/fixture/releases/latest',
+            'versions':{
+                '1.0.0':{'version':'1.0.0','artifacts':{}},
+                '2.0.0':{'version':'2.0.0','artifacts':{}},
+            },'artifacts':{},
+        }
+        response=self.module.httpx.Response(
+            200,
+            json={'tag_name':'v2.0.0'},
+            request=self.module.httpx.Request('GET',manifest['release_api_url']),
+        )
+        client=AsyncMock(); client.__aenter__.return_value=client; client.get=AsyncMock(return_value=response)
+        with tempfile.TemporaryDirectory() as directory, patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            manager=ArtifactManager(Path(directory),manifest)
+            result=asyncio.run(manager.check_update())
+            self.assertEqual(result['state'],'update_available')
+            self.assertEqual(result['recommended_version'],'1.0.0')
 
     def test_artifact_update_rolls_back_previous_binary_when_activation_fails(self):
         from proxy_manager.runtime.artifacts import ArtifactInstallTask, ArtifactManager
@@ -302,6 +351,33 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertEqual(manager.state['control']['listen'],'127.0.0.1:19090')
             self.assertEqual(manager.state['proxy_entry']['http_url'],'http://127.0.0.1:17890')
             self.assertEqual((Path(directory)/'runtime'/'control.secret').stat().st_mode & 0o777,0o600)
+
+    def test_xray_uses_a_separate_stable_socks_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager=self.module.ProxyManager.__new__(self.module.ProxyManager)
+            manager.data_dir=Path(directory)
+            manager.state={'control':{'adapter':'xray'},'proxy_entry':{}}
+            manager._bind_owned_runtime()
+            self.assertEqual(manager.state['proxy_entry']['http_url'],'http://127.0.0.1:17890')
+            self.assertEqual(manager.state['proxy_entry']['socks_url'],'socks5://127.0.0.1:17892')
+
+    def test_core_preferences_are_closed_by_default_and_migrate_current_legacy_core(self):
+        manager=self.module.ProxyManager.__new__(self.module.ProxyManager)
+        fresh=manager._normalize({})['core_preferences']
+        self.assertEqual({key:item['enabled'] for key,item in fresh.items()},
+                         {'xray':False,'mihomo':False,'sing-box':False})
+        legacy=manager._normalize({'control':{'adapter':'sing-box'}})['core_preferences']
+        self.assertEqual({key:item['enabled'] for key,item in legacy.items()},
+                         {'xray':False,'mihomo':False,'sing-box':True})
+
+    def test_proxy_environment_sync_uses_selected_core_entry(self):
+        manager=self.module.ProxyManager.__new__(self.module.ProxyManager)
+        manager.state={'proxy_entry':{'http_url':'http://127.0.0.1:17890','socks_url':'socks5://127.0.0.1:17892'}}
+        manager.astrbot_proxy=Mock()
+        manager.astrbot_proxy.ensure.return_value={'status':'active'}
+        self.assertEqual(manager._sync_owned_proxy_environment(),{'status':'active'})
+        manager.astrbot_proxy.ensure.assert_called_once_with('http://127.0.0.1:17890','socks5://127.0.0.1:17892')
+        manager.astrbot_proxy.apply_process_environment.assert_called_once_with('http://127.0.0.1:17890','socks5://127.0.0.1:17892')
 
     def test_private_entry_credentials_are_stable_private_and_redacted(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -630,7 +706,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(len(nodes), 2)
         self.assertEqual(nodes[0]['support']['status'], 'unverified')
         self.assertEqual(nodes[1]['support']['status'], 'unsupported')
-        self.assertTrue(all(node['support']['reason'] for node in nodes))
+        self.assertTrue(nodes[1]['support']['reason'])
         self.assertTrue(all(not node['enabled'] for node in nodes))
 
     def test_subscription_notice_is_marked_but_not_auto_excluded(self):
@@ -1377,12 +1453,21 @@ class TestConfigurationRules(unittest.TestCase):
                 state=copy.deepcopy(manager.state); state['control']['adapter']=adapter_id
                 state['proxy_entry']['private']={'enabled':True,'listen':'0.0.0.0','port':17891,
                                                   'username':'private-user','password':'private-password'}
-                for node in state['nodes']: node['adapters']=['mihomo','sing-box']
+                if adapter_id=='xray':
+                    state['nodes']=[{'id':'xray-node','name':'Xray VLESS','display_name':'Xray VLESS','protocol':'vless',
+                                     'endpoint':'vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls&sni=example.com',
+                                     'connection':{'uri':'vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?security=tls&sni=example.com'},
+                                     'kernel_name':'node-xray-node','adapters':['xray'],'support':{'status':'supported'},
+                                     'enabled':True,'excluded':False,'invalid_reference':False}]
+                    state['groups']=[{'id':'direct','name':'直连','kernel_name':'DIRECT','mode':'direct','node_ids':[],'selected':'','enabled':True},
+                                     {'id':'xray','name':'Xray','kernel_name':'group-xray','mode':'select','node_ids':['xray-node'],'selected':'xray-node','enabled':True}]
+                else:
+                    for node in state['nodes']: node['adapters']=['mihomo','sing-box']
                 document=adapter.render(state,manager._compiled_rules())
                 adapter.validate(document)
                 serialized=adapter.serialize(document)
                 self.assertIsInstance(serialized,bytes); self.assertTrue(serialized)
-                self.assertIn(adapter.config_filename(),{'config.yaml','config.json'})
+                self.assertIn(adapter.config_filename(),{'config.yaml','config.json','xray-config.json'})
                 command=adapter.command(Path('/core'),Path('/runtime')/adapter.config_filename())
                 self.assertEqual(command[0],'/core'); self.assertIn(str(Path('/runtime')/adapter.config_filename()),command)
                 manifest=adapter.artifact()

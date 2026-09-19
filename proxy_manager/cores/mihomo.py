@@ -87,7 +87,8 @@ class MihomoAdapter(CoreAdapter):
             raise ValueError('缺少 PyYAML，无法生成 Mihomo 配置') from exc
         compiled=compiled if compiled is not None else compiled_rules(state)
         runnable={node['id']:node for node in state['nodes'] if node['enabled'] and not node.get('excluded')
-                  and not node.get('invalid_reference') and node.get('support',{}).get('status','supported')=='supported'}
+                  and not node.get('invalid_reference') and self.id in node.get('adapters', [self.id])
+                  and node.get('support',{}).get('status','supported')=='supported'}
         proxies=[self.render_proxy(node) for node in sorted(runnable.values(),key=lambda item:item['id'])]
         groups=[]
         for group in state['groups']:

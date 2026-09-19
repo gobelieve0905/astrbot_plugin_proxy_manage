@@ -11,7 +11,8 @@ def _load():
     if _ADAPTERS is None:
         from .mihomo import MihomoAdapter
         from .sing_box import SingBoxAdapter
-        _ADAPTERS={'mihomo':MihomoAdapter(),'sing-box':SingBoxAdapter()}
+        from .xray import XrayAdapter
+        _ADAPTERS={'mihomo':MihomoAdapter(),'sing-box':SingBoxAdapter(),'xray':XrayAdapter()}
     return _ADAPTERS
 
 

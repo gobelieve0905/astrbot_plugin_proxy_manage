@@ -1,6 +1,7 @@
 {
   "adapter": "sing-box",
   "version": "1.14.1",
+  "release_api_url": "https://api.github.com/repos/SagerNet/sing-box/releases/latest",
   "artifacts": {
     "linux-amd64-glibc": {"name":"sing-box-1.14.1-linux-amd64-glibc.tar.gz","format":"tar.gz","binary_path":"sing-box-1.14.1-linux-amd64-glibc/sing-box","size":32478432,"sha256":"4c6c860a96f7fce252d7a10d0608ae4cb7e76bcbe5f3ca9c110a604007090756","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-amd64-glibc.tar.gz"}]},
     "linux-arm64-glibc": {"name":"sing-box-1.14.1-linux-arm64-glibc.tar.gz","format":"tar.gz","binary_path":"sing-box-1.14.1-linux-arm64-glibc/sing-box","size":29671416,"sha256":"3245c373976bca8e61633fdc26b394179d4697c42c18c52ab711cc588b1a57c7","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-arm64-glibc.tar.gz"}]},

@@ -191,11 +191,13 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
         })
 
     control=source.get('control') if isinstance(source.get('control'),dict) else {}
+    raw_preferences=source.get('core_preferences') if isinstance(source.get('core_preferences'),dict) else {}
+    legacy_preferences='core_preferences' not in source
     timeout=int(control.get('timeout',8) or 8)
     entry=source.get('proxy_entry') if isinstance(source.get('proxy_entry'),dict) else {}
     private=entry.get('private') if isinstance(entry.get('private'),dict) else {}
     return {
-        'version':6, 'migration':{'stable_identity':2,'core_adapter':2,'private_entry':1}, 'name':str(source.get('name','默认配置'))[:80],
+        'version':6, 'migration':{'stable_identity':2,'core_adapter':2,'private_entry':1,'core_preferences':1}, 'name':str(source.get('name','默认配置'))[:80],
         'nodes':nodes, 'groups':groups, 'routes':routes, 'rule_groups':rule_groups, 'platforms':platforms,
         'subscriptions':subscriptions,
         'control':{'enabled':bool(control.get('enabled',False)),'url':str(control.get('url','')).rstrip('/')[:300],
@@ -204,6 +206,11 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
                    'scope':control.get('scope') if control.get('scope') in {'providers-groups-rules','full'} else 'providers-groups-rules',
                    'listen':str(control.get('listen','127.0.0.1:9090')).strip()[:200],
                    'adapter':str(control.get('adapter') or 'mihomo')[:40]},
+        'core_preferences':{
+            adapter_id:{'enabled':bool((raw_preferences.get(adapter_id,{}) or {}).get('enabled',
+                                                    legacy_preferences and bool(control.get('adapter')) and adapter_id==str(control.get('adapter'))))}
+            for adapter_id in ('xray','mihomo','sing-box')
+        },
         'proxy_entry':{'http_url':str(entry.get('http_url','')).rstrip('/')[:300],
                        'socks_url':str(entry.get('socks_url','')).rstrip('/')[:300],
                        'source':entry.get('source') if entry.get('source') in {'configured','detected','unknown','plugin-managed'} else 'unknown',

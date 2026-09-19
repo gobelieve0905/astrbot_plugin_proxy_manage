@@ -6,7 +6,7 @@ TEMPLATES = {
     "github":{"name":"GitHub","hosts":["api.github.com","github.com","raw.githubusercontent.com"]},
 }
 HTTP_PROTOCOLS={'http','https','socks','socks5','socks5h'}
-KINDS={"http","https","socks5","socks5h","mihomo"}
+KINDS={"http","https","socks5","socks5h","mihomo","sing-box","xray"}
 MODES={"direct","select","url-test","fallback"}
 MATCHES={"exact","suffix"}
 ADVANCED_SCHEMES={"ss","ssr","vmess","vless","trojan","hysteria","hysteria2","tuic","anytls"}

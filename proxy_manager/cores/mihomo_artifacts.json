@@ -1,6 +1,7 @@
 {
   "adapter": "mihomo",
   "version": "1.19.31",
+  "release_api_url": "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest",
   "artifacts": {
     "linux-amd64": {"name":"mihomo-linux-amd64-compatible-v1.19.31.gz","format":"gz","size":22821836,"sha256":"04cf9f09671704f839ddbee2e93069dc831a4123a75281e725d1d96ab9ac1afc","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-amd64-compatible-v1.19.31.gz"}]},
     "linux-arm64": {"name":"mihomo-linux-arm64-v1.19.31.gz","format":"gz","size":20757911,"sha256":"9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4","sources":[{"id":"github","name":"GitHub 官方源","url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-arm64-v1.19.31.gz"}]},

@@ -65,7 +65,8 @@ class ProxyManager(Star):
         self.traffic_audit=AstrBotTrafficAudit(Path(os.environ.get('ASTRBOT_ROOT','/astrbot')))
         self.artifacts=ArtifactManager(self.data_dir,self._adapter().artifact())
         self.supervisor=KernelSupervisor(self.data_dir,self._kernel_health_check,self._kernel_listener_check)
-        self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
+        self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel,
+                                              self._restore_running_kernel_after_install_failure)
         self.install_tasks={self._adapter().id:self.install_task}
         self.runtime_application=self._load_runtime_application()
         health_changed=False
@@ -100,10 +101,14 @@ class ProxyManager(Star):
         elif private_path.exists():
             private_path.chmod(0o600)
         adapter=str(self.state.get('control',{}).get('adapter') or 'mihomo')
+        # Xray has separate HTTP and SOCKS inbound protocols. Keep the
+        # plugin's public entry addresses stable while exposing its SOCKS
+        # listener on the adapter-owned auxiliary port.
+        socks_url='socks5://127.0.0.1:17892' if adapter=='xray' else 'socks5://127.0.0.1:17890'
         self.state['control']={'enabled':True,'url':'http://127.0.0.1:19090','secret':secret,'timeout':8,
                                'deployment':'dedicated','scope':'full','listen':'127.0.0.1:19090','adapter':adapter}
         private=(self.state.get('proxy_entry',{}).get('private') or {})
-        self.state['proxy_entry']={'http_url':'http://127.0.0.1:17890','socks_url':'socks5://127.0.0.1:17890','source':'plugin-managed',
+        self.state['proxy_entry']={'http_url':'http://127.0.0.1:17890','socks_url':socks_url,'source':'plugin-managed',
                                    'private':{'enabled':True,'listen':'0.0.0.0','port':int(private.get('port',17891) or 17891),
                                               'service_host':str(private.get('service_host') or 'astrbot'),
                                               'exposure':'private-network',**private_credentials}}
@@ -115,6 +120,15 @@ class ProxyManager(Star):
     def _entry_urls(self) -> tuple[str,str]:
         entry=self.state.get('proxy_entry',{})
         return str(entry.get('http_url','')),str(entry.get('socks_url',''))
+
+    def _sync_owned_proxy_environment(self):
+        """Keep AstrBot's persisted and live proxy entry aligned with the selected core."""
+        if not hasattr(self,'astrbot_proxy'):
+            return {}
+        http_url,socks_url=self._entry_urls()
+        status=self.astrbot_proxy.ensure(http_url,socks_url)
+        self.astrbot_proxy.apply_process_environment(http_url,socks_url)
+        return status
 
     def _astrbot_status(self) -> dict:
         http_url,socks_url=self._entry_urls()
@@ -139,6 +153,8 @@ class ProxyManager(Star):
 
     async def _kernel_listener_check(self, pid: int, _config: Path | None) -> bool:
         """Ensure the health response belongs to the process just spawned."""
+        if self._adapter().capabilities().get('control') == 'process-only':
+            return True
         if not Path('/proc/net/tcp').is_file():
             return True
         try:
@@ -176,12 +192,48 @@ class ProxyManager(Star):
             return False
 
     async def _start_owned_kernel(self):
+        if not self._core_enabled(self._adapter().id):
+            return {'state':'disabled','ready':False,'message':'当前内核尚未启用，请先在内核资源管理中启用'}
         artifact=self.artifacts.status()
         if not artifact.get('ready'): return artifact
         recovery=self._verified_recovery_document(getattr(self,'runtime_application',{}))
         document=recovery or self._adapter().fail_closed_document(self.state['control'],self.state['proxy_entry'])
         adapter=self._adapter(); config=adapter.write_config(self.data_dir/'runtime',document)
         return await adapter.start(self.supervisor,self.artifacts.binary,config)
+
+    def _core_enabled(self, adapter_id: str) -> bool:
+        preferences=self.state.get('core_preferences',{}) if isinstance(getattr(self,'state',None),dict) else {}
+        item=preferences.get(adapter_id,{}) if isinstance(preferences,dict) else {}
+        return bool(item.get('enabled',False)) if isinstance(item,dict) else False
+
+    def _set_core_enabled(self, adapter_id: str, enabled: bool):
+        preferences=self.state.setdefault('core_preferences',{})
+        preferences.setdefault(adapter_id,{})['enabled']=bool(enabled)
+
+    async def _activate_installed_kernel_if_running(self, adapter_id: str, manager: ArtifactManager):
+        """Only restart a core after a resource update when it was already serving traffic."""
+        if adapter_id != self._adapter().id:
+            return {'state':'installed','ready':True,'message':'内核资源已安装，等待运行控制选择'}
+        if not self._core_enabled(adapter_id):
+            return {'state':'installed','ready':True,'message':'内核资源已安装，等待启用'}
+        running=bool(self.supervisor.status().get('ready'))
+        manager._running_before_activation=running
+        if not running:
+            return {'state':'installed','ready':True,'message':'内核资源已安装，等待运行控制启动'}
+        self.artifacts=manager
+        return await self._activate_installed_kernel()
+
+    async def _restore_running_kernel_after_install_failure(self, adapter_id: str|None=None,
+                                                            manager: ArtifactManager|None=None):
+        """Restart the verified previous binary after a live update failed."""
+        adapter_id=adapter_id or self._adapter().id
+        manager=manager or self.artifacts
+        if adapter_id != self._adapter().id or not getattr(manager,'_running_before_activation',False):
+            return {'state':'stopped','ready':False,'message':'内核更新失败，原内核此前未在运行'}
+        if not self._core_enabled(adapter_id) or not manager.status().get('ready'):
+            return {'state':'failed','ready':False,'message':'内核更新失败，上一份制品不可恢复'}
+        self.artifacts=manager
+        return await self._start_owned_kernel()
 
     async def _activate_installed_kernel(self):
         async with self.operation_lock:
@@ -281,6 +333,8 @@ class ProxyManager(Star):
             ('kernel-status',self.kernel_status,['GET']),
             ('kernel-install',self.kernel_install,['POST']), ('kernel-install-status',self.kernel_install_status,['GET','POST']),
             ('kernel-install-cancel',self.kernel_install_cancel,['POST']), ('kernel-upload',self.kernel_upload,['POST']),
+            ('kernel-update-check',self.kernel_update_check,['POST']), ('kernel-update-check-all',self.kernel_update_check_all,['POST']),
+            ('core-enable',self.core_enable,['POST']),
             ('kernel-start',self.kernel_start,['POST']), ('kernel-stop',self.kernel_stop,['POST']),
             ('core-adapters',self.core_adapters,['GET']), ('adapter-select',self.adapter_select,['POST']),
             ('verify-outbound',self.verify_outbound,['POST']),
@@ -310,7 +364,9 @@ class ProxyManager(Star):
                               'install':self.install_task.status() if hasattr(self,'install_task') else {}}
         result['health']=redact_diagnostics(self.health)
         result['events']=redact_diagnostics(self.events[-50:]); result['templates']=TEMPLATES
-        result['adapters']=[{'id':adapter.id,'display_name':{'mihomo':'Mihomo','sing-box':'sing-box'}.get(adapter.id,adapter.id),
+        result['adapters']=[{'id':adapter.id,'display_name':{'mihomo':'Mihomo','sing-box':'sing-box','xray':'Xray'}.get(adapter.id,adapter.id),
+                             'enabled':self._core_enabled(adapter.id),
+                             'running':adapter.id==self._adapter().id and bool(getattr(self,'supervisor',None) and self.supervisor.status().get('ready')),
                              'capabilities':{
                                  key:sorted(value) if isinstance(value,set) else value
                                  for key,value in adapter.capabilities().items()
@@ -560,7 +616,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.14'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.15'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -672,7 +728,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.14'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.15'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -743,7 +799,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.14'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.15'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -843,6 +899,9 @@ class ProxyManager(Star):
         adapter=self._adapter(); control=self.state['control']
         if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
             artifact=self.artifacts.status()
+            if not self._core_enabled(adapter.id):
+                return {'state':'disabled','ready':False,'adapter':adapter.id,'message':'当前内核未启用，请在内核资源管理中启用后再启动','artifact':artifact,
+                        'process':self.supervisor.status()}
             if not artifact.get('ready'):
                 return {'state':artifact['state'],'ready':False,'adapter':adapter.id,'message':artifact['message'],'artifact':artifact,
                         'process':self.supervisor.status()}
@@ -869,6 +928,48 @@ class ProxyManager(Star):
             status.setdefault('install',self.install_task.status())
         return json_response(status)
 
+    async def kernel_update_check(self):
+        try:
+            payload=await request.json()
+            adapter_id=str(payload.get('adapter') or self._adapter().id)
+            adapter=all_adapters().get(adapter_id)
+            if not adapter: raise ValueError('不支持或未知的内核适配器：'+adapter_id)
+            manager=ArtifactManager(self.data_dir,adapter.artifact(),str(payload.get('version') or '') or None)
+            result=await manager.check_update()
+            return json_response({'adapter':adapter_id,'artifact':manager.status(),'check':result})
+        except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
+            return error_response(str(exc),status_code=400)
+
+    async def kernel_update_check_all(self):
+        results=[]
+        for adapter in all_adapters().values():
+            try:
+                manager=ArtifactManager(self.data_dir,adapter.artifact())
+                check=await manager.check_update()
+                results.append({'adapter':adapter.id,'artifact':manager.status(),'check':check})
+            except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
+                results.append({'adapter':adapter.id,'check':{'state':'check_failed','message':str(exc)}})
+        return json_response({'results':results,'checked_at':int(time.time())})
+
+    async def core_enable(self):
+        try:
+            payload=await request.json()
+            adapter_id=str(payload.get('adapter') or '')
+            adapter=all_adapters().get(adapter_id)
+            if not adapter: raise ValueError('不支持或未知的内核适配器：'+adapter_id)
+            enabled=bool(payload.get('enabled'))
+            manager=ArtifactManager(self.data_dir,adapter.artifact())
+            if enabled and not manager.status().get('ready'):
+                raise ValueError('请先下载并校验 '+adapter_id+' 内核，再启用')
+            if not enabled and adapter_id==self._adapter().id and self.supervisor.status().get('ready'):
+                raise ValueError('当前运行内核不能停用，请先停止或切换到其他内核')
+            self._set_core_enabled(adapter_id,enabled)
+            await self.persist(self.state)
+            self.event({'action':'core_enable','adapter':adapter_id,'enabled':enabled,'result':'ok'})
+            return json_response({'adapter':adapter_id,'enabled':enabled,'artifact':manager.status()})
+        except (ValueError,OSError,RuntimeError) as exc:
+            return error_response(str(exc),status_code=400)
+
     async def kernel_install(self):
         try:
             payload=await request.json()
@@ -882,13 +983,15 @@ class ProxyManager(Star):
             if adapter_id==self._adapter().id:
                 self.artifacts=manager
                 task=self.install_task
-                task=ArtifactInstallTask(manager,self._activate_installed_kernel)
+                task=ArtifactInstallTask(manager,lambda: self._activate_installed_kernel_if_running(adapter_id,manager),
+                                         lambda _manager=manager: self._restore_running_kernel_after_install_failure(adapter_id,_manager))
                 self.install_task=task
                 self.install_tasks[adapter_id]=task
             else:
                 task=self.install_tasks.get(adapter_id)
                 if task and task.task and not task.task.done(): return json_response(task.status())
-                task=ArtifactInstallTask(manager,lambda: asyncio.sleep(0, result=None))
+                task=ArtifactInstallTask(manager,lambda: self._activate_installed_kernel_if_running(adapter_id,manager),
+                                         lambda _manager=manager: self._restore_running_kernel_after_install_failure(adapter_id,_manager))
                 self.install_tasks[adapter_id]=task
             return json_response(task.start())
         except (ValueError,OSError,RuntimeError) as exc:
@@ -908,22 +1011,29 @@ class ProxyManager(Star):
 
     async def kernel_upload(self):
         try:
-            await self.install_task.cancel()
+            payload=await request.json() if str(request.content_type).split(';',1)[0]=='application/json' else {}
+            adapter_id=str(payload.get('adapter') or self._adapter().id)
+            adapter=all_adapters().get(adapter_id)
+            if not adapter: raise ValueError('不支持或未知的内核适配器：'+adapter_id)
+            manager=ArtifactManager(self.data_dir,adapter.artifact(),str(payload.get('version') or '') or None)
+            task=self.install_tasks.get(adapter_id)
+            if task: await task.cancel()
             length=int(request.headers.get('content-length','0') or 0)
             if length>MAX_ARCHIVE_SIZE*2: raise ValueError('内核制品请求体过大')
             if str(request.content_type).split(';',1)[0]=='application/json':
-                payload=await request.json(); body=base64.b64decode(str(payload.get('content','')),validate=True)
+                body=base64.b64decode(str(payload.get('content','')),validate=True)
             else: body=await request.body()
-            artifact=self.artifacts.install(bytes(body),'offline')
+            if adapter_id==self._adapter().id: self.artifacts=manager
+            artifact=manager.install(bytes(body),'offline')
             try:
-                process=await self._activate_installed_kernel()
+                process=await self._activate_installed_kernel_if_running(adapter_id,manager)
             except Exception:
-                self.artifacts.rollback()
+                manager.rollback()
                 try: await self._start_owned_kernel()
                 except Exception: pass
                 raise
-            self.artifacts.commit()
-            self.install_task.record_completed(artifact,process,'离线制品校验、安装并启动成功')
+            manager.commit()
+            if task: task.record_completed(artifact,process,'离线制品校验、安装成功；运行控制未自动启动')
             return json_response({'artifact':artifact,'process':process})
         except (ValueError,OSError,RuntimeError,TypeError,binascii.Error) as exc:
             self.event({'action':'kernel_install','result':'failed','message':safe_error(exc)})
@@ -939,7 +1049,8 @@ class ProxyManager(Star):
 
     async def core_adapters(self):
         return json_response({'current':self._adapter().id,'adapters':[
-            {'id':adapter.id,'display_name':{'mihomo':'Mihomo','sing-box':'sing-box'}.get(adapter.id,adapter.id),
+            {'id':adapter.id,'display_name':{'mihomo':'Mihomo','sing-box':'sing-box','xray':'Xray'}.get(adapter.id,adapter.id),
+             'enabled':self._core_enabled(adapter.id),
              'capabilities':{key:sorted(value) if isinstance(value,set) else value
                                              for key,value in adapter.capabilities().items()},
              'artifact':ArtifactManager(self.data_dir,adapter.artifact()).status()}
@@ -950,18 +1061,50 @@ class ProxyManager(Star):
             payload=await request.json(); adapter_id=str(payload.get('adapter',''))
             adapter=all_adapters().get(adapter_id)
             if not adapter: raise ValueError('不支持或未知的内核适配器：'+adapter_id)
+            if not self._core_enabled(adapter_id):
+                raise ValueError('请先在内核资源管理中启用 '+adapter_id)
+            candidate_artifact=ArtifactManager(self.data_dir,adapter.artifact()).status()
+            if not candidate_artifact.get('ready'):
+                raise ValueError('请先下载并校验 '+adapter_id+' 内核')
             candidate=copy.deepcopy(self.state); candidate['control']['adapter']=adapter_id
             document=adapter.render(candidate,compiled_rules(candidate)); adapter.validate(document)
             async with self.operation_lock:
-                await self.install_task.stop(); await self._adapter().stop(self.supervisor)
-                await self.persist(candidate)
-                self.artifacts=ArtifactManager(self.data_dir,adapter.artifact())
-                self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
-                self.install_tasks[adapter_id]=self.install_task
-                self._persist_runtime_application({'status':'saved','adapter':adapter.id,'saved_revision':adapter.revision(document),
-                                                   'applied_revision':'','document':None,'updated_at':int(time.time()),
-                                                   'message':'已切换内核适配器，等待安装并应用配置'})
-                process=await self._start_owned_kernel()
+                previous_state=copy.deepcopy(self.state)
+                previous_adapter=self._adapter()
+                previous_artifacts=self.artifacts
+                previous_install_task=self.install_task
+                previous_application=copy.deepcopy(getattr(self,'runtime_application',{}))
+                previous_was_running=bool(self.supervisor.status().get('ready'))
+                try:
+                    await self.install_task.stop(); await previous_adapter.stop(self.supervisor)
+                    await self.persist(candidate)
+                    self.artifacts=ArtifactManager(self.data_dir,adapter.artifact())
+                    self.install_task=ArtifactInstallTask(
+                        self.artifacts,
+                        lambda: self._activate_installed_kernel_if_running(adapter_id,self.artifacts),
+                        lambda: self._restore_running_kernel_after_install_failure(adapter_id,self.artifacts),
+                    )
+                    self.install_tasks[adapter_id]=self.install_task
+                    self._persist_runtime_application({'status':'saved','adapter':adapter.id,'saved_revision':adapter.revision(document),
+                                                       'applied_revision':'','document':None,'updated_at':int(time.time()),
+                                                       'message':'已切换内核适配器，等待安装并应用配置'})
+                    process=await self._start_owned_kernel()
+                    if not process.get('ready',False):
+                        raise RuntimeError(process.get('message','目标内核启动失败'))
+                    self._sync_owned_proxy_environment()
+                except Exception:
+                    try: await adapter.stop(self.supervisor)
+                    except Exception: pass
+                    self.state=previous_state
+                    await self.persist(previous_state)
+                    self._persist_runtime_application(previous_application)
+                    self.artifacts=previous_artifacts
+                    self.install_task=previous_install_task
+                    self.install_tasks[previous_adapter.id]=previous_install_task
+                    if previous_was_running and previous_artifacts.status().get('ready') and self._core_enabled(previous_adapter.id):
+                        await self._start_owned_kernel()
+                    self._sync_owned_proxy_environment()
+                    raise
             self.event({'action':'adapter_select','adapter':adapter_id,'result':'ok'})
             return json_response({'adapter':adapter_id,'artifact':self.artifacts.status(),'process':process})
         except (ValueError,OSError,RuntimeError) as exc:
@@ -1015,10 +1158,11 @@ class ProxyManager(Star):
         async with self.operation_lock:
             try:
                 kernel=await self._kernel_status()
-                if kernel['state'] in {'not_configured','connection_failed','auth_failed','version_unsupported'}:
+                if kernel['state'] in {'not_configured','connection_failed','auth_failed','version_unsupported','disabled','not_installed','invalid','unsupported'}:
                     raise ValueError('无法应用配置：'+kernel['message'])
                 adapter=self._adapter(); document=self._runtime_document(); adapter.validate(document)
-                revision=adapter.revision(document); control,_headers=adapter.control(self.state)
+                revision=adapter.revision(document)
+                control,_headers=(self.state['control'],{}) if adapter.capabilities().get('control')=='process-only' else adapter.control(self.state)
                 if control.get('deployment')!='dedicated' or control.get('scope')!='full':
                     raise ValueError('共享内核缺少可信完整基线，禁止写入；请使用插件专用实例和完整配置范围')
                 previous=getattr(self,'runtime_application',{})
@@ -1197,7 +1341,11 @@ class ProxyManager(Star):
 
     async def control_status(self):
         try:
-            adapter=self._adapter(); data=await adapter.proxies(self.state)
+            adapter=self._adapter()
+            if adapter.capabilities().get('control')=='process-only':
+                return json_response({'version':'','adapter':adapter.id,'control':'process-only','groups':[],
+                                      'message':'该内核不提供统一 HTTP 控制面，代理组切换需重新应用配置'})
+            data=await adapter.proxies(self.state)
             runtime=data.get('proxies',{})
             nodes={node.get('kernel_name'):node for node in self.state['nodes']}
             groups=[]
@@ -1263,9 +1411,7 @@ class ProxyManager(Star):
         if self.auto_task and not self.auto_task.done(): self.auto_task.cancel()
         self.auto_task=asyncio.create_task(self._auto_loop())
         try:
-            http_url,socks_url=self._entry_urls()
-            self.astrbot_proxy.ensure(http_url,socks_url)
-            self.astrbot_proxy.apply_process_environment(http_url,socks_url)
+            self._sync_owned_proxy_environment()
         except (ValueError,OSError) as exc:
             logger.warning('AstrBot 默认统一出口配置失败：'+safe_error(exc))
         try:
@@ -1286,7 +1432,7 @@ class ProxyManager(Star):
         http_url,socks_url=self._entry_urls(); status=self.astrbot_proxy.mark_started(http_url,socks_url)
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.14 已加载')
+        logger.info('代理管理中心 0.3.15 已加载')
 
     async def terminate(self):
         if self.auto_task:

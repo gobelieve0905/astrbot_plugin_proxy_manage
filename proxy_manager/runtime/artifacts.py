@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import stat
 import tarfile
 import time
@@ -122,6 +123,9 @@ class ArtifactManager:
     def metadata_path(self) -> Path: return self.root/'installed.json'
 
     @property
+    def update_check_path(self) -> Path: return self.root/'update-check.json'
+
+    @property
     def previous_binary(self) -> Path: return self.root/(self.binary.name+'.previous')
 
     @property
@@ -133,7 +137,8 @@ class ArtifactManager:
               'recommended_version':self.recommended_version,'available_versions':versions,
               'available_platforms':sorted(str(key) for key in self.manifest.get('artifacts',{})),
               'resource_key':item.get('key','') if item else self._platform_key(),
-              'installed_version':'','update_available':False}
+              'release_api_url':str(self.catalog.get('release_api_url') or ''),
+              'update_check':self.update_check(), 'installed_version':'','update_available':False}
         if not item:
             return {**base,'state':'unsupported','ready':False,'resource_state':'missing',
                     'message':'当前平台没有固定制品（需要 '+self._platform_key()+'，清单提供：'+', '.join(base['available_platforms'])+'）'}
@@ -162,6 +167,59 @@ class ArtifactManager:
                 'update_available':update_available,'message':message,'source':meta.get('source',''),
                 'installed_artifact':installed_item['name'],'installed_sha256':meta.get('binary_sha256',''),
                 'installed_at':meta.get('installed_at',0),'binary_sha256':digest}
+
+    def update_check(self) -> dict:
+        try:
+            value=json.loads(self.update_check_path.read_text(encoding='utf-8'))
+            return value if isinstance(value,dict) else {}
+        except (OSError,ValueError,TypeError):
+            return {}
+
+    def _store_update_check(self, value: dict) -> dict:
+        temp=self.update_check_path.with_suffix('.tmp')
+        temp.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
+        temp.chmod(0o600); temp.replace(self.update_check_path)
+        return value
+
+    async def check_update(self) -> dict:
+        """Check the fixed official release endpoint without downloading anything."""
+        url=str(self.catalog.get('release_api_url') or '')
+        checked_at=int(time.time())
+        base={'checked_at':checked_at,'latest_version':'','recommended_version':self.recommended_version,
+              'installed_version':self._installed_version(),'state':'check_failed','message':'未配置官方版本检查地址'}
+        if not url.startswith('https://api.github.com/repos/') or not url.endswith('/releases/latest'):
+            return self._store_update_check(base)
+        try:
+            timeout=httpx.Timeout(20,connect=10,write=20,pool=10)
+            async with httpx.AsyncClient(timeout=timeout,follow_redirects=False,trust_env=True,
+                                          headers={'Accept':'application/vnd.github+json','User-Agent':'astrbot-plugin-proxy-manage'}) as client:
+                response=await client.get(url)
+                response.raise_for_status()
+                payload=response.json()
+            tag=str(payload.get('tag_name') or '').strip()
+            match=re.search(r'(?<!\d)(\d+(?:\.\d+){1,3})(?!\d)',tag)
+            if not match: raise ValueError('官方版本响应缺少有效版本号')
+            latest=match.group(1)
+            fixed=latest in self.available_versions()
+            current=self.recommended_version
+            if _version_key(latest)<=_version_key(current):
+                state='up_to_date'; message='官方稳定版不高于当前固定版本'
+            elif fixed:
+                state='update_available'; message='发现已审核固定资源，可更新到 '+latest
+            else:
+                state='pending_review'; message='发现官方新版本，等待固定资源清单审核'
+            return self._store_update_check({**base,'latest_version':latest,'state':state,'message':message,
+                                              'release_name':str(payload.get('name') or ''),
+                                              'release_url':str(payload.get('html_url') or '')})
+        except (httpx.HTTPError,OSError,ValueError,TypeError,RuntimeError) as exc:
+            return self._store_update_check({**base,'message':'手动检查更新失败：'+self._download_error(exc)})
+
+    def _installed_version(self) -> str:
+        try:
+            value=json.loads(self.metadata_path.read_text(encoding='utf-8'))
+            return str(value.get('version') or '')
+        except (OSError,ValueError,TypeError):
+            return ''
 
     def _backup_current(self):
         if self.binary.exists(): self.binary.replace(self.previous_binary)
@@ -286,8 +344,9 @@ class ArtifactManager:
 
 
 class ArtifactInstallTask:
-    def __init__(self,manager:ArtifactManager,on_installed):
-        self.manager=manager; self.on_installed=on_installed; self.task=None; self.cancel_event=None
+    def __init__(self,manager:ArtifactManager,on_installed,on_rollback=None):
+        self.manager=manager; self.on_installed=on_installed; self.on_rollback=on_rollback
+        self.task=None; self.cancel_event=None
         self.state={'state':'idle','phase':'idle','message':'尚未开始在线安装','updated_at':int(time.time())}
 
     def status(self) -> dict: return dict(self.state)
@@ -320,10 +379,9 @@ class ArtifactInstallTask:
         except Exception as exc:
             try: self.manager.rollback()
             except OSError: pass
-            try:
-                await self.on_installed()
-            except Exception:
-                pass
+            if self.on_rollback:
+                try: await self.on_rollback()
+                except Exception: pass
             self.state={**self.state,'state':'failed','phase':'start_failed',
                         'message':'制品已安装，但内核启动失败：'+str(exc),'artifact':artifact,'updated_at':int(time.time())}
 
