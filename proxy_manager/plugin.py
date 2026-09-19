@@ -66,6 +66,7 @@ class ProxyManager(Star):
         self.artifacts=ArtifactManager(self.data_dir,self._adapter().artifact())
         self.supervisor=KernelSupervisor(self.data_dir,self._kernel_health_check,self._kernel_listener_check)
         self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
+        self.install_tasks={self._adapter().id:self.install_task}
         self.runtime_application=self._load_runtime_application()
         health_changed=False
         for old_id,new_id in getattr(self,'_id_aliases',{}).items():
@@ -278,7 +279,7 @@ class ProxyManager(Star):
             ('probe-task-cancel',self.probe_task_cancel,['POST']),
             ('runtime-config',self.runtime_config,['GET']), ('runtime-apply',self.runtime_apply,['POST']),
             ('kernel-status',self.kernel_status,['GET']),
-            ('kernel-install',self.kernel_install,['POST']), ('kernel-install-status',self.kernel_install_status,['GET']),
+            ('kernel-install',self.kernel_install,['POST']), ('kernel-install-status',self.kernel_install_status,['GET','POST']),
             ('kernel-install-cancel',self.kernel_install_cancel,['POST']), ('kernel-upload',self.kernel_upload,['POST']),
             ('kernel-start',self.kernel_start,['POST']), ('kernel-stop',self.kernel_stop,['POST']),
             ('core-adapters',self.core_adapters,['GET']), ('adapter-select',self.adapter_select,['POST']),
@@ -309,9 +310,16 @@ class ProxyManager(Star):
                               'install':self.install_task.status() if hasattr(self,'install_task') else {}}
         result['health']=redact_diagnostics(self.health)
         result['events']=redact_diagnostics(self.events[-50:]); result['templates']=TEMPLATES
-        result['adapters']=[{'id':adapter.id,'capabilities':{
-            key:sorted(value) if isinstance(value,set) else value for key,value in adapter.capabilities().items()
-        }} for adapter in all_adapters().values()]
+        result['adapters']=[{'id':adapter.id,'display_name':{'mihomo':'Mihomo','sing-box':'sing-box'}.get(adapter.id,adapter.id),
+                             'capabilities':{
+                                 key:sorted(value) if isinstance(value,set) else value
+                                 for key,value in adapter.capabilities().items()
+                             },
+                             **({'artifact':ArtifactManager(self.data_dir,adapter.artifact()).status(),
+                                 'install':getattr(self,'install_tasks',{}).get(adapter.id).status()
+                                           if adapter.id in getattr(self,'install_tasks',{}) else {}}
+                                if hasattr(self,'data_dir') else {})}
+                              for adapter in all_adapters().values()]
         application=getattr(self,'runtime_application',{})
         result['application']={key:application.get(key) for key in (
             'status','saved_revision','applied_revision','updated_at','message','verification'
@@ -552,7 +560,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.12'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.14'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -664,7 +672,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.12'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.14'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -735,7 +743,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.12'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.14'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -862,11 +870,41 @@ class ProxyManager(Star):
         return json_response(status)
 
     async def kernel_install(self):
-        return json_response(self.install_task.start())
+        try:
+            payload=await request.json()
+            adapter_id=str(payload.get('adapter') or self._adapter().id)
+            adapter=all_adapters().get(adapter_id)
+            if not adapter: raise ValueError('不支持或未知的内核适配器：'+adapter_id)
+            existing_task=getattr(self,'install_tasks',{}).get(adapter_id)
+            if existing_task and existing_task.task and not existing_task.task.done():
+                return json_response(existing_task.status())
+            manager=ArtifactManager(self.data_dir,adapter.artifact(),str(payload.get('version') or '') or None)
+            if adapter_id==self._adapter().id:
+                self.artifacts=manager
+                task=self.install_task
+                task=ArtifactInstallTask(manager,self._activate_installed_kernel)
+                self.install_task=task
+                self.install_tasks[adapter_id]=task
+            else:
+                task=self.install_tasks.get(adapter_id)
+                if task and task.task and not task.task.done(): return json_response(task.status())
+                task=ArtifactInstallTask(manager,lambda: asyncio.sleep(0, result=None))
+                self.install_tasks[adapter_id]=task
+            return json_response(task.start())
+        except (ValueError,OSError,RuntimeError) as exc:
+            return error_response(str(exc),status_code=400)
 
-    async def kernel_install_status(self): return json_response(self.install_task.status())
+    async def kernel_install_status(self):
+        payload={}
+        if str(getattr(request,'method','GET')).upper()=='POST':
+            payload=await request.json()
+        adapter_id=str(payload.get('adapter') or self._adapter().id)
+        return json_response(self.install_tasks.get(adapter_id,self.install_task).status())
 
-    async def kernel_install_cancel(self): return json_response(await self.install_task.cancel())
+    async def kernel_install_cancel(self):
+        payload=await request.json()
+        adapter_id=str(payload.get('adapter') or self._adapter().id)
+        return json_response(await self.install_tasks.get(adapter_id,self.install_task).cancel())
 
     async def kernel_upload(self):
         try:
@@ -876,7 +914,15 @@ class ProxyManager(Star):
             if str(request.content_type).split(';',1)[0]=='application/json':
                 payload=await request.json(); body=base64.b64decode(str(payload.get('content','')),validate=True)
             else: body=await request.body()
-            artifact=self.artifacts.install(bytes(body),'offline'); process=await self._activate_installed_kernel()
+            artifact=self.artifacts.install(bytes(body),'offline')
+            try:
+                process=await self._activate_installed_kernel()
+            except Exception:
+                self.artifacts.rollback()
+                try: await self._start_owned_kernel()
+                except Exception: pass
+                raise
+            self.artifacts.commit()
             self.install_task.record_completed(artifact,process,'离线制品校验、安装并启动成功')
             return json_response({'artifact':artifact,'process':process})
         except (ValueError,OSError,RuntimeError,TypeError,binascii.Error) as exc:
@@ -893,7 +939,8 @@ class ProxyManager(Star):
 
     async def core_adapters(self):
         return json_response({'current':self._adapter().id,'adapters':[
-            {'id':adapter.id,'capabilities':{key:sorted(value) if isinstance(value,set) else value
+            {'id':adapter.id,'display_name':{'mihomo':'Mihomo','sing-box':'sing-box'}.get(adapter.id,adapter.id),
+             'capabilities':{key:sorted(value) if isinstance(value,set) else value
                                              for key,value in adapter.capabilities().items()},
              'artifact':ArtifactManager(self.data_dir,adapter.artifact()).status()}
             for adapter in all_adapters().values()]})
@@ -910,6 +957,7 @@ class ProxyManager(Star):
                 await self.persist(candidate)
                 self.artifacts=ArtifactManager(self.data_dir,adapter.artifact())
                 self.install_task=ArtifactInstallTask(self.artifacts,self._activate_installed_kernel)
+                self.install_tasks[adapter_id]=self.install_task
                 self._persist_runtime_application({'status':'saved','adapter':adapter.id,'saved_revision':adapter.revision(document),
                                                    'applied_revision':'','document':None,'updated_at':int(time.time()),
                                                    'message':'已切换内核适配器，等待安装并应用配置'})
@@ -1238,7 +1286,7 @@ class ProxyManager(Star):
         http_url,socks_url=self._entry_urls(); status=self.astrbot_proxy.mark_started(http_url,socks_url)
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.12 已加载')
+        logger.info('代理管理中心 0.3.14 已加载')
 
     async def terminate(self):
         if self.auto_task:

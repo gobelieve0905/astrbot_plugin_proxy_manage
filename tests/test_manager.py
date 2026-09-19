@@ -170,9 +170,11 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.12',html)
+        self.assertIn('流量控制 · 0.3.14',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
+        self.assertIn('kernel-grid',script)
+        self.assertIn('data-kernel-install',script)
         self.assertIn('aria-label="主导航"',html)
         self.assertIn("classList.toggle('active'",script)
         self.assertIn("$('content').dataset.view=tab",script)
@@ -198,6 +200,44 @@ class TestConfigurationRules(unittest.TestCase):
                 manager.install(archive+b'tampered','offline')
             self.assertEqual(manager.binary.read_bytes(),before)
             self.assertEqual(manager.binary.stat().st_mode & 0o777,0o700)
+
+    def test_artifact_catalog_exposes_installed_version_and_fixed_updates(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+        manifest={
+            'adapter':'fixture','version':'2.0.0','recommended_version':'2.0.0',
+            'versions':{
+                '1.0.0':{'version':'1.0.0','artifacts':{}},
+                '2.0.0':{'version':'2.0.0','artifacts':{}},
+            },
+            'artifacts':{},
+        }
+        with patch('proxy_manager.runtime.artifacts.detect_platform',return_value={'os':'linux','arch':'amd64','libc':'glibc','machine':'x86_64'}), tempfile.TemporaryDirectory() as directory:
+            archive=gzip.compress(b'old-core')
+            manifest['versions']['1.0.0']['artifacts']['linux-amd64-glibc']={'name':'old.gz','format':'gz','sha256':hashlib.sha256(archive).hexdigest()}
+            manifest['versions']['2.0.0']['artifacts']['linux-amd64-glibc']={'name':'new.gz','format':'gz','sha256':'0'*64}
+            manager=ArtifactManager(Path(directory),manifest,'1.0.0')
+            manager.install(archive)
+            status=manager.status()
+            self.assertEqual(status['installed_version'],'1.0.0')
+            self.assertEqual(status['recommended_version'],'2.0.0')
+            self.assertTrue(status['update_available'])
+
+    def test_artifact_update_rolls_back_previous_binary_when_activation_fails(self):
+        from proxy_manager.runtime.artifacts import ArtifactInstallTask, ArtifactManager
+        async def scenario():
+            manifest={'adapter':'fixture','version':'1.0.0','artifacts':{}}
+            with patch('proxy_manager.runtime.artifacts.detect_platform',return_value={'os':'linux','arch':'amd64','libc':'glibc','machine':'x86_64'}), tempfile.TemporaryDirectory() as directory:
+                archive=gzip.compress(b'core')
+                manifest['artifacts']['linux-amd64-glibc']={'name':'core.gz','format':'gz','sha256':hashlib.sha256(archive).hexdigest(),
+                                                           'url':'https://example.invalid/core.gz'}
+                manager=ArtifactManager(Path(directory),manifest)
+                manager.install(archive)
+                task=ArtifactInstallTask(manager,AsyncMock(side_effect=RuntimeError('start failed')))
+                manager._download_source=AsyncMock(return_value=archive)
+                task.start(); await asyncio.sleep(0); await asyncio.sleep(0.01)
+                self.assertEqual(task.status()['state'],'failed')
+                self.assertEqual(manager.binary.read_bytes(),b'core')
+        asyncio.run(scenario())
 
     def test_tar_artifact_extracts_only_manifest_binary(self):
         from proxy_manager.runtime.artifacts import ArtifactManager
