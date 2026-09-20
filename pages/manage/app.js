@@ -15,6 +15,64 @@ const subtitles = {
 
 let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importing=false, probeTask=null
 const resourcePollTimers=new Map()
+
+function initLayout(){
+  $('app').innerHTML=`
+    <div class="layout">
+      <nav class="sidebar">
+        <button data-tab="overview">概览</button>
+        <button data-tab="subscriptions">订阅管理</button>
+        <button data-tab="nodes">代理节点</button>
+        <button data-tab="groups">代理组</button>
+        <button data-tab="routes">分流规则</button>
+        <button data-tab="platforms">平台域名模板</button>
+        <button data-tab="control">内核管理</button>
+        <button data-tab="logs">连接日志</button>
+      </nav>
+      <main class="main-content">
+        <header class="top-bar">
+          <div class="breadcrumb">
+            <span id="crumb">概览</span>
+            <small id="page-subtitle" class="muted"></small>
+          </div>
+          <div class="toolbar">
+            <button id="reload" class="btn btn-secondary" title="刷新数据">重新加载</button>
+            <button id="rollback" class="btn btn-secondary" title="恢复上一版配置">回退</button>
+            <button id="save" class="btn btn-primary">保存配置</button>
+          </div>
+        </header>
+        <div id="content" data-view="overview"></div>
+        <div id="notice" class="notice" hidden></div>
+      </main>
+    </div>
+    <dialog id="diff">
+      <h3>配置变更确认</h3>
+      <pre id="diff-text"></pre>
+      <div class="dialog-actions">
+        <button id="dialog-cancel-btn" class="btn btn-secondary">取消</button>
+        <button id="confirm" class="btn btn-primary">确认保存</button>
+      </div>
+    </dialog>
+  `
+}
+
+function bindEvents(){
+  document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render();if(tab==='groups')refreshGroupStatus()}))
+  $('reload').addEventListener('click',load)
+  $('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('rollback',{});original=structuredClone(state);controlResult=null;importPreview=null;render();note('已恢复上一版配置')}catch(error){note(error.message,true)}})
+  $('save').addEventListener('click',()=>{readControl();$('diff-text').textContent=JSON.stringify({before:original,after:state},null,2);$('diff').showModal()})
+  $('cancel')?.addEventListener('click',()=>$('diff').close())
+  $('dialog-cancel-btn')?.addEventListener('click',()=>$('diff').close())
+  $('confirm').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存')}catch(error){note(error.message,true)}})
+}
+
+function init(){
+  initLayout()
+  bindEvents()
+  load()
+}
+
+init()
 const openKernelResources=new Set()
 let noticeTimer=null
 
@@ -690,17 +748,3 @@ async function uploadKernel(adapter,version){const file=document.querySelector(`
 async function startProbe(nodeIds){
   try{const started=await api.apiPost('probe-task',{node_ids:nodeIds,timeout:5,concurrency:5});probeTask={id:started.task_id,total:started.total,completed:0,status:'running'};render();note('测速任务已开始');pollProbe()}catch(error){note(error.message,true)}
 }
-async function pollProbe(){
-  if(!probeTask)return
-  try{const task=await api.apiPost('probe-task-status',{task_id:probeTask.id});probeTask=task;for(const result of task.results)if(result.health)state.health[result.node_id]=result.health;render();if(task.status==='running')setTimeout(pollProbe,500);else note(`测速完成：${task.summary.ok} 可用，${task.summary.error+task.summary.timeout} 失败，${task.summary.skipped} 未执行，${task.summary.cancelled} 已取消`)}catch(error){note(error.message,true)}
-}
-async function load(){ try{ state=await api.apiGet('state');kernelStatus=await api.apiGet('kernel-status');original=structuredClone(state);controlResult=null;importPreview=null;render();for(const item of (state.adapters||[]))if(item.install?.state==='running')pollKernelInstall(item.id) }catch(error){note(error.message,true)} }
-
-document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render();if(tab==='groups')refreshGroupStatus()}))
-$('reload').addEventListener('click',load)
-$('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('rollback',{});original=structuredClone(state);controlResult=null;importPreview=null;render();note('已恢复上一版配置')}catch(error){note(error.message,true)}})
-$('save').addEventListener('click',()=>{readControl();$('diff-text').textContent=JSON.stringify({before:original,after:state},null,2);$('diff').showModal()})
-$('cancel')?.addEventListener('click',()=>$('diff').close())
-$('dialog-cancel-btn')?.addEventListener('click',()=>$('diff').close())
-$('confirm').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存')}catch(error){note(error.message,true)}})
-load()
