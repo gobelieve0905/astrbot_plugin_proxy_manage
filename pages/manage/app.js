@@ -66,6 +66,24 @@ function bindEvents(){
   $('confirm').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存')}catch(error){note(error.message,true)}})
 }
 
+async function load(){
+  try{
+    state = await api.apiGet("state")
+    kernelStatus = await api.apiGet("kernel-status")
+    original = structuredClone(state)
+    controlResult = null
+    importPreview = null
+    render()
+    for(const item of (state.adapters||[])) {
+      if(item.install?.state === "running") {
+        pollKernelInstall(item.id)
+      }
+    }
+  } catch(error) {
+    note(error.message, true)
+  }
+}
+
 function init(){
   initLayout()
   bindEvents()
