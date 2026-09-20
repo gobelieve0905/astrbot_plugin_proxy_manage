@@ -1356,6 +1356,18 @@ small.muted {
   border-radius: var(--radius-lg);
   min-height: 160px;
   transition: all var(--transition-base);
+  position: relative;
+  overflow: hidden;
+}
+
+.verification-levels .verification::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--color-neutral-300);
 }
 
 .verification-levels .verification small {
@@ -1391,23 +1403,40 @@ small.muted {
   word-break: break-all;
 }
 
+
 /* 验证状态样式 */
+.verification-levels .verification.passed::before,
+.verification-levels .verification.matched::before,
+.verification-levels .verification.confirmed::before {
+  background: var(--color-success);
+}
+
 .verification-levels .verification.passed,
 .verification-levels .verification.matched,
 .verification-levels .verification.confirmed {
-  border-left: 4px solid var(--color-success);
+  border-color: var(--color-success-border);
   background: linear-gradient(to bottom, var(--color-success-bg), var(--bg-surface));
 }
 
+.verification-levels .verification.failed::before {
+  background: var(--color-error);
+}
+
 .verification-levels .verification.failed {
-  border-left: 4px solid var(--color-error);
+  border-color: var(--color-error-border);
   background: linear-gradient(to bottom, var(--color-error-bg), var(--bg-surface));
+}
+
+.verification-levels .verification.not_started::before,
+.verification-levels .verification.unconfirmed::before,
+.verification-levels .verification.default::before {
+  background: var(--color-warning);
 }
 
 .verification-levels .verification.not_started,
 .verification-levels .verification.unconfirmed,
 .verification-levels .verification.default {
-  border-left: 4px solid var(--color-warning);
+  border-color: var(--color-warning-border);
   background: linear-gradient(to bottom, var(--color-warning-bg), var(--bg-surface));
 }
 
