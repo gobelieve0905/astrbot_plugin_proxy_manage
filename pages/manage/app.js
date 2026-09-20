@@ -102,14 +102,14 @@ function kernelCard(item,current){
   const installed=artifact.installed_version||'未安装'
   const stateVal=busy?{state:'running'}:artifact
   const installLabel=!artifact.ready?'安装所选版本':version===installed?'重新安装':'覆盖安装 '+version
-  const action=artifact.state==='unsupported'?'':(busy?(task.operation==='install'?`<button data-kernel-cancel="${esc(item.id)}">取消</button>`:''):`<button class="${version!==installed?'primary':''}" data-kernel-install="${esc(item.id)}" data-version="${esc(version)}">${esc(installLabel)}</button>`)
+  const action=artifact.state==='unsupported'?'':(busy?(task.operation==='install'?`<button class="btn btn-ghost" data-kernel-cancel="${esc(item.id)}">取消</button>`:''):`<button class="btn ${version!==installed?'btn-primary':''}" data-kernel-install="${esc(item.id)}" data-version="${esc(version)}">${esc(installLabel)}</button>`)
   const versions=(artifact.available_versions||[]).map(value=>`<option value="${esc(value)}" ${value===version?'selected':''}>${esc(value)}</option>`).join('')
   const check=artifact.update_check||{}
-  const enable=artifact.ready?(item.enabled?`<button data-kernel-enable="${esc(item.id)}" data-enabled="false">停用</button>`:`<button class="primary" data-kernel-enable="${esc(item.id)}" data-enabled="true">启用</button>`):''
-  const select=artifact.ready&&item.enabled&&!current?`<button data-kernel-select="${esc(item.id)}">设为当前内核</button>`:''
+  const enable=artifact.ready?(item.enabled?`<button class="btn btn-secondary" data-kernel-enable="${esc(item.id)}" data-enabled="false">停用</button>`:`<button class="btn btn-primary" data-kernel-enable="${esc(item.id)}" data-enabled="true">启用</button>`):''
+  const select=artifact.ready&&item.enabled&&!current?`<button class="btn btn-secondary" data-kernel-select="${esc(item.id)}">设为当前内核</button>`:''
   const percent=Number(task.progress??(task.total?Math.round(Number(task.downloaded||0)*100/Number(task.total)):0))
   const taskProgress=task.state&&task.state!=='idle'?`<div class="kernel-progress"><div><b>${esc(task.message||'资源任务处理中')}</b><span>${esc(task.phase||'')}</span></div><progress max="100" value="${Math.min(100,percent)}"></progress><small>${task.total?formatBytes(task.downloaded||0)+' / '+formatBytes(task.total):percent+'%'}</small></div>`:''
-  const uninstall=artifact.ready&&!busy?`<button class="danger" data-kernel-uninstall="${esc(item.id)}">卸载</button>`:''
+  const uninstall=artifact.ready&&!busy?`<button class="btn btn-danger" data-kernel-uninstall="${esc(item.id)}">卸载</button>`:''
   const expanded=openKernelResources.has(item.id)||busy
   return `<details class="kernel-resource ${current?'current':''}" data-kernel-card="${esc(item.id)}" ${expanded?'open':''}>
     <summary>
@@ -133,7 +133,7 @@ function kernelCard(item,current){
         ${uninstall}
         ${enable}
         ${select}
-        <button data-kernel-check="${esc(item.id)}">检查更新</button>
+        <button class="btn btn-secondary" data-kernel-check="${esc(item.id)}">检查更新</button>
       </div>
       ${resource.download_url?`<div class="kernel-download-url"><span>官方下载地址 (固定版本)</span><code>${esc(resource.download_url)}</code></div>`:''}
       <details class="kernel-verification"><summary>制品强摘要与校验信息</summary><code>${esc(resource.artifact||'资源未配置')}<br>${esc(resource.expected_sha256||'')}</code></details>
@@ -141,7 +141,7 @@ function kernelCard(item,current){
         <b>离线安装制品 (强摘要校验)</b>
         <div class="inline">
           <input data-kernel-file="${esc(item.id)}" type="file" accept=".gz,.zip,.tar.gz">
-          <button data-kernel-upload="${esc(item.id)}" data-version="${esc(version)}">校验并安装离线制品</button>
+          <button class="btn btn-secondary" data-kernel-upload="${esc(item.id)}" data-version="${esc(version)}">校验并安装离线制品</button>
         </div>
       </div>
     </div>
@@ -208,8 +208,8 @@ function render(){
       <p class="muted">验证请求必须经过 AstrBot 进程的统一代理环境；仅当目标返回出站 IP 且内核链路命中规则时才确认。</p>
       <div class="inline">
         <input id="verify-url" value="https://api.ipify.org?format=json" placeholder="验证 URL">
-        <button id="verify-astrbot-egress" class="primary">验证 AstrBot 核心出口</button>
-        <button id="verify-outbound">验证稳定入口</button>
+        <button id="verify-astrbot-egress" class="btn btn-primary">验证 AstrBot 核心出口</button>
+        <button class="btn btn-secondary" id="verify-outbound">验证稳定入口</button>
       </div>
       ${verificationPanel(state.application?.verification)}
       <pre id="verify-result">${esc(state.application?.verification?JSON.stringify(state.application.verification,null,2):'尚未进行出站验证。')}</pre>
@@ -221,7 +221,7 @@ function render(){
           <small>出站流量生命周期</small>
           <h2>统一流量接入清单</h2>
         </div>
-        <button id="integration-check">检查统一接入协议</button>
+        <button class="btn btn-secondary" id="integration-check">检查统一接入协议</button>
       </div>
       <p class="muted">检测 AstrBot 平台 SDK、Provider、插件与 MCP 的出站接管状态；未接入或未经验证项不会宣称已接管。</p>
       <div class="traffic-inventory">
@@ -244,8 +244,8 @@ function render(){
           <h2>全局代理接入与白名单</h2>
         </div>
         <div class="actions">
-          <button id="astrbot-proxy-enable" ${state.astrbot_proxy?.effective?'disabled':''}>接入稳定入口</button>
-          <button id="astrbot-proxy-restore" ${state.astrbot_proxy?.backup_available?'':'disabled'}>恢复旧配置</button>
+          <button class="btn btn-secondary" id="astrbot-proxy-enable" ${state.astrbot_proxy?.effective?'disabled':''}>接入稳定入口</button>
+          <button class="btn btn-secondary" id="astrbot-proxy-restore" ${state.astrbot_proxy?.backup_available?'':'disabled'}>恢复旧配置</button>
         </div>
       </div>
       <div class="proxy-status">
@@ -265,7 +265,7 @@ function render(){
       </div>
       <div class="inline">
         <input id="host" placeholder="例如：api.openai.com 或 api.telegram.org">
-        <button id="preview">查询命中断言</button>
+        <button class="btn btn-secondary" id="preview">查询命中断言</button>
       </div>
       <pre id="result">输入域名查看命中的代理组和出口节点。</pre>
     </section>
@@ -297,14 +297,14 @@ function render(){
           <small>批量解析</small>
           <h2>导入订阅源</h2>
         </div>
-        <button id="preview-import">预览导入</button>
+        <button class="btn btn-secondary" id="preview-import">预览导入</button>
       </div>
       <textarea id="sub-links" rows="3" placeholder="每行一个 HTTP/HTTPS 订阅链接，支持 Clash YAML、Base64 订阅或单节点链接"></textarea>
       <div class="import-form">
         <input id="import-group" value="主力" placeholder="订阅分组" list="sub-groups">
         <input id="import-interval" type="number" min="0" max="1440" value="60" placeholder="刷新间隔(分)">
         <small class="muted">0 为手动刷新</small>
-        <button id="confirm-import" class="primary" ${importPreview?'':'disabled'}>确认导入</button>
+        <button id="confirm-import" class="btn btn-primary" ${importPreview?'':'disabled'}>确认导入</button>
       </div>
       <pre id="import-result">${esc(importPreview?JSON.stringify(importPreview.items.map(item=>({url:item.url,summary:item.summary})),null,2):'导入前会先预览协议类型、地区分布与节点数量。')}</pre>
     </section>
@@ -315,7 +315,7 @@ function render(){
           <small>管理列表</small>
           <h2>已配置订阅 (${state.subscriptions?.length||0})</h2>
         </div>
-        <button id="add-subscription">新增订阅</button>
+        <button class="btn btn-secondary" id="add-subscription">新增订阅</button>
       </div>
       <div class="filter">
         <select id="group-filter">
@@ -337,8 +337,8 @@ function render(){
           <h2>代理节点 (${shown.length} / ${state.nodes?.length||0})</h2>
         </div>
         <div class="actions">
-          <button id="add">新增节点</button>
-          <button id="test-all" class="primary">批量测速</button>
+          <button class="btn btn-secondary" id="add">新增节点</button>
+          <button id="test-all" class="btn btn-primary">批量测速</button>
         </div>
       </div>
       <div class="filter">
@@ -347,7 +347,7 @@ function render(){
         <select id="node-region"><option>全部地区</option>${regions.map(value=>`<option value="${esc(value)}" ${value===region?'selected':''}>地区：${esc(value)}</option>`).join('')}</select>
         <select id="node-status"><option>全部状态</option>${['ok','error','timeout','unknown','失效'].map(value=>`<option value="${esc(value)}" ${value===status?'selected':''}>状态：${esc(value)}</option>`).join('')}</select>
       </div>
-      ${probeTask?`<div class="probe-progress"><progress value="${probeTask.completed}" max="${probeTask.total}"></progress><span>正在测速: ${probeTask.completed}/${probeTask.total}</span><button id="cancel-probe" ${probeTask.status!=='running'?'disabled':''}>取消测速</button></div>`:''}
+      ${probeTask?`<div class="probe-progress"><progress value="${probeTask.completed}" max="${probeTask.total}"></progress><span>正在测速: ${probeTask.completed}/${probeTask.total}</span><button class="btn btn-ghost" id="cancel-probe" ${probeTask.status!=='running'?'disabled':''}>取消测速</button></div>`:''}
       ${shown.map(({node,index})=>{
         const item=health(node.id)
         const support=node.support||{status:'unverified',reason:'尚未验证'}
@@ -359,7 +359,7 @@ function render(){
             <span class="chip ${support.status==='supported'?'ok':'pending'}">${esc({supported:'已支持',unverified:'未验证',unsupported:'不支持'}[support.status]||'未验证')}</span>
             <input data-k="endpoint" value="${esc(node.endpoint)}" placeholder="完整连接 URI 或 Host:Port 地址">
             <label><input type="checkbox" data-k="excluded" ${node.excluded?'checked':''}>排除测速/优选</label>
-            <button data-del="nodes" class="danger">删除</button>
+            <button data-del="nodes" class="btn btn-danger">删除</button>
           </div>
           <div class="node-meta">
             <span class="chip ${node.invalid_reference?'invalid':item.status}">${node.invalid_reference?'引用失效':statusLabel(item)}</span>
@@ -368,7 +368,7 @@ function render(){
             <span>${esc(node.subscription_id?'订阅：'+node.subscription_id:'手动节点')}</span>
             <span>代理组：${esc(memberships)}</span>
             ${node.suspected_notice?'<span class="chip pending">疑似订阅公告</span>':''}
-            <button data-test="${esc(node.id)}">测速</button>
+            <button class="btn btn-secondary" data-test="${esc(node.id)}">测速</button>
           </div>
           ${support.reason?`<div class="node-error">${esc(support.reason)}</div>`:''}
           ${node.notice_reason?`<div class="muted">${esc(node.notice_reason)}，请人工确认是否排除。</div>`:''}
@@ -384,7 +384,7 @@ function render(){
           <small>拓扑结构</small>
           <h2>代理组配置 (${state.groups?.length||0})</h2>
         </div>
-        <button id="add">新增代理组</button>
+        <button class="btn btn-secondary" id="add">新增代理组</button>
       </div>
       ${state.groups.map((group,index)=>`<div class="group-card" data-i="${index}">
         <div class="table">
@@ -396,7 +396,7 @@ function render(){
             <option value="">策略自动选择</option>
             ${state.nodes.map(node=>`<option value="${esc(node.id)}" ${node.id===group.selected?'selected':''}>${esc(node.name)}</option>`).join('')}
           </select>
-          <button data-del="groups" class="danger" ${group.id==='direct'?'disabled':''}>删除</button>
+          <button data-del="groups" class="btn btn-danger" ${group.id==='direct'?'disabled':''}>删除</button>
         </div>
         ${group.id!=='direct'?`<div class="table">
           <input data-k="test_url" value="${esc(group.test_url)}" placeholder="测速目标 URL">
@@ -419,7 +419,7 @@ function render(){
           <small>内核实时运行态</small>
           <h2>运行中代理组切换</h2>
         </div>
-        <button id="group-runtime-refresh">刷新运行状态</button>
+        <button class="btn btn-secondary" id="group-runtime-refresh">刷新运行状态</button>
       </div>
       ${runtimeGroups.length?runtimeGroups.map(group=>`<div class="control-group">
         <b>${esc(group.display_name)}</b>
@@ -436,7 +436,7 @@ function render(){
           <small>路由规则</small>
           <h2>分流规则组 (${state.rule_groups?.length||0})</h2>
         </div>
-        <button id="add">新增规则组</button>
+        <button class="btn btn-secondary" id="add">新增规则组</button>
       </div>
       ${state.rule_groups.map((rule,index)=>`<div class="group-card" data-i="${index}">
         <div class="table">
@@ -444,7 +444,7 @@ function render(){
           <input type="number" data-k="priority" value="${rule.priority}" placeholder="优先级 (越小越高)">
           <select data-k="target">${groupOptions(rule.target)}</select>
           <label><input type="checkbox" data-k="enabled" ${rule.enabled?'checked':''}>启用</label>
-          <button data-del="rule_groups" class="danger">删除</button>
+          <button data-del="rule_groups" class="btn btn-danger">删除</button>
         </div>
         <textarea data-domains rows="3" placeholder="每行一条规则：exact api.example.com 或 suffix example.com">${esc(rule.domains.map(domain=>domain.match+' '+domain.host).join('\n'))}</textarea>
       </div>`).join('')||'<p class="empty-state">暂无分流规则。</p>'}
@@ -464,7 +464,7 @@ function render(){
           <b>${esc(template.name)}</b>
           <small class="muted">${esc(domains.map(item=>item.match+' '+item.host).join(' · '))}</small>
           <select data-platform="${esc(id)}">${groupOptions((state.platforms[id]||{}).group_id||'direct')}</select>
-          <button data-template="${esc(id)}">应用或更新模板</button>
+          <button class="btn btn-secondary" data-template="${esc(id)}">应用或更新模板</button>
         </div>`
       }).join('')}
     </section>`
@@ -493,11 +493,11 @@ function render(){
           </select>
         </label>
         <div class="runtime-actions">
-          <button id="adapter-switch" ${runnable.length?'':'disabled'}>切换内核</button>
-          <button id="kernel-start" ${runnable.length?'':'disabled'}>启动</button>
-          <button id="kernel-stop">停止</button>
-          <button id="control-status">刷新状态</button>
-          <button id="runtime-apply" class="primary" ${runnable.length?'':'disabled'}>应用代理配置</button>
+          <button class="btn btn-secondary" id="adapter-switch" ${runnable.length?'':'disabled'}>切换内核</button>
+          <button class="btn btn-secondary" id="kernel-start" ${runnable.length?'':'disabled'}>启动</button>
+          <button class="btn btn-ghost" id="kernel-stop">停止</button>
+          <button class="btn btn-secondary" id="control-status">刷新状态</button>
+          <button id="runtime-apply" class="btn btn-primary" ${runnable.length?'':'disabled'}>应用代理配置</button>
         </div>
       </div>
       <div class="runtime-facts">
@@ -515,8 +515,8 @@ function render(){
           <h2>内核资源管理</h2>
         </div>
         <div class="actions">
-          <button id="refresh-kernels">刷新资源状态</button>
-          <button id="check-all-kernels">检查全部更新</button>
+          <button class="btn btn-secondary" id="refresh-kernels">刷新资源状态</button>
+          <button class="btn btn-secondary" id="check-all-kernels">检查全部更新</button>
         </div>
       </div>
       <p class="muted">展开各内核卡片可进行版本选择、下载、更新、强摘要核验、卸载或离线制品安装。启用仅代表允许作为运行候选，不会自动启动。</p>
@@ -550,7 +550,7 @@ function subHtml(item){
       <input data-k="group" value="${esc(item.group)}" list="sub-groups" placeholder="所属分组">
       <input data-k="url" value="${esc(item.url)}" placeholder="订阅链接 URL">
       <label><input type="checkbox" data-k="enabled" ${item.enabled?'checked':''}>启用</label>
-      <button data-del="subscriptions" class="danger">删除</button>
+      <button data-del="subscriptions" class="btn btn-danger">删除</button>
     </div>
     <div class="sub-meta">
       <span>${item.node_ids.length} 节点</span>
@@ -559,7 +559,7 @@ function subHtml(item){
       <span>更新：${time(item.updated_at)}</span>
       <span>下次：${nextRun(item)}</span>
       <input class="interval" type="number" min="0" max="1440" data-k="interval" value="${item.interval}" title="自动刷新间隔(分)">
-      <button data-refresh="${esc(item.id)}">立即刷新</button>
+      <button class="btn btn-secondary" data-refresh="${esc(item.id)}">立即刷新</button>
     </div>
     ${item.last_error?`<div class="node-error">${esc(item.last_error)}（连续失败 ${item.consecutive_errors} 次）</div>`:''}
     ${item.last_diff?.at?`<details><summary>最近同步差异：新增 ${item.last_diff.added?.length||0}、变更 ${item.last_diff.changed?.length||0}、删除 ${item.last_diff.deleted?.length||0}、未变 ${item.last_diff.unchanged?.length||0}</summary><pre>${esc(JSON.stringify(item.last_diff,null,2))}</pre></details>`:''}

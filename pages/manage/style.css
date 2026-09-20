@@ -1127,8 +1127,15 @@ summary:hover {
 }
 
 /* ============================================
-   兼容旧样式变量
+   按钮样式说明
+   ============================================
+   所有按钮必须使用以下class组合：
+   - .btn .btn-primary (主要操作)
+   - .btn .btn-secondary (次要操作)
+   - .btn .btn-ghost (辅助操作)
+   - .btn .btn-danger (危险操作)
+   
+   尺寸变体：
+   - .btn-sm (小型按钮)
+   - .btn-lg (大型按钮)
    ============================================ */
-.primary { background: var(--accent) !important; color: var(--text-inverse) !important; }
-.quiet { background: transparent !important; border-color: var(--border-default) !important; }
-.danger { background: var(--color-error) !important; color: var(--text-inverse) !important; }
