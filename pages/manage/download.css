@@ -1,268 +1,594 @@
-/* 代理管理中心 - 内核资源管理与控制面板 (0.3.16) */
+/* 代理管理中心 - 内核资源管理样式 v0.3.16 */
 
-/* 内核下载/任务进度 */
+/* ============================================
+   内核下载进度
+   ============================================ */
 .kernel-progress {
   display: grid;
-  grid-template-columns: minmax(210px, 1fr) minmax(220px, 2fr) auto;
-  gap: 14px;
+  grid-template-columns: minmax(220px, 1fr) minmax(240px, 2fr) auto;
+  gap: var(--space-4);
   align-items: center;
-  margin: 16px 0;
-  padding: 14px 18px;
+  margin: var(--space-5) 0;
+  padding: var(--space-5);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
 }
 
-.kernel-progress b, .kernel-progress span { display: block; overflow-wrap: anywhere; }
-.kernel-progress b { font-size: 13.5px; color: var(--text-primary); }
-.kernel-progress span, .kernel-progress small { color: var(--text-muted); font-size: 12px; }
+.kernel-progress b,
+.kernel-progress span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.kernel-progress b {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin-bottom: var(--space-1);
+}
+
+.kernel-progress span,
+.kernel-progress small {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
 .kernel-progress progress {
   width: 100%;
-  height: 8px;
+  height: 10px;
   border-radius: var(--radius-full);
   overflow: hidden;
   accent-color: var(--accent);
+  background: var(--bg-muted);
 }
 
-/* 内核资源折叠容器列表 */
+.kernel-progress progress::-webkit-progress-bar {
+  background: var(--bg-muted);
+  border-radius: var(--radius-full);
+}
+
+.kernel-progress progress::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  border-radius: var(--radius-full);
+  transition: width var(--transition-base);
+}
+
+.kernel-progress progress::-moz-progress-bar {
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  border-radius: var(--radius-full);
+}
+
+/* ============================================
+   内核资源折叠面板
+   ============================================ */
 .kernel-resources {
   display: grid;
-  gap: 12px;
-  margin-top: 18px;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
 }
+
 .kernel-resource {
   min-width: 0;
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--bg-surface);
   box-shadow: var(--shadow-xs);
-  transition: all 0.15s ease;
+  transition: all var(--transition-fast);
+  overflow: hidden;
 }
+
 .kernel-resource:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
 }
+
 .kernel-resource.current {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow-sm);
 }
 
 .kernel-resource > summary {
   display: grid;
-  grid-template-columns: minmax(180px, 1.2fr) minmax(150px, auto) auto 24px;
-  gap: 16px;
+  grid-template-columns: minmax(200px, 1.2fr) minmax(160px, auto) auto 32px;
+  gap: var(--space-4);
   align-items: center;
-  min-height: 76px;
-  padding: 16px 20px;
+  min-height: 80px;
+  padding: var(--space-5);
   cursor: pointer;
   list-style: none;
   user-select: none;
+  transition: background var(--transition-fast);
 }
-.kernel-resource > summary::-webkit-details-marker { display: none; }
+
+.kernel-resource > summary:hover {
+  background: var(--bg-surface-hover);
+}
+
+.kernel-resource > summary::-webkit-details-marker {
+  display: none;
+}
+
 .kernel-resource > summary::before {
-  content: "›";
+  content: "";
   grid-column: 4;
   grid-row: 1;
-  color: var(--text-muted);
-  font-size: 24px;
-  line-height: 1;
-  text-align: center;
-  transform: rotate(90deg);
-  transition: transform 0.2s ease, color 0.15s ease;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  font-size: 18px;
+  font-weight: var(--font-weight-bold);
+  transition: all var(--transition-fast);
 }
+
+.kernel-resource > summary::before {
+  content: "›";
+  transform: rotate(90deg);
+}
+
 .kernel-resource[open] > summary::before {
   transform: rotate(270deg);
+  background: var(--accent-subtle);
   color: var(--accent);
 }
 
-.kernel-resource > summary > div { min-width: 0; }
-.kernel-resource > summary b, .kernel-resource > summary small { display: block; overflow-wrap: anywhere; }
-.kernel-resource > summary b { font-size: 17px; font-weight: 700; color: var(--text-primary); }
-.kernel-resource > summary small { margin-top: 4px; color: var(--text-muted); font-size: 12px; }
-.kernel-resource > summary .kernel-badge { grid-column: 3; grid-row: 1; }
-.kernel-resource-meta {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+.kernel-resource > summary > div {
+  min-width: 0;
+}
+
+.kernel-resource > summary b,
+.kernel-resource > summary small {
+  display: block;
   overflow-wrap: anywhere;
+}
+
+.kernel-resource > summary b {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  line-height: var(--line-height-tight);
+  margin-bottom: var(--space-1);
+}
+
+.kernel-resource > summary small {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.kernel-resource > summary .kernel-badge {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.kernel-resource-meta {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  line-height: var(--line-height-normal);
 }
 
 .kernel-resource-body {
-  padding: 4px 20px 20px;
+  padding: 0 var(--space-5) var(--space-5);
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-surface);
-  border-bottom-left-radius: var(--radius-md);
-  border-bottom-right-radius: var(--radius-md);
 }
 
-/* 内核就绪状态胶囊 */
+/* ============================================
+   内核状态徽章
+   ============================================ */
 .kernel-badge {
   flex: 0 0 auto;
-  padding: 4px 10px;
+  padding: 6px var(--space-3);
   border-radius: var(--radius-full);
   background: var(--bg-subtle);
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 700;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
   border: 1px solid var(--border-subtle);
-}
-.kernel-badge.ok {
-  background: var(--status-ok-bg);
-  color: var(--status-ok);
-  border-color: var(--status-ok-border);
-}
-.kernel-badge.pending {
-  background: var(--status-warn-bg);
-  color: var(--status-warn);
-  border-color: var(--status-warn-border);
-}
-.kernel-badge.invalid {
-  background: var(--status-err-bg);
-  color: var(--status-err);
-  border-color: var(--status-err-border);
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
 }
 
-/* 内核三项事实网格 (Facts Grid) */
+.kernel-badge.ok {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-color: var(--color-success-border);
+}
+
+.kernel-badge.pending {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border-color: var(--color-warning-border);
+}
+
+.kernel-badge.invalid {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border-color: var(--color-error-border);
+}
+
+/* ============================================
+   内核信息网格
+   ============================================ */
 .kernel-facts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin: 18px 0 14px;
+  gap: var(--space-3);
+  margin: var(--space-5) 0 var(--space-4);
 }
+
 .kernel-facts div {
   min-width: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-}
-.kernel-facts span, .kernel-facts b { display: block; overflow-wrap: anywhere; }
-.kernel-facts span { color: var(--text-muted); font-size: 11.5px; font-weight: 600; text-transform: uppercase; }
-.kernel-facts b { margin-top: 4px; font-size: 14px; font-weight: 700; color: var(--text-primary); }
-.kernel-facts select {
-  margin-top: 4px;
-  padding: 4px 8px;
-  font-size: 13px;
-  background: var(--bg-surface);
-}
-
-.kernel-message {
-  min-height: 24px;
-  margin: 0 0 14px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.5;
-}
-.kernel-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border-subtle);
-}
-
-.kernel-download-url {
-  display: grid;
-  gap: 6px;
-  margin-top: 14px;
-}
-.kernel-download-url span { color: var(--text-muted); font-size: 11.5px; font-weight: 600; }
-.kernel-download-url code {
-  padding: 10px 12px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  color: var(--accent);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  user-select: all;
-}
-
-.kernel-verification { margin-top: 14px; }
-.kernel-verification code {
-  display: block;
-  margin-top: 8px;
-  padding: 10px 12px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  overflow-wrap: anywhere;
-}
-
-.kernel-offline {
-  display: grid;
-  gap: 10px;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-subtle);
-}
-.kernel-offline b { font-size: 13.5px; color: var(--text-primary); }
-.kernel-offline .inline { margin: 0; }
-
-/* 运行控制栏 (Runtime Control) */
-.runtime-control {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 2fr);
-  gap: 16px;
-  align-items: end;
-  margin-top: 18px;
-}
-.runtime-control label {
-  display: grid;
-  gap: 6px;
-  color: var(--text-muted);
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.runtime-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.runtime-facts {
-  display: grid;
-  grid-template-columns: minmax(140px, 0.8fr) minmax(140px, 0.8fr) minmax(260px, 2fr);
-  margin-top: 16px;
+  padding: var(--space-4);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-subtle);
+  transition: all var(--transition-fast);
+}
+
+.kernel-facts div:hover {
+  border-color: var(--border-default);
+  background: var(--bg-surface-hover);
+}
+
+.kernel-facts span,
+.kernel-facts b {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.kernel-facts span {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-1);
+}
+
+.kernel-facts b {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  line-height: var(--line-height-tight);
+}
+
+.kernel-facts select {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-sm);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+/* ============================================
+   内核消息与操作
+   ============================================ */
+.kernel-message {
+  min-height: 32px;
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.kernel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  padding-top: var(--space-4);
+  border-top: 1px dashed var(--border-subtle);
+}
+
+/* ============================================
+   内核下载链接
+   ============================================ */
+.kernel-download-url {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.kernel-download-url span {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kernel-download-url code {
+  padding: var(--space-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+  user-select: all;
+  line-height: var(--line-height-relaxed);
+}
+
+/* ============================================
+   内核校验信息
+   ============================================ */
+.kernel-verification {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.kernel-verification code {
+  display: block;
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+  line-height: var(--line-height-relaxed);
+}
+
+/* ============================================
+   离线安装区域
+   ============================================ */
+.kernel-offline {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.kernel-offline b {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.kernel-offline .inline {
+  margin: 0;
+  gap: var(--space-3);
+}
+
+/* ============================================
+   运行控制面板
+   ============================================ */
+.runtime-control {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 2fr);
+  gap: var(--space-5);
+  align-items: end;
+  margin-top: var(--space-5);
+  padding: var(--space-5);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.runtime-control label {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.runtime-control select {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-base);
+}
+
+.runtime-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* ============================================
+   运行状态信息
+   ============================================ */
+.runtime-facts {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(150px, 0.8fr) minmax(280px, 2fr);
+  margin-top: var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
   overflow: hidden;
 }
+
 .runtime-facts div {
   min-width: 0;
-  padding: 14px 16px;
+  padding: var(--space-5);
   border-right: 1px solid var(--border-subtle);
 }
-.runtime-facts div:last-child { border-right: 0; }
-.runtime-facts span, .runtime-facts b { display: block; overflow-wrap: anywhere; }
-.runtime-facts span { color: var(--text-muted); font-size: 11.5px; font-weight: 600; text-transform: uppercase; }
-.runtime-facts b { margin-top: 4px; font-size: 14px; font-weight: 700; color: var(--text-primary); }
-.runtime-note { margin: 12px 0 0; }
 
-@media (max-width: 840px) {
-  .kernel-progress { grid-template-columns: 1fr; }
-  .kernel-resource > summary { grid-template-columns: minmax(0, 1fr) auto 24px; }
-  .kernel-resource-meta { display: none; }
-  .kernel-resource > summary .kernel-badge { grid-column: 2; }
-  .kernel-resource > summary::before { grid-column: 3; }
-  .runtime-control { grid-template-columns: 1fr; align-items: stretch; }
-  .runtime-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .runtime-facts div:nth-child(2) { border-right: 0; }
-  .runtime-facts div:last-child { grid-column: 1 / -1; border-top: 1px solid var(--border-subtle); }
+.runtime-facts div:last-child {
+  border-right: 0;
 }
 
-@media (max-width: 540px) {
-  .kernel-facts { grid-template-columns: 1fr; }
-  .kernel-resource > summary { min-height: 68px; padding: 14px; }
-  .kernel-resource-body { padding: 0 14px 14px; }
-  .kernel-offline .inline { display: grid; grid-template-columns: 1fr; }
-  .runtime-actions button { flex: 1 1 calc(50% - 8px); }
-  .runtime-facts { grid-template-columns: 1fr; }
-  .runtime-facts div, .runtime-facts div:nth-child(2) { border-right: 0; border-top: 1px solid var(--border-subtle); }
-  .runtime-facts div:first-child { border-top: 0; }
-  .runtime-facts div:last-child { grid-column: auto; }
+.runtime-facts span,
+.runtime-facts b {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.runtime-facts span {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-1);
+}
+
+.runtime-facts b {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  line-height: var(--line-height-tight);
+}
+
+.runtime-note {
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-info-bg);
+  border: 1px solid var(--color-info-border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+/* ============================================
+   响应式布局
+   ============================================ */
+@media (max-width: 980px) {
+  .kernel-progress {
+    grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr) auto;
+  }
+
+  .kernel-resource > summary {
+    grid-template-columns: minmax(0, 1fr) auto 32px;
+  }
+
+  .kernel-resource-meta {
+    display: none;
+  }
+
+  .kernel-resource > summary .kernel-badge {
+    grid-column: 2;
+  }
+
+  .kernel-resource > summary::before {
+    grid-column: 3;
+  }
+
+  .runtime-control {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .runtime-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .runtime-facts div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .runtime-facts div:last-child {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--border-subtle);
+  }
+}
+
+@media (max-width: 768px) {
+  .kernel-progress {
+    grid-template-columns: 1fr;
+  }
+
+  .kernel-resource > summary {
+    min-height: 72px;
+    padding: var(--space-4);
+    grid-template-columns: minmax(0, 1fr) auto 28px;
+  }
+
+  .kernel-resource > summary b {
+    font-size: var(--font-size-lg);
+  }
+
+  .kernel-resource > summary small {
+    font-size: var(--font-size-xs);
+  }
+
+  .kernel-resource > summary::before {
+    width: 20px;
+    height: 20px;
+    font-size: 16px;
+  }
+
+  .kernel-resource-body {
+    padding: 0 var(--space-4) var(--space-4);
+  }
+
+  .kernel-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .kernel-offline .inline {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-actions {
+    flex-direction: column;
+  }
+
+  .runtime-actions button {
+    width: 100%;
+  }
+
+  .runtime-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-facts div,
+  .runtime-facts div:nth-child(2) {
+    border-right: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .runtime-facts div:first-child {
+    border-top: 0;
+  }
+
+  .runtime-facts div:last-child {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .kernel-progress,
+  .runtime-control,
+  .kernel-resource > summary,
+  .kernel-resource-body {
+    padding: var(--space-3);
+  }
+
+  .kernel-facts div {
+    padding: var(--space-3);
+  }
+
+  .runtime-facts div {
+    padding: var(--space-4);
+  }
 }
