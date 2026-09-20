@@ -1,5 +1,15 @@
 /* 代理管理中心 - 统一前端逻辑与交互系统 (0.3.16) */
 const $ = id => document.getElementById(id)
+
+// API可用性检查与错误显示
+if (!window.AstrBotPluginPage) {
+  console.error('AstrBotPluginPage API not available');
+  const app = document.getElementById('app');
+  if (app) {
+    app.innerHTML = '<div style="padding:20px;color:#f87171;background:#1e293b;border:1px solid #475569;border-radius:8px;margin:20px"><h3 style="margin-top:0">错误：AstrBotPluginPage API 未找到</h3><p>此页面需要在 AstrBot 环境中运行。请确认：</p><ul><li>当前URL是否为插件页面</li><li>AstrBot是否正确加载了插件</li><li>浏览器控制台是否有其他错误</li></ul></div>';
+  }
+  throw new Error('AstrBotPluginPage API not available');
+}
 const api = window.AstrBotPluginPage
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
 const subtitles = {
