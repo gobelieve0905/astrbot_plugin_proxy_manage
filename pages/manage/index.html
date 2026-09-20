@@ -3,36 +3,68 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>代理管理中心</title>
+  <title>代理管理中心 - AstrBot 出站流量控制面</title>
   <link rel="stylesheet" href="./style.css">
   <link rel="stylesheet" href="./health.css">
   <link rel="stylesheet" href="./download.css">
 </head>
 <body>
   <aside aria-label="主导航">
-    <div class="brand"><span class="brand-mark">PM</span><span><b>代理管理中心</b><small>流量控制 · 0.3.15</small></span></div>
+    <div class="brand">
+      <span class="brand-mark">PM</span>
+      <div class="brand-title">
+        <b>代理管理中心</b>
+        <small>流量控制 · 0.3.16</small>
+      </div>
+    </div>
     <nav>
-      <button data-tab="overview">概览</button>
-      <button data-tab="subscriptions">订阅管理</button>
-      <button data-tab="nodes">代理节点</button>
-      <button data-tab="groups">代理组</button>
-      <button data-tab="routes">分流规则</button>
-      <button data-tab="platforms">平台域名模板</button>
-      <button data-tab="control">内核管理</button>
-      <button data-tab="logs">连接日志</button>
+      <button data-tab="overview"><span class="nav-icon">📊</span><span>概览</span></button>
+      <button data-tab="subscriptions"><span class="nav-icon">🔄</span><span>订阅管理</span></button>
+      <button data-tab="nodes"><span class="nav-icon">🌐</span><span>代理节点</span></button>
+      <button data-tab="groups"><span class="nav-icon">🔀</span><span>代理组</span></button>
+      <button data-tab="routes"><span class="nav-icon">⚡</span><span>分流规则</span></button>
+      <button data-tab="platforms"><span class="nav-icon">🧩</span><span>平台域名模板</span></button>
+      <button data-tab="control"><span class="nav-icon">⚙️</span><span>内核管理</span></button>
+      <button data-tab="logs"><span class="nav-icon">📜</span><span>连接日志</span></button>
     </nav>
-    <button id="reload" title="刷新页面状态">刷新状态</button>
+    <div class="aside-footer">
+      <button id="reload" title="重新拉取并刷新运行状态">
+        <span class="reload-icon">↻</span> 刷新状态
+      </button>
+    </div>
   </aside>
   <main>
     <header>
-      <div><span id="crumb">概览</span><h1>代理管理中心</h1><p class="muted" id="page-subtitle">运行状态、节点健康和流量策略总览</p></div>
-      <div class="actions"><button id="rollback">恢复上一版</button><button id="save" class="primary">预览并保存</button></div>
+      <div class="header-meta">
+        <span id="crumb">概览</span>
+        <h1>代理管理中心</h1>
+        <p class="muted" id="page-subtitle">运行状态、节点健康和流量策略总览</p>
+      </div>
+      <div class="actions">
+        <button id="rollback" class="btn-quiet-action" title="撤销未应用的修改，恢复最后一次保存的状态">恢复上一版</button>
+        <button id="save" class="primary" title="查看配置变更差异并保存">预览并保存</button>
+      </div>
     </header>
     <div id="notice" hidden></div>
     <section id="content"></section>
   </main>
   <datalist id="sub-groups"><option>主力</option><option>备用</option><option>测试</option></datalist>
-  <dialog id="diff"><div class="dialog-head"><div><small>配置事务</small><h2>确认配置变更</h2></div><button id="cancel" class="quiet">取消</button></div><pre id="diff-text"></pre><div class="dialog-actions"><button id="confirm" class="primary">确认保存</button></div></dialog>
+  <dialog id="diff">
+    <div class="dialog-head">
+      <div>
+        <small>配置事务</small>
+        <h2>确认配置变更</h2>
+      </div>
+      <button id="cancel" class="quiet" aria-label="关闭">✕</button>
+    </div>
+    <div class="dialog-body">
+      <pre id="diff-text"></pre>
+    </div>
+    <div class="dialog-actions">
+      <button id="dialog-cancel-btn" class="quiet">取消</button>
+      <button id="confirm" class="primary">确认保存</button>
+    </div>
+  </dialog>
   <script type="module" src="./app.js"></script>
 </body>
 </html>

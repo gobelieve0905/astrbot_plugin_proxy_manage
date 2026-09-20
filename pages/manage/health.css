@@ -1,63 +1,254 @@
+/* 代理管理中心 - 健康度、节点与流量接入样式 (0.3.16) */
+
 .import-form,
 .filter {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 150px auto auto;
-  gap: 9px;
+  grid-template-columns: minmax(180px, 1fr) 160px auto auto;
+  gap: 12px;
   align-items: center;
-  margin: 12px 0;
+  margin: 14px 0;
 }
 
-.filter { grid-template-columns: repeat(4, minmax(130px, 1fr)); }
-#content[data-view="subscriptions"] .filter { grid-template-columns: minmax(180px, 240px); }
-.sub-card .table { grid-template-columns: minmax(140px, 1fr) minmax(120px, .8fr) minmax(240px, 2fr) auto auto; }
-.node-card .table { grid-template-columns: minmax(140px, 1.1fr) auto auto minmax(250px, 1.7fr) auto auto; }
+.filter {
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+}
+#content[data-view="subscriptions"] .filter {
+  grid-template-columns: minmax(180px, 260px);
+}
+
+.sub-card .table {
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 0.8fr) minmax(240px, 2fr) auto auto;
+}
+.node-card .table {
+  grid-template-columns: minmax(160px, 1.2fr) auto auto minmax(260px, 1.8fr) auto auto;
+}
 
 .sub-meta,
 .node-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px 12px;
+  gap: 8px 14px;
   align-items: center;
-  margin-top: 10px;
-  color: var(--muted);
-  font-size: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 12.5px;
 }
 
-.sub-meta .interval { width: 88px; }
-.node-meta b { color: var(--text); font-size: 16px; }
-.chip { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 8px; border-radius: 999px; background: var(--input); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.chip.ok { background: var(--soft); color: var(--accent-strong); }
-.chip.error, .chip.timeout, .chip.invalid { background: var(--danger-soft); color: var(--danger); }
-.chip.pending { background: var(--warning-soft); color: var(--warning); }
-.node-error { margin-top: 9px; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+.sub-meta .interval {
+  width: 90px;
+  padding: 4px 8px;
+}
+.node-meta b {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+}
 
-.verification-levels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 14px 0; }
-.verification { display: grid; gap: 4px; min-width: 0; padding: 12px; border-left: 3px solid var(--line-strong); background: var(--input); }
-.verification b { font-size: 14px; }
-.verification span, .verification code { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.verification.passed, .verification.matched, .verification.default, .verification.confirmed { border-color: var(--accent); }
-.verification.failed, .verification.unconfirmed { border-color: var(--danger); }
-.traffic-inventory { display: grid; gap: 10px; }
-.traffic-inventory article { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 6px 14px; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
-.traffic-inventory article div { display: grid; gap: 3px; }
-.traffic-inventory article p { grid-column: 1 / -1; margin: 0; color: var(--muted); }
-.traffic-state { align-self: start; font-weight: 700; }
-.traffic-state.managed { color: var(--accent-strong); }
-.traffic-state.not_connected { color: var(--danger); }
-.traffic-state.unknown { color: var(--muted); }
-.proxy-status { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 14px; align-items: baseline; }
-.proxy-status code { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--muted); }
-.probe-progress { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 10px; align-items: center; margin: 12px 0; }
-.probe-progress progress { width: 100%; accent-color: var(--accent); }
+/* Chip 徽章设计 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border-subtle);
+  overflow-wrap: anywhere;
+}
+.chip.ok {
+  background: var(--status-ok-bg);
+  color: var(--status-ok);
+  border-color: var(--status-ok-border);
+}
+.chip.error, .chip.timeout, .chip.invalid {
+  background: var(--status-err-bg);
+  color: var(--status-err);
+  border-color: var(--status-err-border);
+}
+.chip.pending {
+  background: var(--status-warn-bg);
+  color: var(--status-warn);
+  border-color: var(--status-warn-border);
+}
+
+.node-error {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--status-err-bg);
+  border: 1px solid var(--status-err-border);
+  color: var(--status-err);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* 三层出站验证面板 (3-Level Verification) */
+.verification-levels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.verification {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  border-left: 4px solid var(--border-default);
+  background: var(--bg-subtle);
+  transition: transform 0.15s ease;
+}
+.verification:hover {
+  transform: translateY(-1px);
+}
+.verification small {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.verification b {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.verification span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.verification code {
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.verification.passed, .verification.matched, .verification.default, .verification.confirmed {
+  border-left-color: var(--status-ok);
+  background: var(--status-ok-bg);
+}
+.verification.failed, .verification.unconfirmed {
+  border-left-color: var(--status-err);
+  background: var(--status-err-bg);
+}
+
+/* 统一流量接入清单 (Traffic Inventory) */
+.traffic-inventory {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.traffic-inventory article {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px 14px;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+.traffic-inventory article div { display: grid; gap: 4px; }
+.traffic-inventory article b { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.traffic-inventory article p {
+  grid-column: 1 / -1;
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.traffic-state {
+  align-self: start;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+}
+.traffic-state.managed {
+  background: var(--status-ok-bg);
+  color: var(--status-ok);
+  border: 1px solid var(--status-ok-border);
+}
+.traffic-state.not_connected {
+  background: var(--status-err-bg);
+  color: var(--status-err);
+  border: 1px solid var(--status-err-border);
+}
+.traffic-state.unknown {
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border-default);
+}
+
+/* 代理状态栏 */
+.proxy-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 16px;
+  align-items: baseline;
+  padding: 12px 14px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+  margin-top: 8px;
+}
+.proxy-status b { font-size: 14px; color: var(--text-primary); }
+.proxy-status code {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 4px 8px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
+}
+
+/* 测速进度条 */
+.probe-progress {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  margin: 14px 0;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+}
+.probe-progress progress {
+  width: 100%;
+  height: 8px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  accent-color: var(--accent);
+}
 
 @media (max-width: 980px) {
+  .traffic-inventory { grid-template-columns: 1fr; }
   .import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sub-card .table, .node-card .table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 700px) {
-  .import-form, .filter, .sub-card .table, .node-card .table, .verification-levels { grid-template-columns: 1fr; }
+  .import-form, .filter, .sub-card .table, .node-card .table, .verification-levels {
+    grid-template-columns: 1fr;
+  }
   #content[data-view="subscriptions"] .filter { grid-template-columns: 1fr; }
   .probe-progress { grid-template-columns: 1fr auto; }
   .probe-progress progress { grid-column: 1 / -1; }
