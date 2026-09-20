@@ -80,8 +80,8 @@
   --sidebar-bg: var(--color-neutral-900);
   --sidebar-text: var(--color-neutral-100);
   --sidebar-text-muted: var(--color-neutral-400);
-  --sidebar-item-hover: rgba(255, 255, 255, 0.08);
-  --sidebar-item-active: rgba(255, 255, 255, 0.12);
+  --sidebar-item-hover: rgba(255, 255, 255, 0.10);
+  --sidebar-item-active: rgba(56, 189, 248, 0.15);
   --sidebar-indicator: var(--color-primary-400);
 
   /* 阴影系统 */
@@ -319,7 +319,7 @@ body {
 
 .sidebar > button[data-tab].active {
   background: var(--sidebar-item-active);
-  color: var(--sidebar-text);
+  color: var(--color-primary-300);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -329,10 +329,11 @@ body {
   left: 0;
   top: 50%;
   transform: translateY(-50%);
-  width: 3px;
-  height: 20px;
-  background: var(--sidebar-indicator);
+  width: 4px;
+  height: 70%;
+  background: var(--color-primary-400);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
 }
 
 
@@ -2560,43 +2561,6 @@ input.interval {
 /* ============================================
    节点选择器
    ============================================ */
-.nodes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px dashed var(--border-subtle);
-}
-
-.nodes label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  user-select: none;
-}
-
-.nodes label:hover {
-  background: var(--bg-surface-hover);
-  border-color: var(--border-strong);
-  color: var(--text-primary);
-}
-
-.nodes label:has(input:checked) {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .control-form label {
   display: flex;
   align-items: center;
