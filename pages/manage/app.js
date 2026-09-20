@@ -1,16 +1,8 @@
 /* 代理管理中心 - 统一前端逻辑与交互系统 (0.3.16) */
-const $ = id => document.getElementById(id)
 
-// API可用性检查与错误显示
-if (!window.AstrBotPluginPage) {
-  console.error('AstrBotPluginPage API not available');
-  const app = document.getElementById('app');
-  if (app) {
-    app.innerHTML = '<div style="padding:20px;color:#f87171;background:#1e293b;border:1px solid #475569;border-radius:8px;margin:20px"><h3 style="margin-top:0">错误：AstrBotPluginPage API 未找到</h3><p>此页面需要在 AstrBot 环境中运行。请确认：</p><ul><li>当前URL是否为插件页面</li><li>AstrBot是否正确加载了插件</li><li>浏览器控制台是否有其他错误</li></ul></div>';
-  }
-  throw new Error('AstrBotPluginPage API not available');
-}
+function initialize() {
 const api = window.AstrBotPluginPage
+const $ = id => document.getElementById(id)
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
 const subtitles = {
   overview:'运行状态、节点健康、出站三层验证与真实流量接入范围',
@@ -775,4 +767,13 @@ async function kernelAction(route,message){try{note(message);await api.apiPost(r
 async function uploadKernel(adapter,version){const file=document.querySelector(`[data-kernel-file="${CSS.escape(adapter)}"]`)?.files?.[0];if(!file)return note('请选择与当前平台匹配的固定版本制品',true);if(file.size>64*1024*1024)return note('制品超过 64 MiB 限制',true);const item=state.adapters?.find(value=>value.id===adapter);if(item)item.install={state:'running',operation:'install',phase:'uploading',progress:10,message:'正在上传离线制品'};openKernelResources.add(adapter);render();try{note('正在校验离线制品...');const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',',2)[1]);reader.onerror=reject;reader.readAsDataURL(file)});await api.apiPost('kernel-upload',{adapter,version,content});await load();note('离线制品已校验并安装；请在资源栏中启用')}catch(error){await load();note(error.message,true)}}
 async function startProbe(nodeIds){
   try{const started=await api.apiPost('probe-task',{node_ids:nodeIds,timeout:5,concurrency:5});probeTask={id:started.task_id,total:started.total,completed:0,status:'running'};render();note('测速任务已开始');pollProbe()}catch(error){note(error.message,true)}
+}
+
+}
+
+// 等待 DOM 加载完成后初始化，确保 AstrBot 已注入 API
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initialize, {once: true});
+} else {
+  initialize();
 }
