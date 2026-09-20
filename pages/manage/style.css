@@ -1841,5 +1841,254 @@ small.muted {
 
 
 
+
+/* ============================================
+   节点多选容器修复
+   ============================================ */
+.nodes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-top: var(--space-3);
 }
 
+.nodes label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal);
+  transition: all var(--transition-fast);
+  cursor: pointer;
+  word-break: break-word;
+}
+
+.nodes label:hover {
+  border-color: var(--border-default);
+  background: var(--bg-surface-hover);
+}
+
+.nodes label input[type="checkbox"] {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.nodes .muted {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: var(--space-4);
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 768px) {
+  .nodes {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: var(--space-2);
+  }
+}
+
+@media (max-width: 580px) {
+  .nodes {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================
+   订阅项和节点项布局优化
+   ============================================ */
+.subscription-item > div:first-child,
+.node-item > div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.subscription-item input:not([type="checkbox"]),
+.node-item input:not([type="checkbox"]) {
+  min-width: 120px;
+  flex: 1 1 auto;
+}
+
+.subscription-item label,
+.node-item label {
+  white-space: nowrap;
+}
+
+/* ============================================
+   代理组配置区域优化
+   ============================================ */
+.group-item > div:first-child {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.group-item input[type="text"],
+.group-item input[type="number"],
+.group-item select {
+  width: 100%;
+}
+
+/* ============================================
+   分流规则布局优化
+   ============================================ */
+.rule-item > div:first-child {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto 100px auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.rule-item textarea {
+  margin-top: var(--space-2);
+}
+
+@media (max-width: 768px) {
+  .rule-item > div:first-child {
+    grid-template-columns: 1fr 1fr;
+  }
+  
+  .rule-item > div:first-child > button {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ============================================
+   表单控件对齐优化
+   ============================================ */
+.subscription-item label input[type="checkbox"],
+.node-item label input[type="checkbox"],
+.rule-item label input[type="checkbox"] {
+  margin-right: var(--space-1);
+}
+
+/* 确保所有checkbox在label中垂直居中 */
+label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ============================================
+   按钮组布局修复
+   ============================================ */
+.subscription-item .btn,
+.node-item .btn,
+.group-item .btn,
+.rule-item .btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ============================================
+   输入框最小宽度控制
+   ============================================ */
+input[type="text"],
+input[type="number"],
+input[type="url"],
+input[type="email"] {
+  min-width: 0;
+}
+
+/* 特定场景的输入框宽度 */
+.subscription-item input[data-k="name"],
+.node-item input[data-k="name"] {
+  min-width: 150px;
+}
+
+.subscription-item input[data-k="url"],
+.node-item input[data-k="endpoint"] {
+  min-width: 200px;
+}
+
+input.interval {
+  width: 80px;
+  min-width: 80px;
+}
+
+/* ============================================
+   平台模板布局优化
+   ============================================ */
+.platform {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+}
+
+.platform > * {
+  flex: 0 1 auto;
+}
+
+.platform b {
+  min-width: 100px;
+}
+
+.platform select {
+  min-width: 150px;
+  flex: 1 1 auto;
+}
+
+.platform button {
+  flex-shrink: 0;
+}
+
+@media (max-width: 580px) {
+  .platform {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .platform > * {
+    width: 100%;
+  }
+}
+
+/* ============================================
+   导入表单优化
+   ============================================ */
+.import-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-4);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+}
+
+.import-form input {
+  flex: 1 1 300px;
+  min-width: 200px;
+}
+
+.import-form button {
+  flex-shrink: 0;
+}
+
+@media (max-width: 580px) {
+  .import-form {
+    flex-direction: column;
+  }
+  
+  .import-form input,
+  .import-form button {
+    width: 100%;
+  }
+}
