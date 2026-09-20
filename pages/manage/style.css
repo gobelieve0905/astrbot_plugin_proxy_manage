@@ -1345,6 +1345,11 @@ small.muted {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-4);
   margin-top: var(--space-4);
+  /* 负边距突破父容器padding限制 */
+  margin-left: calc(-1 * var(--space-6));
+  margin-right: calc(-1 * var(--space-6));
+  padding-left: var(--space-6);
+  padding-right: var(--space-6);
 }
 
 .verification-levels .verification {
@@ -1835,22 +1840,6 @@ small.muted {
 }
 
 
-/* ============================================
-   验证层级面板宽度优化
-   ============================================ */
-.verification-levels {
-  /* 负边距突破父容器padding限制 */
-  margin-left: calc(-1 * var(--space-6));
-  margin-right: calc(-1 * var(--space-6));
-  padding-left: var(--space-6);
-  padding-right: var(--space-6);
-}
 
-/* 或者使用更小的卡片尺寸以适应窄容器 */
-@media (max-width: 1200px) {
-  .verification-levels .verification {
-    min-height: 140px;
-    padding: var(--space-4);
-  }
 }
 
