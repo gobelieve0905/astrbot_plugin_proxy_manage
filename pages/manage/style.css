@@ -885,7 +885,7 @@ label {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 580px) {
   body {
     display: block;
   }
