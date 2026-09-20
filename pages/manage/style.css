@@ -1445,18 +1445,20 @@ small.muted {
   box-shadow: var(--shadow-md);
 }
 
+
 /* 响应式：验证层级 */
-@media (max-width: 980px) {
+@media (max-width: 1200px) {
   .verification-levels {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 580px) {
+@media (max-width: 680px) {
   .verification-levels {
     grid-template-columns: 1fr;
   }
 }
+
 
 
 /* ============================================
