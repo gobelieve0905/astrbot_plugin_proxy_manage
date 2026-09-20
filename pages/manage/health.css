@@ -148,12 +148,7 @@
 /* ============================================
    三层出站验证面板
    ============================================ */
-.verification-levels {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-4);
-  margin: var(--space-5) 0;
-}
+
 
 .verification {
   display: grid;
@@ -507,8 +502,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .verification-levels {
-    grid-template-columns: 1fr;
   }
 
   .platform,
@@ -572,8 +565,6 @@
     padding: var(--space-4);
   }
 
-  .verification-levels {
-    gap: var(--space-3);
   }
 
   .verification {
