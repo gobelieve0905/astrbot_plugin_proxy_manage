@@ -178,6 +178,13 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('data-kernel-file',script)
         self.assertIn('data-kernel-upload',script)
         self.assertLess(script.index('<h2>运行控制</h2>'),script.index('<h2>内核资源管理</h2>'))
+        self.assertIn('group-runtime-refresh',script)
+        self.assertIn('refreshGroupStatus',script)
+        self.assertIn('noticeTimer=setTimeout',script)
+        control_view=script[script.index("} else if(tab==='control')"):script.index("  } else {",script.index("} else if(tab==='control')"))]
+        self.assertNotIn('代理组状态',control_view)
+        self.assertIn('runtime-control',script + styles)
+        self.assertIn('runtime-facts',script + styles)
         self.assertIn('data-kernel-install',script)
         self.assertIn('core-enable',script)
         self.assertIn('kernel-update-check',script)

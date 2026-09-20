@@ -158,6 +158,7 @@ h2 { margin: 0 0 14px; font-size: 17px; line-height: 1.35; }
   box-shadow: var(--shadow);
 }
 #notice.error { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+#notice[hidden] { display: none; }
 #content { min-width: 0; }
 
 .hero { display: flex; justify-content: space-between; gap: 20px; align-items: center; margin: 22px 0 14px; padding: 18px 0; border-bottom: 1px solid var(--line); }
