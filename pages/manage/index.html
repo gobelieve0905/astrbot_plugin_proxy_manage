@@ -233,13 +233,18 @@ html {
 
 body {
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
   background: var(--bg-app);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: var(--font-size-base);
   line-height: var(--line-height-normal);
+}
+
+
+#app {
+  width: 100%;
+  min-width: 100%;
+  display: block;
 }
 
 /* ============================================
