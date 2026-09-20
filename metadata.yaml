@@ -5,3 +5,7 @@ version: 0.3.16
 author: gobelieve
 repo: https://github.com/gobelieve0905/astrbot_plugin_proxy_manage
 astrbot_version: '>=4.28.0,<5'
+plugin_pages:
+  - name: manage
+    display_name: 代理管理中心
+    description: 可视化管理代理出口、分流策略、节点健康状态和连通性诊断
