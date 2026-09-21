@@ -1,6 +1,6 @@
 # 代理管理中心
 
-当前版本：0.3.16
+当前版本：0.3.15
 
 ## 产品方向
 
@@ -8,7 +8,7 @@
 
 Mihomo 只是候选内核之一，架构不得与任何单一内核绑定。完整的产品不变量、内核适配器契约、流量范围、安全模型和验收标准见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。该文档是后续设计和修改的最高优先级依据。
 
-> 当前 0.3.16 延续版本化官方兼容层。AstrBot 4.28.1 的飞书和 Telegram 平台，以及首批 Provider 由插件在运行时注册显式代理兼容类；第三方插件和 MCP 仍通过公开声明接入。未知 AstrBot/SDK 版本不会乐观启用兼容层。默认未命中规则由内核执行 `DIRECT`，但只有请求级证据才能显示“已接管”。
+> 当前 0.3.15 延续版本化官方兼容层。AstrBot 4.28.1 的飞书和 Telegram 平台，以及首批 Provider 由插件在运行时注册显式代理兼容类；第三方插件和 MCP 仍通过公开声明接入。未知 AstrBot/SDK 版本不会乐观启用兼容层。默认未命中规则由内核执行 `DIRECT`，但只有请求级证据才能显示“已接管”。
 
 首次安装、AstrBot 接入范围、协议与部署支持矩阵见 [USER_GUIDE.md](USER_GUIDE.md)。
 
@@ -94,12 +94,3 @@ AstrBot 核心接入会先备份原有 `http_proxy` 和 `no_proxy`，写入稳�
 ## 实际流量接入
 
 插件通过当前适配器为每个已验证节点生成独立出站，并用稳定唯一的内核名称生成代理组和规则。页面继续显示用户名称，同名节点仍能分别测速和切换；代理组只包含用户明确选择且当前可用的节点。Mihomo 使用 YAML 与 Meta 控制接口，sing-box 使用原生 JSON 与 Clash API 兼容控制面，Xray 使用原生 JSON 和进程级健康检查，专用结构均留在各自适配器内。未验证协议会保留原始信息，但在完成适配前不会写入运行配置。控制端口和统一入口仅绑定插件运行环境内的回环地址并启用随机密钥认证。
-
-## 开发文档
-
-- [UI_CHECKLIST.md](docs/UI_CHECKLIST.md) - UI开发与验收规范（677行详细清单）
-- [UI_ISSUE_SUMMARY.md](docs/UI_ISSUE_SUMMARY.md) - UI问题总结与防范文档（573行，包含历史问题、根源分类、开发清单、验收流程）
-- [PRODUCT_DEFINITION.md](docs/PRODUCT_DEFINITION.md) - 最终产品定义与架构约束
-- [USER_GUIDE.md](USER_GUIDE.md) - 用户使用指南
-
-**开发者必读**：每次UI修改前必须参考 `UI_CHECKLIST.md` 和 `UI_ISSUE_SUMMARY.md`，确保布局CSS完整、响应式Grid正确、状态样式齐全。修改后必须执行完整验收流程（本地预览 → 部署 → Docker重启 → 生产环境验收）。

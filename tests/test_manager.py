@@ -170,7 +170,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.16',html)
+        self.assertIn('流量控制 · 0.3.15',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('kernel-resources',script)

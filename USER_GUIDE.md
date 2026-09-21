@@ -1,6 +1,6 @@
 # 代理管理中心使用指南
 
-> 本指南记录 0.3.16 的当前操作方式。插件加载时会自动将 AstrBot 的全局 HTTP、HTTPS、通用 SOCKS 代理配置指向插件入口，并在已验证运行时安装飞书、Telegram 和首批 Provider 兼容层。内核资源不会自动下载，用户需在资源管理中选择并启用。默认未命中规则是内核 `DIRECT`；没有请求级证据时不会宣称任何组件已接管。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrabot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
+> 本指南记录 0.3.15 的当前操作方式。插件加载时会自动将 AstrBot 的全局 HTTP、HTTPS、通用 SOCKS 代理配置指向插件入口，并在已验证运行时安装飞书、Telegram 和首批 Provider 兼容层。内核资源不会自动下载，用户需在资源管理中选择并启用。默认未命中规则是内核 `DIRECT`；没有请求级证据时不会宣称任何组件已接管。最终目标及后续开发约束见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrabot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。
 
 桌面端使用左侧导航，移动端使用顶部横向导航。页面顶部的“恢复上一版”和“预览并保存”作用于规范化配置；“内核管理”第一栏用于运行控制，第二栏使用可收放横栏管理各内核资源，不会与普通配置保存混在同一操作组。
 
@@ -25,7 +25,7 @@
 
 | 场景 | 接入方式 | 支持状态 |
 | --- | --- | --- |
-| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | 持久化 `http_proxy`/`no_proxy`；插件启动后在 AstrBot 进程设置 HTTP、HTTPS 和 SOCKS 入口 | 0.3.16 已接入，需重启后做请求级验证 |
+| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | 持久化 `http_proxy`/`no_proxy`；插件启动后在 AstrBot 进程设置 HTTP、HTTPS 和 SOCKS 入口 | 0.3.15 已接入，需重启后做请求级验证 |
 | 使用 AstrBot 公共 HTTP 客户端且继承核心代理配置的插件 | 使用核心 `http_proxy` | 尚未逐项接入和验证 |
 | 支持独立代理字段的平台适配器 | 在适配器配置中填写统一 HTTP/SOCKS 入口 | 条件支持，应按适配器文档验证 |
 | 支持代理或自定义 HTTP 客户端的模型提供商 | 在对应客户端配置代理 | 条件支持，应执行无业务凭据的受控请求验证 |
