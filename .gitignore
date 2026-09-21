@@ -4,3 +4,9 @@ __pycache__/
 .ruff_cache/
 .venv/
 .DS_Store
+pages/manage/app.js.backup
+pages/manage/app.js.body
+pages/manage/index.html.backup
+pages/manage/index.html.bak
+pages/manage/index.html.bak2
+pages/manage/index.html.bak3
