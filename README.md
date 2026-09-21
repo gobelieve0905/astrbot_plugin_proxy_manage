@@ -1,6 +1,6 @@
 # 代理管理中心
 
-当前版本：0.3.15
+当前版本：0.3.16
 
 页面开发与验收遵循 [UI_CHECKLIST.md](docs/UI_CHECKLIST.md)，历史问题见 [UI_ISSUE_SUMMARY.md](docs/UI_ISSUE_SUMMARY.md)。后续 UI 优化不得绕过页面生命周期、脱敏和真实状态契约。
 
@@ -10,7 +10,7 @@
 
 Mihomo 只是候选内核之一，架构不得与任何单一内核绑定。完整的产品不变量、内核适配器契约、流量范围、安全模型和验收标准见[《最终产品定义与架构约束》](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PRODUCT_DEFINITION.md)。该文档是后续设计和修改的最高优先级依据。
 
-> 当前 0.3.15 延续版本化官方兼容层。AstrBot 4.28.1 的飞书和 Telegram 平台，以及首批 Provider 由插件在运行时注册显式代理兼容类；第三方插件和 MCP 仍通过公开声明接入。未知 AstrBot/SDK 版本不会乐观启用兼容层。默认未命中规则由内核执行 `DIRECT`，但只有请求级证据才能显示“已接管”。
+> 当前 0.3.16 延续版本化官方兼容层。AstrBot 4.28.1 的飞书和 Telegram 平台，以及首批 Provider 由插件在运行时注册显式代理兼容类；第三方插件和 MCP 仍通过公开声明接入。未知 AstrBot/SDK 版本不会乐观启用兼容层。默认未命中规则由内核执行 `DIRECT`，但只有请求级证据才能显示“已接管”。
 
 首次安装、AstrBot 接入范围、协议与部署支持矩阵见 [USER_GUIDE.md](USER_GUIDE.md)。
 
