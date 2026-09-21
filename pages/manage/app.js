@@ -1,5 +1,11 @@
+function initialize() {
 const $ = id => document.getElementById(id)
 const api = window.AstrBotPluginPage
+if (!api || typeof api.ready !== 'function') {
+  document.getElementById('notice').hidden = false
+  document.getElementById('notice').textContent = 'AstrBot 页面桥接未就绪，请重新打开插件页面'
+  return
+}
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
 const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名和目标出口',platforms:'生成域名规则；这不代表平台 SDK 已接入代理',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
 let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importing=false, probeTask=null
@@ -232,4 +238,12 @@ $('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('ro
 $('save').addEventListener('click',()=>{readControl();$('diff-text').textContent=JSON.stringify({before:original,after:state},null,2);$('diff').showModal()})
 $('cancel').addEventListener('click',()=>$('diff').close())
 $('confirm').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存')}catch(error){note(error.message,true)}})
-load()
+;(async()=>{try{await api.ready(); await load()}catch(error){note(error.message || '页面初始化失败，请重新打开插件页面',true)}})()
+}
+
+// AstrBot 在页面脚本之后注入 bridge；只在 DOM 与 bridge 都就绪后初始化。
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initialize, {once:true})
+} else {
+  initialize()
+}

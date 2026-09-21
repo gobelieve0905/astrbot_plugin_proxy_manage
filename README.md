@@ -2,6 +2,8 @@
 
 当前版本：0.3.15
 
+页面开发与验收遵循 [UI_CHECKLIST.md](docs/UI_CHECKLIST.md)，历史问题见 [UI_ISSUE_SUMMARY.md](docs/UI_ISSUE_SUMMARY.md)。后续 UI 优化不得绕过页面生命周期、脱敏和真实状态契约。
+
 ## 产品方向
 
 本插件的最终目标是成为 AstrBot 的统一出站流量控制面：由插件自行准备和管理可插拔代理内核，管理机器人平台、模型 Provider、Agent 工具、插件、下载及相关服务产生的实际外部流量，而不是只维护订阅和节点列表。
