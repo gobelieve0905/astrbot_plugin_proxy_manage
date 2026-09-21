@@ -1,5 +1,8 @@
 AGENTS.md export-ignore
 /docs export-ignore
+# UI 开发规范只保留在 GitHub 仓库，不进入插件市场安装包
+docs/UI_CHECKLIST.md export-ignore
+docs/UI_ISSUE_SUMMARY.md export-ignore
 /tests export-ignore
 pyproject.toml export-ignore
 .gitignore export-ignore
