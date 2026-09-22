@@ -815,6 +815,12 @@ class ProxyManager(Star):
             return error_response(str(exc) if isinstance(exc,ValueError) else '订阅预览请求失败')
 
     def _replace_subscription_nodes(self,subscription:dict,nodes:list[dict]):
+        ignored=set(subscription.get('ignored_node_ids',[]))
+        nodes=[node for node in nodes if node.get('id') not in ignored]
+        subscription['node_ids']=[node_id for node_id in subscription.get('node_ids',[]) if node_id not in ignored]
+        if ignored:
+            self.state['nodes']=[node for node in self.state['nodes']
+                                 if not (node.get('subscription_id')==subscription.get('id') and node.get('id') in ignored)]
         old=set(subscription['node_ids']); incoming={node['id'] for node in nodes}
         existing={node['id']:node for node in self.state['nodes'] if node['id'] in old}
         changed=[]; unchanged=[]
@@ -939,11 +945,16 @@ class ProxyManager(Star):
                         else:
                             subscription={'id':'sub-'+hashlib.sha1(item['url'].encode()).hexdigest()[:12],
                                           'name':item['name'],'url':item['url'],'group':'',
-                                          'enabled':True,'interval':item['interval'],'node_ids':[],'updated_at':0,
+                                          'enabled':True,'interval':item['interval'],'node_ids':[],'ignored_node_ids':[],
+                                          'updated_at':0,
                                           'next_refresh_at':0,'upload':0,'download':0,'total':0,'expire':0,
                                           'last_error':'','consecutive_errors':0,'errors':[]}
                             self.state['subscriptions'].append(subscription)
-                        subscription.update({'name':item['name'],'interval':item['interval'],'enabled':True})
+                        # Explicit import is the recovery action for nodes the user
+                        # previously removed from this subscription.  Scheduled
+                        # refreshes keep the ignore list intact.
+                        subscription.update({'name':item['name'],'interval':item['interval'],'enabled':True,
+                                              'ignored_node_ids':[]})
                         for node in item['nodes']:
                             node['subscription_id']=subscription['id']
                             node['id']=self._stable_node_id(subscription['id'],node['endpoint'],node.get('protocol',''),node.get('connection'))

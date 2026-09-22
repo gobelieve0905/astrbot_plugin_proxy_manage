@@ -189,6 +189,10 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('groupStrategy',script)
         self.assertIn('按测速选择延迟最低节点',script)
         self.assertNotIn('自动选择首个可用成员',script)
+        self.assertIn('id="diff-content"',html)
+        self.assertNotIn('id="diff-text"',html)
+        self.assertIn('renderChangePreview',script)
+        self.assertNotIn("JSON.stringify({before:original,after:state})",script)
         self.assertIn('openGroupDialog',script)
         self.assertIn('noticeTimer=setTimeout',script)
         control_view=script[script.index("} else if(tab==='control')"):script.index("  } else {",script.index("} else if(tab==='control')"))]
@@ -924,6 +928,33 @@ class TestConfigurationRules(unittest.TestCase):
         current = next(node for node in manager.state['nodes'] if node['id'] == old['id'])
         self.assertTrue(current['excluded'])
         self.assertEqual(current['exclusion_reason'], '流量提示')
+
+    def test_ignored_subscription_node_is_removed_from_normalized_state(self):
+        manager = self._manager_for_runtime()
+        raw = copy.deepcopy(manager.state)
+        raw['subscriptions'][0]['node_ids'] = ['hk-1']
+        raw['subscriptions'][0]['ignored_node_ids'] = ['hk-1']
+
+        normalized = manager._normalize(raw)
+
+        self.assertNotIn('hk-1', {node['id'] for node in normalized['nodes']})
+        self.assertEqual(normalized['subscriptions'][0]['node_ids'], [])
+        self.assertEqual([group['id'] for group in normalized['groups']], ['direct', 'sg'])
+        self.assertEqual(normalized['routes'], [])
+
+    def test_subscription_refresh_skips_ignored_nodes(self):
+        manager = self._manager_for_runtime()
+        manager.state = manager._normalize(manager.state)
+        subscription = manager.state['subscriptions'][0]
+        node_id = manager.state['nodes'][0]['id']
+        subscription['ignored_node_ids'] = [node_id]
+        subscription['node_ids'] = []
+        refreshed = copy.deepcopy(manager.state['nodes'][0])
+
+        manager._replace_subscription_nodes(subscription, [refreshed])
+
+        self.assertNotIn(node_id, {node['id'] for node in manager.state['nodes']})
+        self.assertEqual(subscription['node_ids'], [])
 
     def test_subscription_diff_preserves_alias_and_deleted_reference(self):
         manager = self._manager_for_runtime(); subscription=manager.state['subscriptions'][0]

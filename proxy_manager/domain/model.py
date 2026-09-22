@@ -179,11 +179,17 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
             if isinstance(error,dict):
                 errors.append({'at':int(error.get('at',0) or 0),'message':str(error.get('message',''))[:300]})
         subscription_name=' '.join(str(item.get('name') or f'订阅 {index+1}').split())[:80] or f'订阅 {index+1}'
+        ignored_node_ids=list(dict.fromkeys(
+            aliases.get(ident(value),ident(value))
+            for value in item.get('ignored_node_ids',[])
+            if ident(value)
+        ))
         subscriptions.append({
             'id':ident(item.get('id')) or f'sub-{index+1}', 'name':subscription_name,
             'url':str(item['url'])[:1000], 'group':'',
             'enabled':bool(item.get('enabled',True)), 'interval':interval,
             'node_ids':list(dict.fromkeys(aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value))),
+            'ignored_node_ids':ignored_node_ids,
             'updated_at':int(item.get('updated_at',0) or 0), 'next_refresh_at':int(item.get('next_refresh_at',0) or 0),
             'upload':max(0,int(item.get('upload',0) or 0)), 'download':max(0,int(item.get('download',0) or 0)),
             'total':max(0,int(item.get('total',0) or 0)), 'expire':int(item.get('expire',0) or 0),
@@ -197,14 +203,22 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
     # source no longer exists.  Apply this ownership rule while normalizing so
     # disk loads, saves, imports and API callers all get the same result.
     active_subscription_ids={subscription['id'] for subscription in subscriptions}
+    ignored_by_subscription={
+        subscription['id']:set(subscription.get('ignored_node_ids',[]))
+        for subscription in subscriptions
+    }
     removed_node_ids={node['id'] for node in nodes
-                      if node.get('subscription_id') and node.get('subscription_id') not in active_subscription_ids}
+                      if node.get('subscription_id') and (
+                          node.get('subscription_id') not in active_subscription_ids
+                          or node['id'] in ignored_by_subscription.get(node.get('subscription_id'),set())
+                      )}
     if removed_node_ids:
         nodes=[node for node in nodes if node['id'] not in removed_node_ids]
 
     live_node_ids={node['id'] for node in nodes}
     for subscription in subscriptions:
-        subscription['node_ids']=[node_id for node_id in subscription['node_ids'] if node_id in live_node_ids]
+        ignored=set(subscription.get('ignored_node_ids',[]))
+        subscription['node_ids']=[node_id for node_id in subscription['node_ids'] if node_id in live_node_ids and node_id not in ignored]
 
     # Remove deleted nodes from groups.  A non-direct group with no remaining
     # members cannot be rendered by any supported core, so remove the now

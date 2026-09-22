@@ -304,6 +304,25 @@ function bind(){
       render(); note('代理组已删除'); return
     }
     list.splice(Number(row.dataset.i),1)
+    if(button.dataset.del==='nodes'){
+      const nodeId=item.id, subscription=item.subscription_id?state.subscriptions.find(value=>value.id===item.subscription_id):null
+      if(subscription){
+        subscription.ignored_node_ids=[...new Set([...(subscription.ignored_node_ids||[]),nodeId])]
+        subscription.node_ids=(subscription.node_ids||[]).filter(value=>value!==nodeId)
+      }
+      state.health=Object.fromEntries(Object.entries(state.health||{}).filter(([id])=>id!==nodeId))
+      const removedGroups=new Set()
+      state.groups.forEach(group=>{
+        group.node_ids=group.node_ids.filter(value=>value!==nodeId)
+        if(group.selected===nodeId)group.selected=''
+        if(group.id!=='direct'&&!group.node_ids.length)removedGroups.add(group.id)
+      })
+      state.groups=state.groups.filter(group=>!removedGroups.has(group.id))
+      state.routes=state.routes.filter(route=>!removedGroups.has(route.target))
+      state.rule_groups=state.rule_groups.filter(rule=>!removedGroups.has(rule.target))
+      state.platforms=Object.fromEntries(Object.entries(state.platforms||{}).filter(([,platform])=>!removedGroups.has(platform.group_id)))
+      render(); note(subscription?'节点已删除，后续订阅刷新不会重新导入':'节点已删除'); return
+    }
     if(button.dataset.del==='subscriptions'){
       const owned=new Set(state.nodes.filter(node=>node.subscription_id===item.id).map(node=>node.id))
       state.nodes=state.nodes.filter(node=>!owned.has(node.id))
@@ -371,6 +390,103 @@ function bind(){
   document.querySelectorAll('[data-select]').forEach(select=>select.addEventListener('change',async()=>{try{await api.apiPost('control-select',{group_id:select.dataset.select,node_id:select.value});await checkControl();note('代理组已切换')}catch(error){note(error.message,true)}}))
 }
 
+const changeSectionDefinitions=[
+  {type:'subscriptions',label:'订阅'},
+  {type:'nodes',label:'代理节点'},
+  {type:'groups',label:'代理组'},
+  {type:'routes',label:'分流规则'},
+  {type:'rule_groups',label:'规则组'},
+  {type:'platforms',label:'平台绑定'},
+]
+const changeFieldsByType={
+  subscriptions:['id','name','url','enabled','interval','node_ids','ignored_node_ids'],
+  nodes:['id','display_name','user_alias','protocol','region','endpoint','connection','subscription_id','enabled','excluded','exclusion_reason','invalid_reference'],
+  groups:['id','name','mode','node_ids','selected','enabled','test_url','test_interval','tolerance','failure_policy'],
+  routes:['id','host','match','target','priority','enabled'],
+  rule_groups:['id','name','domains','priority','target','enabled'],
+  platforms:['id','name','group_id','enabled'],
+}
+const changeFieldLabels={
+  id:'标识',name:'名称',url:'订阅链接',enabled:'启用状态',interval:'刷新间隔',node_ids:'节点成员',ignored_node_ids:'已排除节点',
+  display_name:'节点名称',user_alias:'自定义名称',protocol:'协议',region:'地区',endpoint:'连接参数',connection:'连接参数',subscription_id:'所属订阅',
+  excluded:'测速与组选优',exclusion_reason:'排除原因',invalid_reference:'引用状态',mode:'选择模式',selected:'初始节点',test_url:'测速目标',
+  test_interval:'测速周期',tolerance:'切换容差',failure_policy:'故障策略',host:'匹配域名',match:'匹配方式',target:'目标代理组',priority:'优先级',domains:'域名成员',group_id:'代理组',
+}
+function changeRecords(type,snapshot){
+  if(type==='platforms')return Object.entries(snapshot?.platforms||{}).filter(([,item])=>item&&typeof item==='object').map(([id,item])=>({...item,id}))
+  return Array.isArray(snapshot?.[type])?snapshot[type].filter(item=>item&&item.id).map(item=>item):[]
+}
+function canonicalChangeValue(value){
+  if(Array.isArray(value))return value.map(canonicalChangeValue)
+  if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalChangeValue(value[key])]))
+  return value
+}
+function changeComparable(type,item){
+  const source=item||{}, fields=changeFieldsByType[type]||['id']
+  return Object.fromEntries(fields.map(field=>[field,canonicalChangeValue(source[field]??null)]))
+}
+function changeSignature(type,item){return JSON.stringify(changeComparable(type,item))}
+function snapshotSubscriptionName(snapshot,id){return snapshot?.subscriptions?.find(item=>item.id===id)?.name||'未命名订阅'}
+function snapshotGroupName(snapshot,id){return snapshot?.groups?.find(item=>item.id===id)?.name||'未命名代理组'}
+function changeTitle(type,item,snapshot){
+  if(type==='nodes')return `${snapshotSubscriptionName(snapshot,item.subscription_id)} · ${item.display_name||item.name||item.id}`
+  if(type==='subscriptions')return item.name||'未命名订阅'
+  if(type==='groups')return item.name||'未命名代理组'
+  if(type==='routes')return item.host||'未命名规则'
+  if(type==='rule_groups')return item.name||'未命名规则组'
+  return item.name||item.id||'未命名平台'
+}
+function changeMeta(type,item,snapshot){
+  if(type==='subscriptions')return `${Array.isArray(item.node_ids)?item.node_ids.length:0} 个节点 · ${item.interval?'每 '+item.interval+' 分钟':'手动刷新'}`
+  if(type==='nodes')return `${item.protocol||'unknown'} · ${item.region||'其他'} · ${item.enabled===false?'已停用':'已启用'}`
+  if(type==='groups')return `${groupModeLabels[item.mode]||item.mode||'手动选择'} · ${Array.isArray(item.node_ids)?item.node_ids.length:0} 个节点`
+  if(type==='routes')return `${item.match==='suffix'?'后缀匹配':'精确匹配'} · ${snapshotGroupName(snapshot,item.target)} · 优先级 ${item.priority??'--'}`
+  if(type==='rule_groups')return `${Array.isArray(item.domains)?item.domains.length:0} 个域名 · ${snapshotGroupName(snapshot,item.target)} · 优先级 ${item.priority??'--'}`
+  return `${snapshotGroupName(snapshot,item.group_id)} · ${item.enabled===false?'已停用':'已启用'}`
+}
+function changeDisplayValue(type,key,value,snapshot){
+  if(key==='enabled')return value?'已启用':'已停用'
+  if(key==='interval')return Number(value)?`每 ${value} 分钟`:'手动刷新'
+  if(key==='node_ids')return `${Array.isArray(value)?value.length:0} 个节点`
+  if(key==='ignored_node_ids')return `${Array.isArray(value)?value.length:0} 个已排除节点`
+  if(key==='domains')return `${Array.isArray(value)?value.length:0} 个域名`
+  if(key==='excluded')return value?'排除测速/组选优':'参与测速/组选优'
+  if(key==='invalid_reference')return value?'引用失效':'引用有效'
+  if(key==='url'||key==='endpoint'||key==='connection'||key==='test_url')return value?'已配置':'未配置'
+  if(key==='subscription_id')return value?snapshotSubscriptionName(snapshot,value):'手动节点'
+  if(key==='target'||key==='group_id')return value?snapshotGroupName(snapshot,value):'未指定'
+  if(key==='mode')return groupModeLabels[value]||value||'未指定'
+  if(key==='failure_policy')return value==='keep-last'?'保留最后选择':'失败关闭'
+  if(key==='match')return value==='suffix'?'后缀匹配':'精确匹配'
+  if(key==='selected')return value?'已指定节点':'未指定'
+  if(value===null||value===undefined||value==='')return '未设置'
+  if(typeof value==='object')return Array.isArray(value)?`${value.length} 项`:`${Object.keys(value).length} 项`
+  return String(value)
+}
+function changeFields(type,before,after){
+  return (changeFieldsByType[type]||[]).filter(key=>JSON.stringify(canonicalChangeValue(before?.[key]??null))!==JSON.stringify(canonicalChangeValue(after?.[key]??null)))
+}
+function changeEntryValues(type,entry){
+  if(entry.kind==='changed')return `<div class="change-entry-values">${changeFields(type,entry.before,entry.after).map(key=>`<div class="change-value-row"><span class="change-value-label">${esc(changeFieldLabels[key]||key)}</span><span class="change-before">${esc(changeDisplayValue(type,key,entry.before?.[key],entry.beforeSnapshot))}</span><span class="change-arrow" aria-hidden="true">→</span><span class="change-after">${esc(changeDisplayValue(type,key,entry.after?.[key],entry.afterSnapshot))}</span></div>`).join('')}</div>`
+  const item=entry.kind==='added'?entry.after:entry.before, snapshot=entry.kind==='added'?entry.afterSnapshot:entry.beforeSnapshot
+  return `<div class="change-entry-values"><div class="change-value-row"><span class="change-value-label">${entry.kind==='added'?'当前配置':'原配置'}</span><span class="${entry.kind==='added'?'change-after':'change-before'}">${esc(changeMeta(type,item,snapshot))}</span></div></div>`
+}
+function collectChangeSection(def,before,after){
+  const previous=new Map(changeRecords(def.type,before).map(item=>[item.id,item])), current=new Map(changeRecords(def.type,after).map(item=>[item.id,item])), ids=new Set([...previous.keys(),...current.keys()]), entries=[], counts={added:0,deleted:0,changed:0,unchanged:0}
+  ids.forEach(id=>{
+    const oldItem=previous.get(id), newItem=current.get(id)
+    if(!oldItem){counts.added++;entries.push({kind:'added',id,after:newItem,afterSnapshot:after})}
+    else if(!newItem){counts.deleted++;entries.push({kind:'deleted',id,before:oldItem,beforeSnapshot:before})}
+    else if(changeSignature(def.type,oldItem)!==changeSignature(def.type,newItem)){counts.changed++;entries.push({kind:'changed',id,before:oldItem,after:newItem,beforeSnapshot:before,afterSnapshot:after})}
+    else counts.unchanged++
+  })
+  return {...def,entries,counts}
+}
+function renderChangePreview(before,after){
+  const sections=changeSectionDefinitions.map(def=>collectChangeSection(def,before||{},after||{})), totals=sections.reduce((result,section)=>{for(const key of Object.keys(result))result[key]+=section.counts[key];return result},{added:0,deleted:0,changed:0,unchanged:0}), changedSections=sections.filter(section=>section.entries.length)
+  if(!totals.added&&!totals.deleted&&!totals.changed)return `<div class="change-empty"><b>本轮没有检测到配置变化</b><span>当前配置与上次保存内容一致。</span></div>`
+  return `<div class="change-overview"><div class="change-stat added"><b>${totals.added}</b><span>新增</span></div><div class="change-stat deleted"><b>${totals.deleted}</b><span>删除</span></div><div class="change-stat changed"><b>${totals.changed}</b><span>修改</span></div><div class="change-stat unchanged"><b>${totals.unchanged}</b><span>未变</span></div></div><p class="change-preview-note">以下内容是本轮待保存的配置摘要，连接凭据和完整订阅地址不会显示。</p>${changedSections.map(section=>`<section class="change-section"><div class="change-section-head"><h3>${esc(section.label)}</h3><span>${section.entries.length} 项变化</span></div><div class="change-entry-list">${section.entries.map(entry=>`<article class="change-entry ${entry.kind}"><div class="change-entry-head"><div><span class="change-kind">${entry.kind==='added'?'新增':entry.kind==='deleted'?'删除':'修改'}</span><b>${esc(changeTitle(section.type,entry.kind==='deleted'?entry.before:entry.after,entry.kind==='deleted'?entry.beforeSnapshot:entry.afterSnapshot))}</b></div><small>${esc(changeMeta(section.type,entry.kind==='deleted'?entry.before:entry.after,entry.kind==='deleted'?entry.beforeSnapshot:entry.afterSnapshot))}</small></div>${changeEntryValues(section.type,entry)}</article>`).join('')}</div></section>`).join('')}`
+}
 function readControl(){}
 async function saveChanges(){ readControl(); state=await api.apiPost('save',state); original=structuredClone(state) }
 async function previewImport(){
@@ -421,7 +537,7 @@ async function load(){ try{ state=await api.apiGet('state');kernelStatus=await a
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render();if(tab==='groups')refreshGroupStatus()}))
   $('reload').addEventListener('click',load)
   $('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('rollback',{});original=structuredClone(state);controlResult=null;importPreview=null;render();note('已恢复上一版配置')}catch(error){note(error.message,true)}})
-  $('save').addEventListener('click',()=>{readControl();$('diff-text').textContent=JSON.stringify({before:original,after:state},null,2);$('diff').showModal()})
+  $('save').addEventListener('click',()=>{readControl();$('diff-content').innerHTML=renderChangePreview(original,state);$('diff').showModal()})
   $('cancel').addEventListener('click',()=>$('diff').close())
   $('subscription-import-close').addEventListener('click',closeImportDialog)
   $('proxy-group-close')?.addEventListener('click',closeGroupDialog)
