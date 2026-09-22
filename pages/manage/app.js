@@ -142,7 +142,23 @@ function bind(){
   }))
   document.querySelectorAll('[data-del]').forEach(button=>button.addEventListener('click',()=>{
     const row=button.closest('[data-i]'),list=state[button.dataset.del],item=list[Number(row.dataset.i)]
-    if(item.id==='direct')return; list.splice(Number(row.dataset.i),1); render()
+    if(item.id==='direct')return; list.splice(Number(row.dataset.i),1)
+    if(button.dataset.del==='subscriptions'){
+      const owned=new Set(state.nodes.filter(node=>node.subscription_id===item.id).map(node=>node.id))
+      state.nodes=state.nodes.filter(node=>!owned.has(node.id))
+      state.health=Object.fromEntries(Object.entries(state.health||{}).filter(([nodeId])=>!owned.has(nodeId)))
+      const removedGroups=new Set()
+      state.groups.forEach(group=>{
+        group.node_ids=group.node_ids.filter(nodeId=>!owned.has(nodeId))
+        if(group.selected&&!group.node_ids.includes(group.selected))group.selected=''
+        if(group.id!=='direct'&&!group.node_ids.length)removedGroups.add(group.id)
+      })
+      state.groups=state.groups.filter(group=>!removedGroups.has(group.id))
+      state.routes=state.routes.filter(route=>!removedGroups.has(route.target))
+      state.rule_groups=state.rule_groups.filter(rule=>!removedGroups.has(rule.target))
+      state.platforms=Object.fromEntries(Object.entries(state.platforms||{}).filter(([,platform])=>!removedGroups.has(platform.group_id)))
+    }
+    render()
   }))
   $('add')?.addEventListener('click',()=>{
     if(tab==='nodes')state.nodes.push({id:'node-'+Date.now(),name:'新节点',display_name:'新节点',protocol:'http',engine:'direct-http',kind:'http',endpoint:'',connection:{},subscription_id:'',enabled:true,excluded:false,exclusion_reason:''})

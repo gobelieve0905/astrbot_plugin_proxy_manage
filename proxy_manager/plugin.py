@@ -408,6 +408,12 @@ class ProxyManager(Star):
         try: temp.chmod(0o600)
         except OSError: pass
         temp.replace(self.path); self.state=normalized
+        if hasattr(self,'health') and hasattr(self,'health_path'):
+            live_ids={node['id'] for node in normalized['nodes']}
+            stale_ids=set(self.health)-live_ids
+            if stale_ids:
+                self.health={node_id:value for node_id,value in self.health.items() if node_id in live_ids}
+                self.persist_health()
         if hasattr(self,'runtime_application') and self.runtime_application.get('status') not in {'restore_failed','fail_closed'}:
             try: saved_revision=self._adapter().revision(self._runtime_document())
             except (ValueError,TypeError): saved_revision=''
@@ -617,7 +623,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.16'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.17'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -729,7 +735,7 @@ class ProxyManager(Star):
             for index,url in enumerate(urls):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.16'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.17'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -800,7 +806,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.16'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.17'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1475,7 +1481,7 @@ class ProxyManager(Star):
         http_url,socks_url=self._entry_urls(); status=self.astrbot_proxy.mark_started(http_url,socks_url)
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.16 已加载')
+        logger.info('代理管理中心 0.3.17 已加载')
 
     async def terminate(self):
         if self.auto_task:

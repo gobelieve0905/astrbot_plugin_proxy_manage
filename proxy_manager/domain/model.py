@@ -190,6 +190,40 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
             'errors':errors[-20:], 'last_diff':copy.deepcopy(item.get('last_diff')) if isinstance(item.get('last_diff'),dict) else {},
         })
 
+    # A subscription owns every node carrying its subscription id.  Once the
+    # subscription is removed from the normalized state, keeping those nodes
+    # would leave them available for grouping and probing even though their
+    # source no longer exists.  Apply this ownership rule while normalizing so
+    # disk loads, saves, imports and API callers all get the same result.
+    active_subscription_ids={subscription['id'] for subscription in subscriptions}
+    removed_node_ids={node['id'] for node in nodes
+                      if node.get('subscription_id') and node.get('subscription_id') not in active_subscription_ids}
+    if removed_node_ids:
+        nodes=[node for node in nodes if node['id'] not in removed_node_ids]
+
+    live_node_ids={node['id'] for node in nodes}
+    for subscription in subscriptions:
+        subscription['node_ids']=[node_id for node_id in subscription['node_ids'] if node_id in live_node_ids]
+
+    # Remove deleted nodes from groups.  A non-direct group with no remaining
+    # members cannot be rendered by any supported core, so remove the now
+    # unusable group and its dependent route mappings instead of leaving an
+    # invalid reference that can block the entire configuration save.
+    removed_group_ids=set()
+    for group in groups:
+        group['node_ids']=[node_id for node_id in group['node_ids'] if node_id in live_node_ids]
+        if group.get('selected') not in group['node_ids']:
+            group['selected']=''
+        if group['id']!='direct' and not group['node_ids']:
+            removed_group_ids.add(group['id'])
+    if removed_group_ids:
+        groups=[group for group in groups if group['id'] not in removed_group_ids]
+        routes=[route for route in routes if route['target'] not in removed_group_ids]
+        rule_groups=[rule for rule in rule_groups if rule['target'] not in removed_group_ids]
+
+    group_ids={group['id'] for group in groups}
+    platforms={key:item for key,item in platforms.items() if item['group_id'] in group_ids}
+
     control=source.get('control') if isinstance(source.get('control'),dict) else {}
     raw_preferences=source.get('core_preferences') if isinstance(source.get('core_preferences'),dict) else {}
     legacy_preferences='core_preferences' not in source

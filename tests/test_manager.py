@@ -170,7 +170,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.16',html)
+        self.assertIn('流量控制 · 0.3.17',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('kernel-resources',script)
@@ -913,6 +913,34 @@ class TestConfigurationRules(unittest.TestCase):
         deleted=next(node for node in manager.state['nodes'] if node['id']=='new-node')
         self.assertTrue(deleted['invalid_reference']); self.assertFalse(deleted['enabled'])
         self.assertEqual([item['id'] for item in removed['deleted']],['new-node'])
+
+    def test_deleted_subscription_cascades_owned_nodes_and_group_references(self):
+        manager = self._manager_for_runtime()
+        raw = copy.deepcopy(manager.state)
+        raw['subscriptions'] = [item for item in raw['subscriptions'] if item['id'] != 'sub-hk']
+        normalized = manager._normalize(raw)
+
+        self.assertEqual([node['id'] for node in normalized['nodes']], ['sg-1'])
+        self.assertEqual([item['id'] for item in normalized['subscriptions']], ['sub-sg'])
+        self.assertEqual([group['id'] for group in normalized['groups']], ['direct', 'sg'])
+        self.assertEqual(normalized['groups'][1]['node_ids'], ['sg-1'])
+        self.assertEqual(normalized['routes'], [])
+        manager.state = normalized
+        probe = asyncio.run(manager._probe_one({'node_id': 'hk-1'}))
+        self.assertEqual(probe['status'], 'skipped')
+        self.assertEqual(probe['reason'], '节点不存在')
+
+    def test_persist_removes_health_for_nodes_owned_by_deleted_subscription(self):
+        manager = self._manager_for_runtime()
+        manager.health = {'hk-1': {'status': 'ok'}, 'sg-1': {'status': 'ok'}}
+        state = copy.deepcopy(manager.state)
+        state['subscriptions'] = [item for item in state['subscriptions'] if item['id'] != 'sub-hk']
+
+        asyncio.run(manager.persist(state))
+
+        self.assertNotIn('hk-1', manager.health)
+        self.assertEqual(set(manager.health), {'sg-1'})
+        self.assertNotIn('hk-1', {node['id'] for node in manager.state['nodes']})
 
     def test_manual_interval_zero_stays_manual_after_failure(self):
         manager=self._manager_for_runtime()
