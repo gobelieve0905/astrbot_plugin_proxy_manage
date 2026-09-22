@@ -37,6 +37,11 @@
   </main>
   <datalist id="sub-groups"><option>主力</option><option>备用</option><option>测试</option></datalist>
   <dialog id="diff" aria-labelledby="diff-title"><div class="dialog-head"><div><small>配置事务</small><h2 id="diff-title">确认配置变更</h2></div><button id="cancel" type="button" class="quiet" aria-label="取消配置变更">取消</button></div><pre id="diff-text"></pre><div class="dialog-actions"><button id="confirm" type="button" class="primary">确认保存</button></div></dialog>
+  <dialog id="subscription-import-dialog" class="import-dialog" aria-labelledby="subscription-import-title">
+    <div class="dialog-head"><div><small id="subscription-import-kicker">订阅来源</small><h2 id="subscription-import-title">导入订阅</h2></div><button id="subscription-import-close" type="button" class="quiet" aria-label="关闭订阅导入弹窗">关闭</button></div>
+    <div id="subscription-import-body" class="import-dialog-body"></div>
+    <div id="subscription-import-actions" class="dialog-actions"></div>
+  </dialog>
   <script src="./app.js"></script>
 </body>
 </html>

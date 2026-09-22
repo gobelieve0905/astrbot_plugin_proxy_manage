@@ -716,6 +716,28 @@ class ProxyManager(Star):
     def _traffic_header(headers:httpx.Headers):
         return traffic_header(headers)
 
+    @staticmethod
+    def _preview_node(node:dict) -> dict:
+        """Return only safe, useful node metadata for the import preview."""
+        endpoint=str(node.get('endpoint',''))
+        if endpoint:
+            endpoint=urlparse(endpoint).scheme+'://'+CONFIGURED
+        support=node.get('support') if isinstance(node.get('support'),dict) else {}
+        source=node.get('source') if isinstance(node.get('source'),dict) else {}
+        return {
+            'name':str(node.get('display_name') or node.get('name') or '未命名节点')[:120],
+            'protocol':str(node.get('protocol') or 'unknown')[:24],
+            'region':str(node.get('region') or '其他')[:40],
+            'engine':str(node.get('engine') or '')[:24],
+            'endpoint':endpoint,
+            'format':str(source.get('format') or '')[:24],
+            'enabled':bool(node.get('enabled',False)),
+            'support':{'status':str(support.get('status') or 'unverified')[:24],
+                       'reason':str(support.get('reason') or '')[:200]},
+            'suspected_notice':bool(node.get('suspected_notice',False)),
+            'notice_reason':str(node.get('notice_reason') or '')[:160],
+        }
+
     def _cache_preview(self,items:list[dict]):
         preview_id=uuid.uuid4().hex; now=int(time.time())
         self.previews={key:value for key,value in self.previews.items() if now-value.get('at',0)<900}
@@ -728,6 +750,9 @@ class ProxyManager(Star):
             payload=await request.json(); urls=payload.get('urls',[])
             if not isinstance(urls,list) or not urls: raise ValueError('请输入订阅链接')
             if len(urls)>10: raise ValueError('每次最多预览 10 个订阅')
+            mode=str(payload.get('mode') or 'single')
+            if mode not in {'single','batch'}: raise ValueError('订阅预览模式无效')
+            if mode=='single' and len(urls)!=1: raise ValueError('单条导入一次只能预览一个订阅链接')
             group=str(payload.get('group','默认'))[:40] or '默认'
             interval=int(payload['interval']) if payload.get('interval') is not None else 60
             interval=0 if interval<=0 else max(5,min(interval,1440))
@@ -748,7 +773,8 @@ class ProxyManager(Star):
             preview_id=self._cache_preview(items)
             return json_response({'preview_id':preview_id,'items':[
                 {'name':item['name'],'url':urlparse(item['url']).scheme+'://[configured]',
-                 'group':item['group'],'interval':item['interval'],'summary':item['summary']} for item in items]})
+                 'group':item['group'],'interval':item['interval'],'summary':item['summary'],
+                 'nodes':[self._preview_node(node) for node in item['nodes']]} for item in items]})
         except (ValueError,httpx.HTTPError,OSError) as exc:
             return error_response(str(exc) if isinstance(exc,ValueError) else '订阅预览请求失败')
 
@@ -861,7 +887,7 @@ class ProxyManager(Star):
 
     async def subscription_import(self):
         try:
-            payload=await request.json(); preview_id=str(payload.get('preview_id','')); imported=[]
+            payload=await request.json(); preview_id=str(payload.get('preview_id','')); imported=[]; imported_node_ids=[]
             async with self.operation_lock:
                 preview=self.previews.get(preview_id)
                 if not preview or int(time.time())-int(preview.get('at',0))>=900:
@@ -890,13 +916,15 @@ class ProxyManager(Star):
                         now=int(time.time()); interval=int(item['interval'])
                         subscription['updated_at']=now
                         subscription['next_refresh_at']=now+interval*60 if interval else 0
+                        imported_node_ids.extend(subscription['node_ids'])
                         imported.append(subscription['id'])
                     self.state=self._validate(self.state); await self.persist(self.state); self.persist_health()
                     self.previews.pop(preview_id,None)
                 except Exception:
                     self.state=previous; self.health=previous_health; raise
             self.event({'action':'subscription_import','result':'ok','count':len(imported)})
-            return json_response(self.snapshot())
+            snapshot=self.snapshot(); snapshot['imported_node_ids']=list(dict.fromkeys(imported_node_ids))
+            return json_response(snapshot)
         except (ValueError,OSError) as exc: return error_response(str(exc))
 
     def _control(self):

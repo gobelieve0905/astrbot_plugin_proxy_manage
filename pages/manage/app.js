@@ -8,7 +8,7 @@ if (!api || typeof api.ready !== 'function') {
 }
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
 const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名和目标出口',platforms:'生成域名规则；这不代表平台 SDK 已接入代理',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
-let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importing=false, probeTask=null
+let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',group:'主力',interval:60}, importing=false, probeTask=null, probeLabel='测速'
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
 let noticeTimer=null
@@ -76,10 +76,7 @@ function render(){
   } else if(tab==='subscriptions'){
     const groups=[...new Set(state.subscriptions.map(item=>item.group))]; const current=$('#group-filter')?.value||'全部'
     const shown=current==='全部'?state.subscriptions:state.subscriptions.filter(item=>item.group===current)
-    html=`<section class="panel"><div class="bar"><h2>导入订阅</h2><button id="preview-import">预览导入</button></div>
-      <textarea id="sub-links" rows="4" placeholder="每行一个 HTTP/HTTPS 订阅链接"></textarea>
-      <div class="import-form"><input id="import-group" value="主力" placeholder="订阅分组"><input id="import-interval" type="number" min="0" max="1440" value="60"><small>间隔分钟，0 表示手动</small><button id="confirm-import" ${importPreview?'':'disabled'}>确认导入</button></div>
-      <pre id="import-result">${esc(importPreview?JSON.stringify(importPreview.items.map(item=>({url:item.url,summary:item.summary})),null,2):'导入前会先预览协议、地区、命名规则和订阅流量。')}</pre></section>
+    html=`<section class="panel import-entry-panel"><div class="bar"><div><small>来源接入</small><h2>导入订阅</h2><p class="muted">先预览节点、协议和地区，再确认写入配置。</p></div><div class="actions"><button id="open-single-import" class="primary">导入订阅</button><button id="open-batch-import">批量导入</button></div></div><div class="import-entry-note"><span class="import-entry-icon" aria-hidden="true">↳</span><div><b>单条导入更适合逐个核对</b><p>批量导入会在独立弹窗中处理多条链接，不会挤占当前页面。</p></div></div>${probeTask?`<div class="probe-progress import-probe-progress"><progress value="${probeTask.completed}" max="${probeTask.total}"></progress><span>${probeLabel}：${probeTask.completed}/${probeTask.total}</span><button id="cancel-probe" ${probeTask.status!=='running'?'disabled':''}>取消</button></div>`:''}</section>
       <section class="panel"><div class="bar"><h2>订阅列表</h2><button id="add-subscription">新增订阅</button></div>
       <div class="filter"><select id="group-filter"><option>全部</option>${groups.map(group=>`<option ${group===current?'selected':''}>${esc(group)}</option>`).join('')}</select></div>
       ${shown.map(item=>subHtml(item)).join('')||'<p class="muted">暂无订阅。</p>'}</section>`
@@ -126,6 +123,40 @@ function subHtml(item){
     ${item.errors?.length?`<details><summary>错误历史 ${item.errors.length}</summary>${item.errors.slice().reverse().map(error=>`<div class="node-error">${new Date(error.at*1000).toLocaleString()} · ${esc(error.message)}</div>`).join('')}</details>`:''}</div>`
 }
 
+function importTraffic(traffic){
+  traffic=traffic||{}; const used=(Number(traffic.upload||0)+Number(traffic.download||0));
+  if(!used&&!traffic.total)return '无流量信息';
+  return traffic.total?`${bytes(used)} / ${bytes(traffic.total)}`:`已用 ${bytes(used)}`
+}
+function importNodeHtml(node){
+  const support=node.support||{}, supported=support.status==='supported', statusLabel=supported?'已支持':support.status==='unsupported'?'不支持':'待验证';
+  return `<div class="import-node-row"><div class="import-node-main"><b>${esc(node.name||'未命名节点')}</b><small>${esc(node.endpoint||'连接参数未返回')}</small></div><div class="import-node-tags"><span class="chip">${esc(node.protocol||'unknown')}</span><span class="chip">${esc(node.region||'其他')}</span><span class="chip ${supported?'ok':support.status==='unsupported'?'invalid':'pending'}">${statusLabel}</span>${node.suspected_notice?'<span class="chip pending">疑似提示</span>':''}</div></div>`
+}
+function importPreviewItemHtml(item,index){
+  const summary=item.summary||{}, protocols=Object.entries(summary.protocols||{}), regions=Object.entries(summary.regions||{}), nodes=item.nodes||[], visible=nodes.slice(0,180), valid=Boolean(summary.ok);
+  return `<article class="import-preview-card"><div class="import-preview-card-head"><div><small>来源 ${index+1} · ${esc(item.group||'默认')}</small><h3>${esc(item.url||'订阅连接')}</h3></div><span class="import-preview-status ${valid?'ok':'invalid'}">${valid?'可导入':'无法解析'}</span></div><div class="import-stats"><div><b>${summary.count||0}</b><span>节点</span></div><div><b>${protocols.length}</b><span>协议</span></div><div><b>${regions.length}</b><span>地区</span></div><div><b>${esc(importTraffic(summary.traffic))}</b><span>流量</span></div>${summary.traffic?.expire?`<div><b>${esc(expiry(summary.traffic.expire))}</b><span>到期</span></div>`:''}</div><div class="import-chip-groups"><div><small>协议</small><span>${protocols.map(([name,count])=>`<span class="chip">${esc(name)} · ${count}</span>`).join('')||'<em>未识别</em>'}</span></div><div><small>地区</small><span>${regions.map(([name,count])=>`<span class="chip">${esc(name)} · ${count}</span>`).join('')||'<em>其他</em>'}</span></div></div>${summary.error?`<p class="import-preview-error">${esc(summary.error)}</p>`:''}<div class="import-node-heading"><b>节点清单</b><span>${nodes.length}${nodes.length>180?'（展示前 180 个）':''}</span></div><div class="import-node-list">${visible.map(importNodeHtml).join('')||'<p class="muted">没有可展示的节点。</p>'}</div></article>`
+}
+function renderImportDialog(){
+  const dialog=$('subscription-import-dialog'),body=$('subscription-import-body'),actions=$('subscription-import-actions'); if(!dialog||!body||!actions)return;
+  const batch=importMode==='batch'; $('subscription-import-kicker').textContent=batch?'批量导入':'单条导入'; $('subscription-import-title').textContent=importPreview?(batch?'批量预览':'订阅预览'):(batch?'批量导入订阅':'导入订阅');
+  if(!importPreview){
+    body.innerHTML=batch?`<div class="import-dialog-intro"><b>一次预览多条订阅</b><p>每行一个 HTTP/HTTPS 链接。预览会分别列出节点、协议、地区和流量信息。</p></div><label class="field-label" for="batch-sub-links">订阅链接</label><textarea id="batch-sub-links" rows="7" placeholder="https://example.com/sub-a\nhttps://example.com/sub-b">${esc(importDraft.urls)}</textarea>`:`<div class="import-dialog-intro"><b>先看清节点，再确认导入</b><p>单条导入一次只处理一个订阅连接，避免误把多条来源混在同一份预览里。</p></div><label class="field-label" for="import-url">订阅链接</label><input id="import-url" type="url" inputmode="url" autocomplete="off" placeholder="https://example.com/sub" value="${esc(importDraft.url)}">`;
+    body.innerHTML+=`<div class="import-options"><label class="field-label" for="import-group">订阅分组<input id="import-group" value="${esc(importDraft.group)}" placeholder="主力"></label><label class="field-label" for="import-interval">刷新间隔（分钟）<input id="import-interval" type="number" min="0" max="1440" value="${esc(importDraft.interval)}"><small>0 表示手动刷新</small></label></div><p class="import-dialog-note">预览只读取和解析订阅，不会写入配置；确认后才会导入，并自动发起一次节点测速。</p>`;
+    actions.innerHTML=`<button id="import-dialog-cancel" type="button" class="quiet">取消</button><button id="import-dialog-preview" type="button" class="primary">${batch?'预览批量订阅':'预览订阅'}</button>`;
+  }else{
+    const items=importPreview.items||[], total=items.reduce((count,item)=>count+Number(item.summary?.count||0),0), valid=items.filter(item=>item.summary?.ok).length;
+    body.innerHTML=`<div class="import-preview-summary"><div><b>${items.length}</b><span>订阅来源</span></div><div><b>${total}</b><span>解析节点</span></div><div><b>${valid}</b><span>可导入来源</span></div><p>确认后将写入 ${esc(importDraft.group||'默认')} 分组；已导入节点会自动开始测速。</p></div><div class="import-preview-list">${items.map(importPreviewItemHtml).join('')}</div>`;
+    actions.innerHTML=`<button id="import-dialog-back" type="button" class="quiet">返回修改</button><button id="import-dialog-confirm" type="button" class="primary" ${valid?'':'disabled'}>确认导入${valid?`（${valid} 条）`:''}</button>`;
+  }
+  $('import-dialog-cancel')?.addEventListener('click',closeImportDialog); $('import-dialog-preview')?.addEventListener('click',previewImport); $('import-dialog-back')?.addEventListener('click',()=>{importPreview=null;renderImportDialog()}); $('import-dialog-confirm')?.addEventListener('click',confirmImport)
+}
+function openImportDialog(mode='single'){
+  importMode=mode; importPreview=null; importDraft={url:'',urls:'',group:'主力',interval:60}; renderImportDialog(); $('subscription-import-dialog')?.showModal()
+}
+function closeImportDialog(){
+  importPreview=null; const dialog=$('subscription-import-dialog'); if(dialog?.open)dialog.close();
+}
+
 function bind(){
   document.querySelectorAll('[data-k]').forEach(input=>input.addEventListener('change',()=>{
     const row=input.closest('[data-i]'); if(!row)return
@@ -168,8 +199,8 @@ function bind(){
   })
   $('add-subscription')?.addEventListener('click',()=>{state.subscriptions.push({id:'sub-'+Date.now(),name:'新订阅',url:'',group:'默认',enabled:true,interval:60,node_ids:[],updated_at:0,next_refresh_at:0,upload:0,download:0,total:0,expire:0,last_error:'',consecutive_errors:0,errors:[]});render()})
   $('group-filter')?.addEventListener('change',render)
-  $('preview-import')?.addEventListener('click',previewImport)
-  $('confirm-import')?.addEventListener('click',confirmImport)
+  $('open-single-import')?.addEventListener('click',()=>openImportDialog('single'))
+  $('open-batch-import')?.addEventListener('click',()=>openImportDialog('batch'))
   document.querySelectorAll('[data-refresh]').forEach(button=>button.addEventListener('click',()=>refreshSubscription(button.dataset.refresh)))
   document.querySelectorAll('[data-test]').forEach(button=>button.addEventListener('click',()=>startProbe([button.dataset.test])))
   $('test-all')?.addEventListener('click',()=>startProbe(state.nodes.map(node=>node.id)))
@@ -213,13 +244,16 @@ function bind(){
 function readControl(){}
 async function saveChanges(){ readControl(); state=await api.apiPost('save',state); original=structuredClone(state) }
 async function previewImport(){
-  const urls=$('sub-links').value.split(/\s+/).filter(Boolean); if(!urls.length)return note('请先输入订阅链接',true)
-  const button=$('preview-import'); button.disabled=true; note('正在预览订阅...')
-  try{ importPreview=await api.apiPost('subscription-preview',{urls,group:$('import-group').value||'默认',interval:Number($('import-interval').value)});render();note('预览完成，请确认后导入') }catch(error){note(error.message,true)}finally{button.disabled=false}
+  const batch=importMode==='batch', raw=batch?$('batch-sub-links')?.value||'':$('import-url')?.value||'', urls=raw.split(/\s+/).map(value=>value.trim()).filter(Boolean)
+  if(!urls.length)return note('请先输入订阅链接',true)
+  if(!batch&&urls.length!==1)return note('单条导入一次只能填写一个订阅链接',true)
+  importDraft={url:batch?'':urls[0]||'',urls:batch?raw:'',group:$('import-group')?.value||'默认',interval:Number($('import-interval')?.value||0)}
+  const button=$('import-dialog-preview'); if(button)button.disabled=true; note(batch?'正在预览批量订阅...':'正在预览订阅...')
+  try{ importPreview=await api.apiPost('subscription-preview',{mode:importMode,urls,group:importDraft.group,interval:importDraft.interval});renderImportDialog();note('预览完成，请核对节点后确认导入') }catch(error){note(error.message,true)}finally{if(button)button.disabled=false}
 }
 async function confirmImport(){
   if(!importPreview||importing)return; importing=true
-  try{ state=await api.apiPost('subscription-import',{preview_id:importPreview.preview_id});original=structuredClone(state);importPreview=null;render();note('订阅导入成功') }catch(error){note(error.message,true)}finally{importing=false}
+  try{ const result=await api.apiPost('subscription-import',{preview_id:importPreview.preview_id}), importedNodeIds=result.imported_node_ids||[], snapshot=structuredClone(result.snapshot||result); delete snapshot.imported_node_ids; state=snapshot; original=structuredClone(state); closeImportDialog(); render(); note(importedNodeIds.length?'订阅导入成功，正在测速...':'订阅导入成功，未发现可测速节点'); if(importedNodeIds.length)startProbe(importedNodeIds,'导入后测速') }catch(error){note(error.message,true)}finally{importing=false}
 }
 async function refreshSubscription(id){
   try{ note('正在刷新订阅...'); const result=await api.apiPost('subscription-refresh',{id});state=result.snapshot;original=structuredClone(state);render();const d=result.result.diff;note(`订阅刷新成功：新增 ${d.added.length}、变更 ${d.changed.length}、删除 ${d.deleted.length}、未变 ${d.unchanged.length}`) }catch(error){note(error.message,true)}
@@ -239,21 +273,23 @@ async function selectKernel(adapter){try{await api.apiPost('adapter-select',{ada
 async function pollKernelInstall(adapter=state.control?.adapter||kernelStatus.adapter){clearTimeout(resourcePollTimers.get(adapter));try{const install=await api.apiPost('kernel-install-status',{adapter});if(adapter===state.control?.adapter||adapter===kernelStatus.adapter)kernelStatus.install=install;const item=state.adapters?.find(value=>value.id===adapter);if(item)item.install=install;if(install.state==='running'){render();resourcePollTimers.set(adapter,setTimeout(()=>pollKernelInstall(adapter),700))}else{resourcePollTimers.delete(adapter);await load();note(install.message,install.state!=='completed'&&install.state!=='cancelled')}}catch(error){resourcePollTimers.delete(adapter);note(error.message,true)}}
 async function kernelAction(route,message){try{note(message);await api.apiPost(route,{});await load();note('内核状态已更新')}catch(error){note(error.message,true)}}
 async function uploadKernel(adapter,version){const file=document.querySelector(`[data-kernel-file="${CSS.escape(adapter)}"]`)?.files?.[0];if(!file)return note('请选择与当前平台匹配的固定版本制品',true);if(file.size>64*1024*1024)return note('制品超过 64 MiB 限制',true);const item=state.adapters?.find(value=>value.id===adapter);if(item)item.install={state:'running',operation:'install',phase:'uploading',progress:10,message:'正在上传离线制品'};openKernelResources.add(adapter);render();try{note('正在校验离线制品...');const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',',2)[1]);reader.onerror=reject;reader.readAsDataURL(file)});await api.apiPost('kernel-upload',{adapter,version,content});await load();note('离线制品已校验并安装；请在资源栏中启用')}catch(error){await load();note(error.message,true)}}
-async function startProbe(nodeIds){
-  try{const started=await api.apiPost('probe-task',{node_ids:nodeIds,timeout:5,concurrency:5});probeTask={id:started.task_id,total:started.total,completed:0,status:'running'};render();note('测速任务已开始');pollProbe()}catch(error){note(error.message,true)}
+async function startProbe(nodeIds,label='测速'){
+  nodeIds=[...new Set((nodeIds||[]).filter(Boolean))]; if(!nodeIds.length)return note('没有可测速的节点',true)
+  try{const started=await api.apiPost('probe-task',{node_ids:nodeIds,timeout:5,concurrency:5});probeLabel=label;probeTask={id:started.task_id,total:started.total,completed:0,status:'running'};render();note(label+'任务已开始');pollProbe()}catch(error){note(error.message,true)}
 }
 async function pollProbe(){
   if(!probeTask)return
-  try{const task=await api.apiPost('probe-task-status',{task_id:probeTask.id});probeTask=task;for(const result of task.results)if(result.health)state.health[result.node_id]=result.health;render();if(task.status==='running')setTimeout(pollProbe,500);else note(`测速完成：${task.summary.ok} 可用，${task.summary.error+task.summary.timeout} 失败，${task.summary.skipped} 未执行，${task.summary.cancelled} 已取消`)}catch(error){note(error.message,true)}
+  try{const task=await api.apiPost('probe-task-status',{task_id:probeTask.id});probeTask=task;for(const result of task.results)if(result.health)state.health[result.node_id]=result.health;render();if(task.status==='running')setTimeout(pollProbe,500);else note(`${probeLabel}完成：${task.summary.ok} 可用，${task.summary.error+task.summary.timeout} 失败，${task.summary.skipped} 未执行，${task.summary.cancelled} 已取消`)}catch(error){note(error.message,true)}
 }
-async function load(){ try{ state=await api.apiGet('state');kernelStatus=await api.apiGet('kernel-status');original=structuredClone(state);controlResult=null;importPreview=null;render();for(const item of (state.adapters||[]))if(item.install?.state==='running')pollKernelInstall(item.id) }catch(error){note(error.message,true)} }
+async function load(){ try{ state=await api.apiGet('state');kernelStatus=await api.apiGet('kernel-status');original=structuredClone(state);controlResult=null;importPreview=null;if($('subscription-import-dialog')?.open)$('subscription-import-dialog').close();render();for(const item of (state.adapters||[]))if(item.install?.state==='running')pollKernelInstall(item.id) }catch(error){note(error.message,true)} }
 
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render();if(tab==='groups')refreshGroupStatus()}))
-$('reload').addEventListener('click',load)
-$('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('rollback',{});original=structuredClone(state);controlResult=null;importPreview=null;render();note('已恢复上一版配置')}catch(error){note(error.message,true)}})
-$('save').addEventListener('click',()=>{readControl();$('diff-text').textContent=JSON.stringify({before:original,after:state},null,2);$('diff').showModal()})
-$('cancel').addEventListener('click',()=>$('diff').close())
-$('confirm').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存')}catch(error){note(error.message,true)}})
+  $('reload').addEventListener('click',load)
+  $('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('rollback',{});original=structuredClone(state);controlResult=null;importPreview=null;render();note('已恢复上一版配置')}catch(error){note(error.message,true)}})
+  $('save').addEventListener('click',()=>{readControl();$('diff-text').textContent=JSON.stringify({before:original,after:state},null,2);$('diff').showModal()})
+  $('cancel').addEventListener('click',()=>$('diff').close())
+  $('subscription-import-close').addEventListener('click',closeImportDialog)
+  $('confirm').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存')}catch(error){note(error.message,true)}})
 ;(async()=>{try{await api.ready(); await load()}catch(error){note(error.message || '页面初始化失败，请重新打开插件页面',true)}})()
 }
 

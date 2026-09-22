@@ -531,6 +531,26 @@ class TestConfigurationRules(unittest.TestCase):
         manager.events = []; manager.health = {}
         self.assertEqual(manager.snapshot()["nodes"][0]["endpoint"], "socks5://[configured]")
 
+    def test_subscription_preview_node_only_exposes_safe_metadata(self):
+        node = {
+            "name": "香港 AnyTLS",
+            "display_name": "香港 AnyTLS",
+            "protocol": "anytls",
+            "engine": "mihomo",
+            "endpoint": "anytls://user:node-secret@example.com:443?sni=example.com",
+            "connection": {"uri": "anytls://user:node-secret@example.com:443", "password": "node-secret"},
+            "source": {"format": "uri"},
+            "support": {"status": "supported", "reason": ""},
+            "region": "香港",
+            "enabled": True,
+        }
+        preview = self.module.ProxyManager._preview_node(node)
+        self.assertEqual(preview["endpoint"], "anytls://[configured]")
+        self.assertEqual(preview["protocol"], "anytls")
+        self.assertEqual(preview["region"], "香港")
+        self.assertNotIn("node-secret", json.dumps(preview, ensure_ascii=False))
+        self.assertNotIn("connection", preview)
+
     def test_redacted_snapshot_round_trip_preserves_complete_credentials(self):
         manager = self.module.ProxyManager.__new__(self.module.ProxyManager)
         raw = {
