@@ -920,10 +920,11 @@ class TestConfigurationRules(unittest.TestCase):
         raw['subscriptions'] = [item for item in raw['subscriptions'] if item['id'] != 'sub-hk']
         normalized = manager._normalize(raw)
 
-        self.assertEqual([node['id'] for node in normalized['nodes']], ['sg-1'])
+        self.assertEqual(len(normalized['nodes']), 1)
+        sg_id = normalized['nodes'][0]['id']
         self.assertEqual([item['id'] for item in normalized['subscriptions']], ['sub-sg'])
         self.assertEqual([group['id'] for group in normalized['groups']], ['direct', 'sg'])
-        self.assertEqual(normalized['groups'][1]['node_ids'], ['sg-1'])
+        self.assertEqual(normalized['groups'][1]['node_ids'], [sg_id])
         self.assertEqual(normalized['routes'], [])
         manager.state = normalized
         probe = asyncio.run(manager._probe_one({'node_id': 'hk-1'}))
@@ -932,15 +933,18 @@ class TestConfigurationRules(unittest.TestCase):
 
     def test_persist_removes_health_for_nodes_owned_by_deleted_subscription(self):
         manager = self._manager_for_runtime()
-        manager.health = {'hk-1': {'status': 'ok'}, 'sg-1': {'status': 'ok'}}
+        manager.state = manager._normalize(manager.state)
+        hk_id = next(node['id'] for node in manager.state['nodes'] if node['subscription_id'] == 'sub-hk')
+        sg_id = next(node['id'] for node in manager.state['nodes'] if node['subscription_id'] == 'sub-sg')
+        manager.health = {hk_id: {'status': 'ok'}, sg_id: {'status': 'ok'}}
         state = copy.deepcopy(manager.state)
         state['subscriptions'] = [item for item in state['subscriptions'] if item['id'] != 'sub-hk']
 
         asyncio.run(manager.persist(state))
 
-        self.assertNotIn('hk-1', manager.health)
-        self.assertEqual(set(manager.health), {'sg-1'})
-        self.assertNotIn('hk-1', {node['id'] for node in manager.state['nodes']})
+        self.assertNotIn(hk_id, manager.health)
+        self.assertEqual(set(manager.health), {sg_id})
+        self.assertNotIn(hk_id, {node['id'] for node in manager.state['nodes']})
 
     def test_manual_interval_zero_stays_manual_after_failure(self):
         manager=self._manager_for_runtime()
