@@ -178,9 +178,10 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
         for error in item.get('errors',[]) if isinstance(item.get('errors',[]),list) else []:
             if isinstance(error,dict):
                 errors.append({'at':int(error.get('at',0) or 0),'message':str(error.get('message',''))[:300]})
+        subscription_name=' '.join(str(item.get('name') or f'订阅 {index+1}').split())[:80] or f'订阅 {index+1}'
         subscriptions.append({
-            'id':ident(item.get('id')) or f'sub-{index+1}', 'name':str(item.get('name',f'订阅 {index+1}'))[:80],
-            'url':str(item['url'])[:1000], 'group':str(item.get('group','默认'))[:40] or '默认',
+            'id':ident(item.get('id')) or f'sub-{index+1}', 'name':subscription_name,
+            'url':str(item['url'])[:1000], 'group':'',
             'enabled':bool(item.get('enabled',True)), 'interval':interval,
             'node_ids':list(dict.fromkeys(aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value))),
             'updated_at':int(item.get('updated_at',0) or 0), 'next_refresh_at':int(item.get('next_refresh_at',0) or 0),
@@ -297,10 +298,15 @@ def validate_state(value: object) -> dict:
             key=(domain['host'],domain['match'],rule_group['priority'])
             if key in seen_domains: raise ValueError('规则冲突：'+domain['host']+' 与 '+seen_domains[key])
             seen_domains[key]=rule_group['name']
-    sub_ids=set()
+    sub_ids=set(); sub_names={}
     for subscription in state['subscriptions']:
         if subscription['id'] in sub_ids: raise ValueError('订阅 ID 重复：'+subscription['id'])
         sub_ids.add(subscription['id'])
+        name=' '.join(str(subscription.get('name','')).split())
+        if not name: raise ValueError('订阅名称不能为空')
+        name_key=name.casefold()
+        if name_key in sub_names: raise ValueError('订阅名称重复：'+name)
+        sub_names[name_key]=subscription['id']
         if not safe_url(subscription['url']): raise ValueError('订阅地址只允许 HTTP 或 HTTPS')
         if subscription['interval'] and not 5<=subscription['interval']<=1440:
             raise ValueError('订阅自动刷新间隔必须在 5 到 1440 分钟之间')

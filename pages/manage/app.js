@@ -8,7 +8,7 @@ if (!api || typeof api.ready !== 'function') {
 }
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
 const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名和目标出口',platforms:'生成域名规则；这不代表平台 SDK 已接入代理',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
-let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',group:'主力',interval:60}, importing=false, probeTask=null, probeLabel='测速'
+let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', importDialogReturnFocus=null
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
 let noticeTimer=null
@@ -28,6 +28,16 @@ function health(id){ return state.health?.[id]||{status:'unknown',latency_ms:nul
 function statusLabel(item){ return {ok:'可用',error:'异常',timeout:'超时',pending:'待接入内核',unknown:'未检测',invalid:'引用失效'}[item.status]||'未检测' }
 function kernelStateLabel(item){ return {running:'运行中',running_limited:'运行中（有限控制）',installed:'已安装',update_available:'有更新',not_installed:'未安装',invalid:'校验失败',unsupported:'平台不支持',stopped:'已停止',failed:'运行失败',connection_failed:'连接失败',auth_failed:'认证失败',disabled:'未启用'}[item?.state]||'未检查' }
 function kernelStateClass(item){ return ['running','running_limited','installed'].includes(item?.state)?'ok':(['update_available','not_installed','disabled'].includes(item?.state)?'pending':(['invalid','unsupported','failed','connection_failed','auth_failed'].includes(item?.state)?'invalid':'')) }
+function renderTaskBanner(){
+  const banner=$('task-banner'), running=probeTask?.status==='running'; if(!banner)return
+  if(!running){banner.hidden=true;banner.textContent='';return}
+  const total=Math.max(1,Number(probeTask.total||0)), completed=Math.min(total,Number(probeTask.completed||0));
+  banner.innerHTML=`<div class="task-banner-inner"><progress aria-label="${esc(probeLabel)}进度" value="${completed}" max="${total}"></progress><span>${esc(probeLabel)}：${completed}/${total}</span><button id="cancel-probe" type="button" ${probeTask.status!=='running'?'disabled':''}>取消</button></div>`; banner.hidden=false
+}
+function requiresKernelProbe(nodeIds){
+  const direct=new Set(['http','https','socks','socks5','socks5h']);
+  return nodeIds.some(id=>{const node=state.nodes.find(item=>item.id===id);return node&&!direct.has(String(node.protocol||'').toLowerCase())})
+}
 function kernelCard(item,current){
   const artifact=item.artifact||{}, task=item.install||{}, busy=task.state==='running'
   const version=artifact.selected_version||artifact.recommended_version||artifact.version||'--'
@@ -74,22 +84,19 @@ function render(){
     html+=`<section class="panel"><h2>实际出站验证</h2><p class="muted">核心验证使用 AstrBot 当前进程的全局代理环境；只有目标返回出口 IP 且内核记录可关联规则与链路时才确认。</p><div class="inline"><input id="verify-url" value="https://api.ipify.org?format=json"><button id="verify-astrbot-egress">验证 AstrBot 核心出口</button><button id="verify-outbound">验证稳定入口</button></div>${verificationPanel(state.application?.verification)}<pre id="verify-result">${esc(state.application?.verification?JSON.stringify(state.application.verification,null,2):'尚未验证。')}</pre></section>`
     html+=`<section class="panel"><h2>首次使用</h2><div class="steps"><span>1 安装自管内核</span><span>2 导入订阅</span><span>3 筛选并选择节点</span><span>4 建立代理组</span><span>5 配置规则组</span><span>6 应用配置</span><span>7 验证实际出口</span></div></section>`
   } else if(tab==='subscriptions'){
-    const groups=[...new Set(state.subscriptions.map(item=>item.group))]; const current=$('#group-filter')?.value||'全部'
-    const shown=current==='全部'?state.subscriptions:state.subscriptions.filter(item=>item.group===current)
-    html=`<section class="panel import-entry-panel"><div class="bar"><div><small>来源接入</small><h2>导入订阅</h2><p class="muted">先预览节点、协议和地区，再确认写入配置。</p></div><div class="actions"><button id="open-single-import" class="primary">导入订阅</button><button id="open-batch-import">批量导入</button></div></div><div class="import-entry-note"><span class="import-entry-icon" aria-hidden="true">↳</span><div><b>单条导入更适合逐个核对</b><p>批量导入会在独立弹窗中处理多条链接，不会挤占当前页面。</p></div></div>${probeTask?`<div class="probe-progress import-probe-progress"><progress value="${probeTask.completed}" max="${probeTask.total}"></progress><span>${probeLabel}：${probeTask.completed}/${probeTask.total}</span><button id="cancel-probe" ${probeTask.status!=='running'?'disabled':''}>取消</button></div>`:''}</section>
+    const shown=state.subscriptions
+    html=`<section class="panel import-entry-panel"><div class="bar"><div><small>来源接入</small><h2>导入订阅</h2><p class="muted">先预览节点、协议和地区，再确认写入配置。</p></div><div class="actions"><button id="open-single-import" class="primary">导入订阅</button><button id="open-batch-import">批量导入</button></div></div></section>
       <section class="panel"><div class="bar"><h2>订阅列表</h2><button id="add-subscription">新增订阅</button></div>
-      <div class="filter"><select id="group-filter"><option>全部</option>${groups.map(group=>`<option ${group===current?'selected':''}>${esc(group)}</option>`).join('')}</select></div>
       ${shown.map(item=>subHtml(item)).join('')||'<p class="muted">暂无订阅。</p>'}</section>`
   } else if(tab==='nodes'){
     const source=$('node-source')?.value||'全部', protocol=$('node-protocol')?.value||'全部', region=$('node-region')?.value||'全部', status=$('node-status')?.value||'全部'
-    const sources=[...new Set(state.nodes.map(node=>node.subscription_id||'手动'))], protocols=[...new Set(state.nodes.map(node=>node.protocol))], regions=[...new Set(state.nodes.map(node=>node.region||'其他'))]
-    const shown=state.nodes.map((node,index)=>({node,index})).filter(({node})=>(source==='全部'||(node.subscription_id||'手动')===source)&&(protocol==='全部'||node.protocol===protocol)&&(region==='全部'||(node.region||'其他')===region)&&(status==='全部'||(node.invalid_reference?'失效':health(node.id).status)===status))
+    const subscriptionNames=Object.fromEntries(state.subscriptions.map(item=>[item.id,item.name||item.id])), sourceEntries=[...new Map(state.nodes.map(node=>[node.subscription_id||'manual',{id:node.subscription_id||'manual',label:node.subscription_id?(subscriptionNames[node.subscription_id]||'未命名订阅'):'手动节点'}])).values()], protocols=[...new Set(state.nodes.map(node=>node.protocol))], regions=[...new Set(state.nodes.map(node=>node.region||'其他'))]
+    const shown=state.nodes.map((node,index)=>({node,index})).filter(({node})=>(source==='全部'||(node.subscription_id||'manual')===source)&&(protocol==='全部'||node.protocol===protocol)&&(region==='全部'||(node.region||'其他')===region)&&(status==='全部'||(node.invalid_reference?'失效':health(node.id).status)===status))
     html=`<section class="panel"><div class="bar"><h2>代理节点</h2><div class="actions"><button id="add">新增节点</button><button id="test-all">批量测速</button></div></div>
-      <div class="filter"><select id="node-source"><option>全部</option>${sources.map(value=>`<option ${value===source?'selected':''}>${esc(value)}</option>`).join('')}</select><select id="node-protocol"><option>全部</option>${protocols.map(value=>`<option ${value===protocol?'selected':''}>${esc(value)}</option>`).join('')}</select><select id="node-region"><option>全部</option>${regions.map(value=>`<option ${value===region?'selected':''}>${esc(value)}</option>`).join('')}</select><select id="node-status"><option>全部</option>${['ok','error','timeout','unknown','失效'].map(value=>`<option ${value===status?'selected':''}>${esc(value)}</option>`).join('')}</select></div>
-      ${probeTask?`<div class="probe-progress"><progress value="${probeTask.completed}" max="${probeTask.total}"></progress><span>${probeTask.completed}/${probeTask.total}</span><button id="cancel-probe" ${probeTask.status!=='running'?'disabled':''}>取消</button></div>`:''}
+      <div class="filter"><select id="node-source"><option value="全部">全部</option>${sourceEntries.map(entry=>`<option value="${esc(entry.id)}" ${entry.id===source?'selected':''}>${esc(entry.label)}</option>`).join('')}</select><select id="node-protocol"><option>全部</option>${protocols.map(value=>`<option ${value===protocol?'selected':''}>${esc(value)}</option>`).join('')}</select><select id="node-region"><option>全部</option>${regions.map(value=>`<option ${value===region?'selected':''}>${esc(value)}</option>`).join('')}</select><select id="node-status"><option>全部</option>${['ok','error','timeout','unknown','失效'].map(value=>`<option ${value===status?'selected':''}>${esc(value)}</option>`).join('')}</select></div>
       ${shown.map(({node,index})=>{const item=health(node.id),support=node.support||{status:'unverified',reason:'尚未验证'};const memberships=state.groups.filter(group=>group.node_ids.includes(node.id)).map(group=>group.name).join('、')||'未加入组';return `<div class="node-card" data-i="${index}">
         <div class="table"><input data-k="name" value="${esc(node.display_name||node.name)}"><span class="chip">${esc(node.protocol||'unknown')} · ${esc(node.engine||'')}</span><span class="chip ${support.status==='supported'?'ok':'pending'}">${esc({supported:'已支持',unverified:'未验证',unsupported:'不支持'}[support.status]||'未验证')}</span><input data-k="endpoint" value="${esc(node.endpoint)}" placeholder="完整连接 URI 或 HTTP/SOCKS 地址"><label><input type="checkbox" data-k="excluded" ${node.excluded?'checked':''}>确认排除测速/组选优</label><button data-del="nodes">删除</button></div>
-        <div class="node-meta"><span class="chip ${node.invalid_reference?'invalid':item.status}">${node.invalid_reference?'引用失效':statusLabel(item)}</span><b>${item.latency_ms??'--'}</b><span>ms</span><span>${time(item.checked_at)}</span><span>${esc(node.subscription_id?'订阅：'+node.subscription_id:'手动节点')}</span><span>${esc(memberships)}</span>${node.suspected_notice?'<span class="chip pending">疑似订阅提示</span>':''}<button data-test="${esc(node.id)}">测速</button></div>
+        <div class="node-meta"><span class="chip ${node.invalid_reference?'invalid':item.status}">${node.invalid_reference?'引用失效':statusLabel(item)}</span><b>${item.latency_ms??'--'}</b><span>ms</span><span>${time(item.checked_at)}</span><span>${esc(node.subscription_id?'订阅：'+(subscriptionNames[node.subscription_id]||'未命名订阅'):'手动节点')}</span><span>${esc(memberships)}</span>${node.suspected_notice?'<span class="chip pending">疑似订阅提示</span>':''}<button data-test="${esc(node.id)}">测速</button></div>
         ${support.reason?`<div class="node-error">${esc(support.reason)}</div>`:''}${node.notice_reason?`<div class="muted">${esc(node.notice_reason)}，请人工确认是否排除。</div>`:''}${item.error?`<div class="node-error">${esc(item.error)}</div>`:''}</div>`}).join('')||'<p class="muted">暂无节点。</p>'}</section>`
   } else if(tab==='groups'){
     const runtimeGroups=controlResult?.groups||[]
@@ -111,12 +118,12 @@ function render(){
   } else {
     html=`<section class="panel"><h2>连接日志</h2>${state.events.slice().reverse().map(event=>`<div class="log">${esc(event.action)} · ${esc(event.result||'')}<small>${new Date(event.at*1000).toLocaleString()}</small></div>`).join('')||'<p class="muted">暂无事件。</p>'}</section>`
   }
-  $('content').innerHTML=html; bind()
+  $('content').innerHTML=html; renderTaskBanner(); bind()
 }
 
 function subHtml(item){
   return `<div class="sub-card" data-i="${state.subscriptions.indexOf(item)}" data-id="${esc(item.id)}">
-    <div class="table"><input data-k="name" value="${esc(item.name)}"><input data-k="group" value="${esc(item.group)}" list="sub-groups"><input data-k="url" value="${esc(item.url)}"><label><input type="checkbox" data-k="enabled" ${item.enabled?'checked':''}>启用</label><button data-del="subscriptions">删除</button></div>
+    <div class="table"><input data-k="name" value="${esc(item.name)}" aria-label="订阅名称"><input data-k="url" value="${esc(item.url)}" aria-label="订阅链接"><label><input type="checkbox" data-k="enabled" ${item.enabled?'checked':''}>启用</label><button data-del="subscriptions">删除</button></div>
     <div class="sub-meta"><span>${item.node_ids.length} 节点</span><span>${traffic(item)}</span><span>${expiry(item.expire)}</span><span>更新：${time(item.updated_at)}</span><span>下次：${nextRun(item)}</span><input class="interval" type="number" min="0" max="1440" data-k="interval" value="${item.interval}"><button data-refresh="${esc(item.id)}">刷新</button></div>
     ${item.last_error?`<div class="node-error">${esc(item.last_error)}（连续失败 ${item.consecutive_errors} 次）</div>`:''}
     ${item.last_diff?.at?`<details><summary>最近差异：新增 ${item.last_diff.added?.length||0}、变更 ${item.last_diff.changed?.length||0}、删除 ${item.last_diff.deleted?.length||0}、未变 ${item.last_diff.unchanged?.length||0}</summary><pre>${esc(JSON.stringify(item.last_diff,null,2))}</pre></details>`:''}
@@ -134,27 +141,27 @@ function importNodeHtml(node){
 }
 function importPreviewItemHtml(item,index){
   const summary=item.summary||{}, protocols=Object.entries(summary.protocols||{}), regions=Object.entries(summary.regions||{}), nodes=item.nodes||[], visible=nodes.slice(0,180), valid=Boolean(summary.ok);
-  return `<article class="import-preview-card"><div class="import-preview-card-head"><div><small>来源 ${index+1} · ${esc(item.group||'默认')}</small><h3>${esc(item.url||'订阅连接')}</h3></div><span class="import-preview-status ${valid?'ok':'invalid'}">${valid?'可导入':'无法解析'}</span></div><div class="import-stats"><div><b>${summary.count||0}</b><span>节点</span></div><div><b>${protocols.length}</b><span>协议</span></div><div><b>${regions.length}</b><span>地区</span></div><div><b>${esc(importTraffic(summary.traffic))}</b><span>流量</span></div>${summary.traffic?.expire?`<div><b>${esc(expiry(summary.traffic.expire))}</b><span>到期</span></div>`:''}</div><div class="import-chip-groups"><div><small>协议</small><span>${protocols.map(([name,count])=>`<span class="chip">${esc(name)} · ${count}</span>`).join('')||'<em>未识别</em>'}</span></div><div><small>地区</small><span>${regions.map(([name,count])=>`<span class="chip">${esc(name)} · ${count}</span>`).join('')||'<em>其他</em>'}</span></div></div>${summary.error?`<p class="import-preview-error">${esc(summary.error)}</p>`:''}<div class="import-node-heading"><b>节点清单</b><span>${nodes.length}${nodes.length>180?'（展示前 180 个）':''}</span></div><div class="import-node-list">${visible.map(importNodeHtml).join('')||'<p class="muted">没有可展示的节点。</p>'}</div></article>`
+  return `<article class="import-preview-card"><div class="import-preview-card-head"><div><small>来源 ${index+1} · ${esc(item.name||'未命名订阅')}</small><h3>${esc(item.url||'订阅连接')}</h3></div><span class="import-preview-status ${valid?'ok':'invalid'}">${valid?'可导入':'无法解析'}</span></div><div class="import-stats"><div><b>${summary.count||0}</b><span>节点</span></div><div><b>${protocols.length}</b><span>协议</span></div><div><b>${regions.length}</b><span>地区</span></div><div><b>${esc(importTraffic(summary.traffic))}</b><span>流量</span></div>${summary.traffic?.expire?`<div><b>${esc(expiry(summary.traffic.expire))}</b><span>到期</span></div>`:''}</div><div class="import-chip-groups"><div><small>协议</small><span>${protocols.map(([name,count])=>`<span class="chip">${esc(name)} · ${count}</span>`).join('')||'<em>未识别</em>'}</span></div><div><small>地区</small><span>${regions.map(([name,count])=>`<span class="chip">${esc(name)} · ${count}</span>`).join('')||'<em>其他</em>'}</span></div></div>${summary.error?`<p class="import-preview-error">${esc(summary.error)}</p>`:''}<div class="import-node-heading"><b>节点清单</b><span>${nodes.length}${nodes.length>180?'（展示前 180 个）':''}</span></div><div class="import-node-list">${visible.map(importNodeHtml).join('')||'<p class="muted">没有可展示的节点。</p>'}</div></article>`
 }
 function renderImportDialog(){
   const dialog=$('subscription-import-dialog'),body=$('subscription-import-body'),actions=$('subscription-import-actions'); if(!dialog||!body||!actions)return;
   const batch=importMode==='batch'; $('subscription-import-kicker').textContent=batch?'批量导入':'单条导入'; $('subscription-import-title').textContent=importPreview?(batch?'批量预览':'订阅预览'):(batch?'批量导入订阅':'导入订阅');
   if(!importPreview){
-    body.innerHTML=batch?`<div class="import-dialog-intro"><b>一次预览多条订阅</b><p>每行一个 HTTP/HTTPS 链接。预览会分别列出节点、协议、地区和流量信息。</p></div><label class="field-label" for="batch-sub-links">订阅链接</label><textarea id="batch-sub-links" rows="7" placeholder="https://example.com/sub-a\nhttps://example.com/sub-b">${esc(importDraft.urls)}</textarea>`:`<div class="import-dialog-intro"><b>先看清节点，再确认导入</b><p>单条导入一次只处理一个订阅连接，避免误把多条来源混在同一份预览里。</p></div><label class="field-label" for="import-url">订阅链接</label><input id="import-url" type="url" inputmode="url" autocomplete="off" placeholder="https://example.com/sub" value="${esc(importDraft.url)}">`;
-    body.innerHTML+=`<div class="import-options"><label class="field-label" for="import-group">订阅分组<input id="import-group" value="${esc(importDraft.group)}" placeholder="主力"></label><label class="field-label" for="import-interval">刷新间隔（分钟）<input id="import-interval" type="number" min="0" max="1440" value="${esc(importDraft.interval)}"><small>0 表示手动刷新</small></label></div><p class="import-dialog-note">预览只读取和解析订阅，不会写入配置；确认后才会导入，并自动发起一次节点测速。</p>`;
+    body.innerHTML=batch?`<div class="import-dialog-intro"><b>一次预览多条订阅</b><p>每行填写“名称 | HTTP/HTTPS 链接”。预览会分别列出节点、协议、地区和流量信息。</p></div><label class="field-label" for="batch-sub-links">订阅名称与链接</label><textarea id="batch-sub-links" rows="7" required aria-required="true" placeholder="主力线路 | https://example.com/sub-a\n备用线路 | https://example.com/sub-b">${esc(importDraft.urls)}</textarea>`:`<div class="import-dialog-intro"><b>先看清节点，再确认导入</b><p>单条导入一次只处理一个订阅连接；名称用于节点来源筛选，且不能与已有订阅重复。</p></div><label class="field-label" for="import-name">订阅名称</label><input id="import-name" type="text" required aria-required="true" autocomplete="off" placeholder="例如：主力线路" value="${esc(importDraft.name)}"><label class="field-label" for="import-url">订阅链接</label><input id="import-url" type="url" required aria-required="true" inputmode="url" autocomplete="off" placeholder="https://example.com/sub" value="${esc(importDraft.url)}">`;
+    body.innerHTML+=`<div class="import-options"><label class="field-label" for="import-interval">刷新间隔（分钟）<input id="import-interval" type="number" min="0" max="1440" value="${esc(importDraft.interval)}"><small>0 表示手动刷新</small></label></div><p class="import-dialog-note">预览只读取和解析订阅，不会写入配置；确认后才会导入，并自动发起一次节点测速。</p>`;
     actions.innerHTML=`<button id="import-dialog-cancel" type="button" class="quiet">取消</button><button id="import-dialog-preview" type="button" class="primary">${batch?'预览批量订阅':'预览订阅'}</button>`;
   }else{
     const items=importPreview.items||[], total=items.reduce((count,item)=>count+Number(item.summary?.count||0),0), valid=items.filter(item=>item.summary?.ok).length;
-    body.innerHTML=`<div class="import-preview-summary"><div><b>${items.length}</b><span>订阅来源</span></div><div><b>${total}</b><span>解析节点</span></div><div><b>${valid}</b><span>可导入来源</span></div><p>确认后将写入 ${esc(importDraft.group||'默认')} 分组；已导入节点会自动开始测速。</p></div><div class="import-preview-list">${items.map(importPreviewItemHtml).join('')}</div>`;
+    body.innerHTML=`<div class="import-preview-summary"><div><b>${items.length}</b><span>订阅来源</span></div><div><b>${total}</b><span>解析节点</span></div><div><b>${valid}</b><span>可导入来源</span></div><p>确认后将写入配置；已导入节点会自动开始测速。</p></div><div class="import-preview-list">${items.map(importPreviewItemHtml).join('')}</div>`;
     actions.innerHTML=`<button id="import-dialog-back" type="button" class="quiet">返回修改</button><button id="import-dialog-confirm" type="button" class="primary" ${valid?'':'disabled'}>确认导入${valid?`（${valid} 条）`:''}</button>`;
   }
   $('import-dialog-cancel')?.addEventListener('click',closeImportDialog); $('import-dialog-preview')?.addEventListener('click',previewImport); $('import-dialog-back')?.addEventListener('click',()=>{importPreview=null;renderImportDialog()}); $('import-dialog-confirm')?.addEventListener('click',confirmImport)
 }
 function openImportDialog(mode='single'){
-  importMode=mode; importPreview=null; importDraft={url:'',urls:'',group:'主力',interval:60}; renderImportDialog(); $('subscription-import-dialog')?.showModal()
+  importDialogReturnFocus=document.activeElement; importMode=mode; importPreview=null; importDraft={url:'',urls:'',name:'',interval:60}; renderImportDialog(); const dialog=$('subscription-import-dialog'); dialog?.showModal(); requestAnimationFrame(()=>$(mode==='batch'?'batch-sub-links':'import-name')?.focus())
 }
 function closeImportDialog(){
-  importPreview=null; const dialog=$('subscription-import-dialog'); if(dialog?.open)dialog.close();
+  importPreview=null; const dialog=$('subscription-import-dialog'); if(dialog?.open)dialog.close(); const target=importDialogReturnFocus; importDialogReturnFocus=null; target?.focus?.();
 }
 
 function bind(){
@@ -197,8 +204,7 @@ function bind(){
     else state.rule_groups.push({id:'rules-'+Date.now(),name:'新规则组',domains:[{host:'example.com',match:'exact'}],target:'direct',priority:100,enabled:true})
     render()
   })
-  $('add-subscription')?.addEventListener('click',()=>{state.subscriptions.push({id:'sub-'+Date.now(),name:'新订阅',url:'',group:'默认',enabled:true,interval:60,node_ids:[],updated_at:0,next_refresh_at:0,upload:0,download:0,total:0,expire:0,last_error:'',consecutive_errors:0,errors:[]});render()})
-  $('group-filter')?.addEventListener('change',render)
+  $('add-subscription')?.addEventListener('click',()=>{state.subscriptions.push({id:'sub-'+Date.now(),name:'新订阅',url:'',enabled:true,interval:60,node_ids:[],updated_at:0,next_refresh_at:0,upload:0,download:0,total:0,expire:0,last_error:'',consecutive_errors:0,errors:[]});render()})
   $('open-single-import')?.addEventListener('click',()=>openImportDialog('single'))
   $('open-batch-import')?.addEventListener('click',()=>openImportDialog('batch'))
   document.querySelectorAll('[data-refresh]').forEach(button=>button.addEventListener('click',()=>refreshSubscription(button.dataset.refresh)))
@@ -244,16 +250,21 @@ function bind(){
 function readControl(){}
 async function saveChanges(){ readControl(); state=await api.apiPost('save',state); original=structuredClone(state) }
 async function previewImport(){
-  const batch=importMode==='batch', raw=batch?$('batch-sub-links')?.value||'':$('import-url')?.value||'', urls=raw.split(/\s+/).map(value=>value.trim()).filter(Boolean)
-  if(!urls.length)return note('请先输入订阅链接',true)
-  if(!batch&&urls.length!==1)return note('单条导入一次只能填写一个订阅链接',true)
-  importDraft={url:batch?'':urls[0]||'',urls:batch?raw:'',group:$('import-group')?.value||'默认',interval:Number($('import-interval')?.value||0)}
+  const batch=importMode==='batch', raw=batch?$('batch-sub-links')?.value||'':$('import-url')?.value||'', interval=Number($('import-interval')?.value||0); let items=[]
+  if(batch){
+    items=raw.split(/\r?\n/).map(line=>line.trim()).filter(Boolean).map(line=>{const separator=line.indexOf('|');return separator<0?{name:'',url:line}:{name:line.slice(0,separator).trim(),url:line.slice(separator+1).trim()}})
+    if(!items.length)return note('请先输入订阅名称和链接',true)
+    if(items.some(item=>!item.name||!item.url))return note('批量导入每行都要填写“名称 | 链接”',true)
+  }else{
+    const name=$('import-name')?.value||'', url=raw.trim(); if(!name.trim())return note('请先填写订阅名称',true); if(!url)return note('请先输入订阅链接',true); items=[{name:name.trim(),url}]
+  }
+  importDraft={url:batch?'':items[0]?.url||'',urls:batch?raw:'',name:batch?'':items[0]?.name||'',interval}
   const button=$('import-dialog-preview'); if(button)button.disabled=true; note(batch?'正在预览批量订阅...':'正在预览订阅...')
-  try{ importPreview=await api.apiPost('subscription-preview',{mode:importMode,urls,group:importDraft.group,interval:importDraft.interval});renderImportDialog();note('预览完成，请核对节点后确认导入') }catch(error){note(error.message,true)}finally{if(button)button.disabled=false}
+  try{ importPreview=await api.apiPost('subscription-preview',batch?{mode:importMode,items,interval:importDraft.interval}:{mode:importMode,name:importDraft.name,urls:[items[0].url],interval:importDraft.interval});renderImportDialog();note('预览完成，请核对节点后确认导入') }catch(error){note(error.message,true)}finally{if(button)button.disabled=false}
 }
 async function confirmImport(){
   if(!importPreview||importing)return; importing=true
-  try{ const result=await api.apiPost('subscription-import',{preview_id:importPreview.preview_id}), importedNodeIds=result.imported_node_ids||[], snapshot=structuredClone(result.snapshot||result); delete snapshot.imported_node_ids; state=snapshot; original=structuredClone(state); closeImportDialog(); render(); note(importedNodeIds.length?'订阅导入成功，正在测速...':'订阅导入成功，未发现可测速节点'); if(importedNodeIds.length)startProbe(importedNodeIds,'导入后测速') }catch(error){note(error.message,true)}finally{importing=false}
+  try{ const result=await api.apiPost('subscription-import',{preview_id:importPreview.preview_id}), importedNodeIds=result.imported_node_ids||[], snapshot=structuredClone(result.snapshot||result); delete snapshot.imported_node_ids; state=snapshot; original=structuredClone(state); closeImportDialog(); render(); note(importedNodeIds.length?'订阅导入成功，正在测速...':'订阅导入成功，未发现可测速节点'); if(importedNodeIds.length){let probeIds=importedNodeIds;if(requiresKernelProbe(importedNodeIds)){try{note('正在应用内核配置以准备测速...');await api.apiPost('runtime-apply',{});await load()}catch(error){probeIds=importedNodeIds.filter(id=>!requiresKernelProbe([id]));note('内核配置未应用，已跳过原生节点测速：'+error.message,true)}} if(probeIds.length)await startProbe(probeIds,'导入后测速');else note('订阅已导入，但原生节点等待内核配置后再测速',true)} }catch(error){note(error.message,true)}finally{importing=false}
 }
 async function refreshSubscription(id){
   try{ note('正在刷新订阅...'); const result=await api.apiPost('subscription-refresh',{id});state=result.snapshot;original=structuredClone(state);render();const d=result.result.diff;note(`订阅刷新成功：新增 ${d.added.length}、变更 ${d.changed.length}、删除 ${d.deleted.length}、未变 ${d.unchanged.length}`) }catch(error){note(error.message,true)}

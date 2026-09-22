@@ -719,6 +719,7 @@ button.primary:hover:not(:disabled) { box-shadow: 0 2px 5px rgb(4 89 78 / 0.18);
 }
 .group-card:first-of-type, .sub-card:first-of-type, .node-card:first-of-type { margin-top: 18px; }
 .group-card .table, .sub-card .table, .node-card .table { padding-top: 0; }
+.sub-card .table { grid-template-columns: minmax(160px, 0.7fr) minmax(240px, 1.4fr) auto auto; }
 .nodes { gap: 7px; margin-top: 14px; }
 .nodes label { padding: 7px 10px; border-radius: 7px; background: var(--panel-subtle); }
 .nodes label:hover { background: var(--accent-soft); }
@@ -765,31 +766,6 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 .import-entry-panel .bar > div:first-child { min-width: 0; }
 .import-entry-panel .bar .actions { flex: 0 0 auto; }
 .import-entry-panel .bar p { max-width: 58ch; margin: 8px 0 0; }
-.import-entry-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin-top: 22px;
-  padding: 14px 16px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
-  border-radius: 10px;
-  background: var(--accent-soft);
-}
-.import-entry-note p { margin: 3px 0 0; color: var(--muted-strong); font-size: 13px; }
-.import-entry-icon {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--accent-strong);
-  font-size: 18px;
-  font-weight: 700;
-}
-.import-probe-progress { margin-bottom: 0; }
-
 .import-dialog {
   width: min(1040px, calc(100vw - 32px));
   max-height: min(860px, calc(100vh - 24px));
@@ -960,6 +936,8 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 @media (max-width: 1120px) {
   body { grid-template-columns: 232px minmax(0, 1fr); }
   .hero { gap: 20px; }
+  .sub-card .table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sub-card .table input[data-k="url"] { grid-column: 1 / -1; }
 }
 @media (max-width: 700px) {
   body { font-size: 14px; }
@@ -978,4 +956,58 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   .metric-row-secondary article { min-height: 70px; }
   .panel { margin-top: 18px; padding: 18px; border-radius: 12px; }
   .group-card, .sub-card, .node-card { padding-top: 16px; }
+  .sub-card .table { grid-template-columns: 1fr; }
+  .sub-card .table input[data-k="url"] { grid-column: auto; }
+}
+
+/* Task and operation feedback floats above the page so it never shifts the working area. */
+#notice, #task-banner {
+  position: fixed;
+  right: 24px;
+  z-index: 40;
+  width: min(480px, calc(100vw - 32px));
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+}
+#notice {
+  top: 92px;
+  padding: 12px 15px;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: var(--shadow-md);
+}
+#notice.error { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+#task-banner { top: 20px; }
+.task-banner-inner {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--accent-soft));
+  color: var(--muted-strong);
+  box-shadow: var(--shadow-md);
+  pointer-events: auto;
+}
+.task-banner-inner progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.task-banner-inner span { white-space: nowrap; font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-banner-inner button { min-height: 32px; padding: 5px 10px; }
+@media (max-width: 700px) {
+  #notice, #task-banner { right: 16px; width: calc(100vw - 32px); }
+  #notice { top: 92px; }
+  #task-banner { top: 16px; }
+  .task-banner-inner { grid-template-columns: minmax(80px, 1fr) auto; }
+  .task-banner-inner progress { grid-column: 1 / -1; grid-row: 1; }
+  .task-banner-inner span { grid-column: 1; grid-row: 2; }
+  .task-banner-inner button { grid-column: 2; grid-row: 2; }
 }

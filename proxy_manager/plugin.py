@@ -717,6 +717,31 @@ class ProxyManager(Star):
         return traffic_header(headers)
 
     @staticmethod
+    def _subscription_name_key(value:object) -> str:
+        return ' '.join(str(value or '').split()).casefold()
+
+    @classmethod
+    def _clean_subscription_name(cls, value:object) -> str:
+        return ' '.join(str(value or '').split())[:80]
+
+    def _validate_subscription_names(self, entries:list[dict]):
+        requested={}
+        existing={}
+        for item in getattr(self,'state',{}).get('subscriptions',[]):
+            key=self._subscription_name_key(item.get('name'))
+            if key: existing.setdefault(key,set()).add(str(item.get('url','')))
+        for entry in entries:
+            name=self._clean_subscription_name(entry.get('name'))
+            if not name: raise ValueError('请输入订阅名称')
+            key=self._subscription_name_key(name)
+            url=str(entry.get('url',''))
+            if key in requested: raise ValueError('订阅名称重复：'+name)
+            conflicting={value for value in existing.get(key,set()) if value!=url}
+            if conflicting: raise ValueError('订阅名称已存在：'+name)
+            requested[key]=url
+            entry['name']=name
+
+    @staticmethod
     def _preview_node(node:dict) -> dict:
         """Return only safe, useful node metadata for the import preview."""
         endpoint=str(node.get('endpoint',''))
@@ -747,17 +772,26 @@ class ProxyManager(Star):
 
     async def subscription_preview(self):
         try:
-            payload=await request.json(); urls=payload.get('urls',[])
-            if not isinstance(urls,list) or not urls: raise ValueError('请输入订阅链接')
-            if len(urls)>10: raise ValueError('每次最多预览 10 个订阅')
-            mode=str(payload.get('mode') or 'single')
+            payload=await request.json(); mode=str(payload.get('mode') or 'single')
             if mode not in {'single','batch'}: raise ValueError('订阅预览模式无效')
-            if mode=='single' and len(urls)!=1: raise ValueError('单条导入一次只能预览一个订阅链接')
-            group=str(payload.get('group','默认'))[:40] or '默认'
+            entries=[]
+            if mode=='batch':
+                raw_items=payload.get('items',[])
+                if not isinstance(raw_items,list) or not raw_items: raise ValueError('请输入批量订阅名称和链接')
+                for item in raw_items:
+                    if not isinstance(item,dict): raise ValueError('批量订阅格式无效')
+                    entries.append({'name':item.get('name'),'url':item.get('url')})
+            else:
+                urls=payload.get('urls',[])
+                if not isinstance(urls,list) or len(urls)!=1: raise ValueError('单条导入一次只能预览一个订阅链接')
+                entries=[{'name':payload.get('name'),'url':urls[0]}]
+            if len(entries)>10: raise ValueError('每次最多预览 10 个订阅')
+            self._validate_subscription_names(entries)
             interval=int(payload['interval']) if payload.get('interval') is not None else 60
             interval=0 if interval<=0 else max(5,min(interval,1440))
             items=[]; preview_id=''
-            for index,url in enumerate(urls):
+            for index,entry in enumerate(entries):
+                url=str(entry.get('url','')).strip(); name=entry['name']
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.17'})
@@ -768,12 +802,12 @@ class ProxyManager(Star):
                 summary=self._summary(nodes,discovered); summary['traffic']=traffic; summary['ok']=bool(nodes)
                 if not nodes:
                     summary['error']='未解析出支持的代理节点（发现协议：'+', '.join(sorted(discovered))+'）'
-                items.append({'name':'订阅 '+str(index+1),'url':url,'group':group,'interval':interval,
+                items.append({'name':name,'url':url,'interval':interval,
                               'nodes':nodes,'summary':summary})
             preview_id=self._cache_preview(items)
             return json_response({'preview_id':preview_id,'items':[
                 {'name':item['name'],'url':urlparse(item['url']).scheme+'://[configured]',
-                 'group':item['group'],'interval':item['interval'],'summary':item['summary'],
+                 'interval':item['interval'],'summary':item['summary'],
                  'nodes':[self._preview_node(node) for node in item['nodes']]} for item in items]})
         except (ValueError,httpx.HTTPError,OSError) as exc:
             return error_response(str(exc) if isinstance(exc,ValueError) else '订阅预览请求失败')
@@ -902,12 +936,12 @@ class ProxyManager(Star):
                             subscription=existing
                         else:
                             subscription={'id':'sub-'+hashlib.sha1(item['url'].encode()).hexdigest()[:12],
-                                          'name':item['name'],'url':item['url'],'group':item['group'],
+                                          'name':item['name'],'url':item['url'],'group':'',
                                           'enabled':True,'interval':item['interval'],'node_ids':[],'updated_at':0,
                                           'next_refresh_at':0,'upload':0,'download':0,'total':0,'expire':0,
                                           'last_error':'','consecutive_errors':0,'errors':[]}
                             self.state['subscriptions'].append(subscription)
-                        subscription.update({'name':item['name'],'group':item['group'],'interval':item['interval'],'enabled':True})
+                        subscription.update({'name':item['name'],'interval':item['interval'],'enabled':True})
                         for node in item['nodes']:
                             node['subscription_id']=subscription['id']
                             node['id']=self._stable_node_id(subscription['id'],node['endpoint'],node.get('protocol',''),node.get('connection'))

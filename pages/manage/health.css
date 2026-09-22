@@ -40,9 +40,6 @@
 .proxy-status b { font-size: 14px; }
 .proxy-status span { color: var(--muted-strong); font-size: 13px; }
 .proxy-status code { grid-column: 1 / -1; display: block; padding: 8px 10px; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--input); color: var(--muted); font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
-.probe-progress { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; align-items: center; gap: 10px; margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-subtle); }
-.probe-progress progress { width: 100%; height: 8px; accent-color: var(--accent); }
-.probe-progress span { color: var(--muted-strong); font-size: 12px; font-variant-numeric: tabular-nums; }
 @media (max-width: 980px) {
   .import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -52,8 +49,6 @@
 @media (max-width: 700px) {
   .import-form, .filter, .sub-card .table, .node-card .table, .verification-levels { grid-template-columns: 1fr; }
   #content[data-view="subscriptions"] .filter { grid-template-columns: 1fr; }
-  .probe-progress { grid-template-columns: 1fr auto; }
-  .probe-progress progress { grid-column: 1 / -1; }
   .traffic-inventory article { grid-template-columns: 1fr; }
   .traffic-inventory article p, .traffic-inventory article small { grid-column: auto; }
 }
