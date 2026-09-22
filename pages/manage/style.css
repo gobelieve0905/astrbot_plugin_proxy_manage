@@ -1011,3 +1011,61 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   .task-banner-inner span { grid-column: 1; grid-row: 2; }
   .task-banner-inner button { grid-column: 2; grid-row: 2; }
 }
+
+/* Proxy groups use a focused dialog so the page remains a scannable list. */
+.group-config-note { max-width: 76ch; margin: 10px 0 0; }
+.group-card { padding: 18px 0 0; }
+.group-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+.group-card-title { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; min-width: 0; }
+.group-card-title b { overflow-wrap: anywhere; font-size: 15px; }
+.group-card-actions { display: flex; flex: 0 0 auto; gap: 7px; }
+.group-card-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 9px; color: var(--muted); font-size: 12px; }
+.group-card-members { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.group-empty { display: grid; gap: 4px; margin-top: 18px; padding: 22px 0 4px; border-top: 1px solid var(--line); }
+.group-empty b { font-size: 14px; }
+.group-empty span { color: var(--muted); font-size: 13px; }
+.group-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(820px, calc(100vh - 24px));
+  overflow: hidden;
+}
+.group-dialog-body {
+  max-height: min(650px, calc(100vh - 174px));
+  padding: 22px 24px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.group-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.group-form-section { min-width: 0; margin: 20px 0 0; padding: 16px 0 0; border: 0; border-top: 1px solid var(--line); }
+.group-form-section legend { padding: 0 8px 0 0; color: var(--text); font-size: 13px; font-weight: 700; }
+.field-label { position: relative; }
+.required-mark { margin-left: 6px; color: var(--accent-strong); font-size: 11px; font-weight: 600; }
+.field-label small { display: block; color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.45; }
+.field-label input:disabled, .field-label select:disabled { cursor: not-allowed; opacity: .56; }
+#group-node-ids { min-height: 218px; padding: 5px; background: var(--panel-subtle); }
+#group-node-ids option { padding: 8px 9px; border-radius: 5px; }
+#group-node-ids option:checked { background: var(--accent-soft); color: var(--accent-strong); font-weight: 650; }
+.group-enabled { display: flex; align-items: center; gap: 9px; margin-top: 18px; color: var(--muted-strong); font-size: 13px; font-weight: 650; }
+.group-enabled input { width: 18px; height: 18px; min-height: 18px; }
+.group-dialog-error { margin-bottom: 16px; padding: 10px 12px; border-left: 3px solid var(--danger); background: var(--danger-soft); color: var(--danger); font-size: 12px; font-weight: 600; }
+.group-dialog-error[hidden] { display: none; }
+.group-dialog .dialog-head, .group-dialog .dialog-actions { padding-left: 24px; padding-right: 24px; }
+@media (max-width: 700px) {
+  .group-card-head { align-items: flex-start; flex-direction: column; gap: 11px; }
+  .group-card-actions { width: 100%; }
+  .group-card-actions button { flex: 1 1 0; }
+  .group-form-grid { grid-template-columns: 1fr; gap: 14px; }
+  .group-dialog-body { padding: 18px; }
+  .group-dialog .dialog-head, .group-dialog .dialog-actions { padding-left: 18px; padding-right: 18px; }
+}
+@media (max-width: 520px) {
+  .group-dialog { width: calc(100vw - 18px); max-height: calc(100vh - 14px); }
+  .group-dialog-body { max-height: calc(100vh - 142px); padding: 16px; }
+  .group-dialog .dialog-head, .group-dialog .dialog-actions { padding-left: 16px; padding-right: 16px; }
+}

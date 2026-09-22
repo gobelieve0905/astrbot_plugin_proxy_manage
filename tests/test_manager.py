@@ -170,7 +170,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.17',html)
+        self.assertIn('流量控制 · 0.3.18',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('kernel-resources',script)
@@ -180,6 +180,9 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertLess(script.index('<h2>运行控制</h2>'),script.index('<h2>内核资源管理</h2>'))
         self.assertIn('group-runtime-refresh',script)
         self.assertIn('refreshGroupStatus',script)
+        self.assertIn('proxy-group-dialog',html)
+        self.assertIn('select id="group-node-ids" required multiple',script)
+        self.assertIn('openGroupDialog',script)
         self.assertIn('noticeTimer=setTimeout',script)
         control_view=script[script.index("} else if(tab==='control')"):script.index("  } else {",script.index("} else if(tab==='control')"))]
         self.assertNotIn('代理组状态',control_view)

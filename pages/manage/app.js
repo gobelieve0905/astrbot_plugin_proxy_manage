@@ -8,7 +8,7 @@ if (!api || typeof api.ready !== 'function') {
 }
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
 const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名和目标出口',platforms:'生成域名规则；这不代表平台 SDK 已接入代理',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
-let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', importDialogReturnFocus=null
+let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, editingGroupId=null
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
 let noticeTimer=null
@@ -16,6 +16,29 @@ let noticeTimer=null
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 function note(text,error=false){const notice=$('notice');clearTimeout(noticeTimer);notice.textContent=text;notice.hidden=!text;notice.className=error?'error':'';if(text)noticeTimer=setTimeout(()=>{notice.hidden=true;notice.textContent=''},error?8000:3200)}
 function groupOptions(selected){ return state.groups.map(group=>`<option value="${esc(group.id)}" ${group.id===selected?'selected':''}>${esc(group.name)}</option>`).join('') }
+const groupModes=[
+  {value:'select',label:'手动选择',help:'在运行状态中手动切换成员节点。'},
+  {value:'url-test',label:'按延迟自动选择',help:'按测速目标和周期选择延迟最低的可用节点。'},
+  {value:'fallback',label:'故障自动切换',help:'优先使用当前节点，失败后按成员顺序切换。'},
+]
+const groupModeLabels=Object.fromEntries(groupModes.map(item=>[item.value,item.label]))
+function editableGroups(){ return state.groups.map((group,index)=>({group,index})).filter(item=>item.group.id!=='direct') }
+function groupMembers(group){ return state.nodes.filter(node=>group.node_ids?.includes(node.id)) }
+function groupDraftFrom(group){
+  const source=group||{}
+  return {
+    id:source.id||`group-${Date.now()}`,
+    name:source.name||'新代理组',
+    mode:groupModes.some(item=>item.value===source.mode)?source.mode:'select',
+    node_ids:[...(source.node_ids||[])],
+    selected:source.selected||'',
+    enabled:source.enabled!==false,
+    test_url:source.test_url||'https://www.gstatic.com/generate_204',
+    test_interval:Number(source.test_interval||300),
+    tolerance:Number(source.tolerance??50),
+    failure_policy:source.failure_policy==='keep-last'?'keep-last':'fail-closed',
+  }
+}
 function time(value){ return value?new Date(value*1000).toLocaleString():'从未' }
 function bytes(value){ value=Number(value||0); if(!value)return '0 B'; const units=['B','KB','MB','GB','TB']; const index=Math.min(Math.floor(Math.log(value)/Math.log(1024)),4); return (value/1024**index).toFixed(index?1:0)+' '+units[index] }
 function traffic(item){
@@ -74,7 +97,7 @@ function render(){
     const kernelText={not_installed:'未安装',invalid:'校验失败',unsupported:'平台不支持',stopped:'已停止',failed:'运行失败',connection_failed:'连接失败',version_unsupported:'版本不支持',saved:'已保存',pending_apply:'待应用',applied:'已应用',runtime_inconsistent:'运行配置不一致',restore_failed:'恢复失败',fail_closed:'失败关闭'}[kernelStatus.state]||'未检查'
     const kernelClass=kernelStatus.state==='applied'?'online':(['failed','connection_failed','runtime_inconsistent','restore_failed'].includes(kernelStatus.state)?'error':'neutral')
     html=`<div class="hero"><div><small>当前配置</small><strong>${esc(state.name)}</strong></div><div class="runtime-state"><span class="${kernelClass}">内核：${kernelText}</span><small>${esc(kernelStatus.message||'')}</small></div></div>
-      <div class="cards metric-row metric-row-primary">${[['subscriptions','订阅'],['nodes','节点'],['groups','代理组'],['routes','规则']].map(([key,label])=>`<article><b>${state[key].length}</b><span>${label}</span></article>`).join('')}</div>
+      <div class="cards metric-row metric-row-primary">${[['subscriptions','订阅'],['nodes','节点'],['groups','代理组'],['routes','规则']].map(([key,label])=>`<article><b>${key==='groups'?state.groups.filter(group=>group.id!=='direct').length:state[key].length}</b><span>${label}</span></article>`).join('')}</div>
       <div class="cards metric-row metric-row-secondary"><article><b>${ok}</b><span>可用节点</span></article><article><b>${bad}</b><span>异常节点</span></article><article><b>${state.subscriptions.filter(item=>item.enabled&&item.interval).length}</b><span>自动订阅</span></article><article><b>${state.events.length}</b><span>最近事件</span></article></div>
       <section class="panel"><div class="section-head"><div><small>真实接入范围 · ${esc(state.traffic_audit?.version||'未审计')}</small><h2>AstrBot 流量清单</h2></div><button id="integration-check" title="重新检查新增的插件和 MCP">重新检查</button></div><div class="traffic-inventory">${(state.traffic_inventory||[]).map(item=>`<article><div><b>${esc(item.name)}</b><small>${esc(item.method)}</small></div><span class="traffic-state ${esc(item.status)}">${esc({managed:'已接管',direct:'明确直连',not_connected:'未接入',unknown:'无法判定'}[item.status]||'无法判定')}</span><p>${esc(item.message)}</p><small>策略接入：${esc({managed:'已纳入统一策略',pending:'等待 AstrBot 重启',declared:'已声明协议，等待配置入口',needs_protocol:'需声明接入协议'}[item.integration?.state]||'待检查')} · ${esc(item.integration?.message||'')}</small><small>验证：${esc(item.verification||'当前无专项验证')}</small><small>旁路风险：${esc(item.bypass_risk||'待审计')}</small>${item.restart?'<small>变更后需要重启相关组件</small>':''}${item.discovered?.length?`<small>已发现：${esc(item.discovered.map(value=>value.name+' ('+(value.declaration?({compatible:'协议兼容',missing:'缺少协议',invalid:'协议无效'}[value.declaration.state]||'协议待检查'):(value.locality_label||value.type||value.transport||'未知'))+')').join(' · '))}</small>`:''}</article>`).join('')}</div></section>
       <section class="panel"><div class="section-head"><div><small>运行时指纹与注册表</small><h2>官方兼容层</h2></div></div><p class="muted">${esc(state.compatibility?.message||'尚未安装')}</p><div class="proxy-status"><b>${esc(state.compatibility?.astrbot||'未知 AstrBot')}</b><span>${esc(state.compatibility?.state||'not_installed')}</span><code>${esc(Object.entries(state.compatibility?.sdk_versions||{}).map(([key,value])=>key+' '+value).join(' · ')||'未读取 SDK 版本')}</code></div></section>
@@ -100,8 +123,10 @@ function render(){
         ${support.reason?`<div class="node-error">${esc(support.reason)}</div>`:''}${node.notice_reason?`<div class="muted">${esc(node.notice_reason)}，请人工确认是否排除。</div>`:''}${item.error?`<div class="node-error">${esc(item.error)}</div>`:''}</div>`}).join('')||'<p class="muted">暂无节点。</p>'}</section>`
   } else if(tab==='groups'){
     const runtimeGroups=controlResult?.groups||[]
-    html=`<section class="panel"><div class="bar"><h2>代理组配置</h2><button id="add">新增代理组</button></div>
-      ${state.groups.map((group,index)=>`<div class="group-card" data-i="${index}"><div class="table"><input data-k="name" value="${esc(group.name)}"><select data-k="mode">${['direct','select','url-test','fallback'].map(mode=>`<option ${group.mode===mode?'selected':''}>${mode}</option>`).join('')}</select><select data-k="selected"><option value="">内核策略选择</option>${state.nodes.map(node=>`<option value="${esc(node.id)}" ${node.id===group.selected?'selected':''}>${esc(node.name)}</option>`).join('')}</select><button data-del="groups" ${group.id==='direct'?'disabled':''}>删除</button></div>${group.id!=='direct'?`<div class="table"><input data-k="test_url" value="${esc(group.test_url)}" placeholder="测速目标"><input type="number" data-k="test_interval" value="${group.test_interval}"><input type="number" data-k="tolerance" value="${group.tolerance}"><select data-k="failure_policy"><option value="fail-closed" ${group.failure_policy==='fail-closed'?'selected':''}>全部不可用时失败关闭</option><option value="keep-last" ${group.failure_policy==='keep-last'?'selected':''}>保留最后选择</option></select></div>`:''}<div class="nodes">${state.nodes.map(node=>`<label><input type="checkbox" data-node="${esc(node.id)}" ${group.node_ids.includes(node.id)?'checked':''}>${esc(node.name)}</label>`).join('')||'<span class="muted">暂无节点</span>'}</div></div>`).join('')}</section>
+    const groups=editableGroups()
+    html=`<section class="panel"><div class="bar"><div><small>按 Clash 风格组织出口</small><h2>代理组配置</h2></div><button id="add" class="primary">新增代理组</button></div>
+      <p class="muted group-config-note">直连是内核内部的默认目标，不作为可编辑代理组展示。每个代理组在弹窗中选择模式和成员节点，保存页面配置后再应用到当前内核。</p>
+      ${groups.map(({group,index})=>{const members=groupMembers(group),selected=state.nodes.find(node=>node.id===group.selected);return `<article class="group-card" data-i="${index}" data-group-id="${esc(group.id)}"><div class="group-card-head"><div class="group-card-title"><b>${esc(group.name)}</b><span class="chip ${group.enabled?'ok':'pending'}">${group.enabled?'已启用':'已停用'}</span></div><div class="group-card-actions"><button data-edit-group="${esc(group.id)}">编辑</button><button data-del="groups" class="danger">删除</button></div></div><div class="group-card-meta"><span>模式：${esc(groupModeLabels[group.mode]||group.mode)}</span><span>成员：${members.length}</span>${selected?`<span>当前：${esc(selected.display_name||selected.name)}</span>`:''}${group.mode!=='select'?`<span>测速：每 ${esc(group.test_interval||300)} 秒</span>`:''}</div><div class="group-card-members">${members.map(node=>`<span class="chip">${esc(node.display_name||node.name)}</span>`).join('')||'<span class="muted">尚未选择节点</span>'}</div></article>`}).join('')||'<div class="group-empty"><b>还没有代理组</b><span>新增一个代理组后，在弹窗中选择节点和自动策略。</span></div>'}</section>
       <section class="panel"><div class="bar"><div><small>当前运行内核</small><h2>代理组状态</h2></div><button id="group-runtime-refresh">刷新状态</button></div>${runtimeGroups.length?runtimeGroups.map(group=>`<div class="control-group"><b>${esc(group.display_name)}</b><small>${esc(group.type)} · ${esc(group.selected_display_name||'无')}</small><select data-select="${esc(group.id)}">${group.members.map(node=>`<option value="${esc(node.id)}" ${node.id===group.selected_node_id?'selected':''} ${node.available?'':'disabled'}>${esc(node.display_name)}${node.available?'':'（不可用）'}</option>`).join('')}</select></div>`).join(''):'<p class="muted">尚未读取运行状态，或当前内核没有可切换代理组。</p>'}</section>`
   } else if(tab==='routes'){
     html=`<section class="panel"><div class="bar"><h2>规则组</h2><button id="add">新增规则组</button></div>${state.rule_groups.map((rule,index)=>`<div class="group-card" data-i="${index}"><div class="table"><input data-k="name" value="${esc(rule.name)}"><input type="number" data-k="priority" value="${rule.priority}"><select data-k="target">${groupOptions(rule.target)}</select><label><input type="checkbox" data-k="enabled" ${rule.enabled?'checked':''}>启用</label><button data-del="rule_groups">删除</button></div><textarea data-domains rows="3" placeholder="每行：exact api.example.com 或 suffix example.com">${esc(rule.domains.map(domain=>domain.match+' '+domain.host).join('\n'))}</textarea></div>`).join('')}</section>`
@@ -164,6 +189,73 @@ function closeImportDialog(){
   importPreview=null; const dialog=$('subscription-import-dialog'); if(dialog?.open)dialog.close(); const target=importDialogReturnFocus; importDialogReturnFocus=null; target?.focus?.();
 }
 
+function groupDialogError(message){
+  const error=$('group-dialog-error'); if(!error)return
+  error.textContent=message||''; error.hidden=!message
+}
+function renderGroupDialog(){
+  const dialog=$('proxy-group-dialog'),body=$('proxy-group-body'),actions=$('proxy-group-actions'); if(!dialog||!body||!actions||!groupDraft)return
+  const mode=groupDraft.mode, automatic=mode==='url-test'||mode==='fallback'
+  $('proxy-group-title').textContent=editingGroupId?'编辑代理组':'新增代理组'
+  body.innerHTML=`<div id="group-dialog-error" class="group-dialog-error" role="alert" aria-live="assertive" hidden></div>
+    <div class="group-form-grid">
+      <label class="field-label" for="group-name">代理组名称<span class="required-mark">必填</span><input id="group-name" data-group-field="name" type="text" required maxlength="80" autocomplete="off" value="${esc(groupDraft.name)}" placeholder="例如：Telegram 主线路"><small>名称用于规则目标和运行内核显示。</small></label>
+      <label class="field-label" for="group-mode">选择模式<select id="group-mode" data-group-field="mode" aria-describedby="group-mode-help">${groupModes.map(item=>`<option value="${item.value}" ${item.value===mode?'selected':''}>${item.label}</option>`).join('')}</select><small id="group-mode-help">${esc(groupModes.find(item=>item.value===mode)?.help||'')}</small></label>
+    </div>
+    <fieldset class="group-form-section"><legend>节点成员</legend><label class="field-label" for="group-node-ids">选择可用节点<span class="required-mark">至少一项</span><select id="group-node-ids" required multiple size="9" aria-describedby="group-node-help">${state.nodes.map(node=>`<option value="${esc(node.id)}" ${groupDraft.node_ids.includes(node.id)?'selected':''}>${esc(node.display_name||node.name)}${node.invalid_reference?'（引用失效）':''}</option>`).join('')||'<option disabled>暂无节点，请先导入订阅</option>'}</select><small id="group-node-help">按住 Ctrl/Command 可选择多个节点；移动端可连续点选。</small></label><label class="field-label" for="group-selected">默认节点<select id="group-selected" data-group-field="selected" ${groupDraft.node_ids.length?'':'disabled'}><option value="">由内核策略决定</option>${state.nodes.filter(node=>groupDraft.node_ids.includes(node.id)).map(node=>`<option value="${esc(node.id)}" ${node.id===groupDraft.selected?'selected':''}>${esc(node.display_name||node.name)}</option>`).join('')}</select><small>仅作为首次运行时的偏好，运行状态仍可单独切换。</small></label></fieldset>
+    <fieldset class="group-form-section"><legend>自动策略参数</legend><div class="group-form-grid"><label class="field-label" for="group-test-url">测速目标<input id="group-test-url" data-group-field="test_url" type="url" ${automatic?'':'disabled'} value="${esc(groupDraft.test_url)}" placeholder="https://www.gstatic.com/generate_204"><small>仅自动模式使用 HTTP/HTTPS 目标。</small></label><label class="field-label" for="group-test-interval">测速周期（秒）<input id="group-test-interval" data-group-field="test_interval" type="number" min="30" max="86400" step="1" ${automatic?'':'disabled'} value="${esc(groupDraft.test_interval)}"><small>范围 30 至 86400 秒。</small></label><label class="field-label" for="group-tolerance">切换容差（毫秒）<input id="group-tolerance" data-group-field="tolerance" type="number" min="0" max="5000" step="1" ${automatic?'':'disabled'} value="${esc(groupDraft.tolerance)}"><small>延迟差异小于该值时不频繁切换。</small></label><label class="field-label" for="group-failure-policy">全部不可用时<select id="group-failure-policy" data-group-field="failure_policy" ${automatic?'':'disabled'}><option value="fail-closed" ${groupDraft.failure_policy==='fail-closed'?'selected':''}>失败关闭</option><option value="keep-last" ${groupDraft.failure_policy==='keep-last'?'selected':''}>保留最后选择</option></select><small>不会自动绕过代理改为直连。</small></label></div></fieldset>
+    <label class="group-enabled"><input id="group-enabled" data-group-field="enabled" type="checkbox" ${groupDraft.enabled?'checked':''}>启用此代理组</label>`
+  actions.innerHTML='<button id="proxy-group-cancel" type="button" class="quiet">取消</button><button id="proxy-group-save" type="button" class="primary">保存代理组</button>'
+  groupDialogError('')
+  document.querySelectorAll('[data-group-field]').forEach(input=>{
+    const update=()=>{const key=input.dataset.groupField; groupDraft[key]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value}
+    input.addEventListener(input.tagName==='SELECT'?'change':'input',update)
+    if(input.tagName==='SELECT'&&input.dataset.groupField!=='mode')input.addEventListener('change',update)
+  })
+  $('group-node-ids')?.addEventListener('change',event=>{
+    groupDraft.node_ids=[...event.target.selectedOptions].map(option=>option.value)
+    if(groupDraft.selected&&!groupDraft.node_ids.includes(groupDraft.selected))groupDraft.selected=''
+    renderGroupDialog(); requestAnimationFrame(()=>$('group-node-ids')?.focus())
+  })
+  $('group-mode')?.addEventListener('change',event=>{groupDraft.mode=event.target.value;renderGroupDialog();requestAnimationFrame(()=>$('group-mode')?.focus())})
+  $('proxy-group-cancel')?.addEventListener('click',closeGroupDialog)
+  $('proxy-group-save')?.addEventListener('click',saveGroupDialog)
+}
+function openGroupDialog(groupId=''){
+  const source=groupId?state.groups.find(group=>group.id===groupId):null
+  if(source?.id==='direct')return
+  groupDialogReturnFocus=document.activeElement; editingGroupId=groupId||''; groupDraft=groupDraftFrom(source); renderGroupDialog()
+  const dialog=$('proxy-group-dialog'); dialog?.showModal(); requestAnimationFrame(()=>$('group-name')?.focus())
+}
+function closeGroupDialog({restore=true}={}){
+  const dialog=$('proxy-group-dialog'); if(dialog?.open)dialog.close()
+  const target=groupDialogReturnFocus; groupDialogReturnFocus=null; groupDraft=null; editingGroupId=null
+  if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})
+}
+function readGroupDialog(){
+  if(!groupDraft)return null
+  const values={...groupDraft}
+  values.name=String($('group-name')?.value||'').trim(); values.mode=$('group-mode')?.value||'select'; values.node_ids=[...($('group-node-ids')?.selectedOptions||[])].map(option=>option.value); values.selected=$('group-selected')?.value||''
+  values.enabled=Boolean($('group-enabled')?.checked); values.test_url=String($('group-test-url')?.value||'').trim(); values.test_interval=Number($('group-test-interval')?.value||300); values.tolerance=Number($('group-tolerance')?.value||0); values.failure_policy=$('group-failure-policy')?.value||'fail-closed'
+  return values
+}
+function saveGroupDialog(){
+  const values=readGroupDialog(); if(!values)return
+  const isEditing=Boolean(editingGroupId)
+  const nameKey=values.name.toLocaleLowerCase()
+  if(!values.name)return groupDialogError('代理组名称不能为空。')
+  if(state.groups.some(group=>group.id!==editingGroupId&&String(group.name||'').trim().toLocaleLowerCase()===nameKey))return groupDialogError('代理组名称已存在，请换一个名称。')
+  if(!values.node_ids.length)return groupDialogError('至少选择一个节点后才能保存代理组。')
+  if(values.mode==='url-test'||values.mode==='fallback'){
+    try{const url=new URL(values.test_url);if(!['http:','https:'].includes(url.protocol))throw new Error()}catch(_){return groupDialogError('自动模式的测速目标必须是 HTTP/HTTPS 地址。')}
+    if(!Number.isInteger(values.test_interval)||values.test_interval<30||values.test_interval>86400)return groupDialogError('测速周期必须是 30 至 86400 秒的整数。')
+    if(!Number.isInteger(values.tolerance)||values.tolerance<0||values.tolerance>5000)return groupDialogError('切换容差必须是 0 至 5000 毫秒的整数。')
+  }
+  const index=state.groups.findIndex(group=>group.id===editingGroupId)
+  if(index<0)state.groups.push(values);else state.groups[index]={...state.groups[index],...values}
+  const savedId=values.id; closeGroupDialog({restore:false}); render(); requestAnimationFrame(()=>{const trigger=[...document.querySelectorAll('[data-edit-group]')].find(button=>button.dataset.editGroup===savedId);(trigger||$('add'))?.focus()}); note(isEditing?'代理组已更新':'代理组已创建')
+}
+
 function bind(){
   document.querySelectorAll('[data-k]').forEach(input=>input.addEventListener('change',()=>{
     const row=input.closest('[data-i]'); if(!row)return
@@ -173,14 +265,18 @@ function bind(){
     else { const item=state.rule_groups[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value }
   }))
   document.querySelectorAll('[data-domains]').forEach(input=>input.addEventListener('change',()=>{const item=state.rule_groups[Number(input.closest('[data-i]').dataset.i)];item.domains=input.value.split('\n').map(line=>line.trim().split(/\s+/,2)).filter(parts=>parts.length===2).map(([match,host])=>({match:match==='suffix'?'suffix':'exact',host}))}))
-  document.querySelectorAll('[data-node]').forEach(input=>input.addEventListener('change',()=>{
-    const group=state.groups[input.closest('[data-i]').dataset.i]; const id=input.dataset.node
-    group.node_ids=input.checked?[...new Set([...group.node_ids,id])]:group.node_ids.filter(value=>value!==id)
-    if(group.selected&&!group.node_ids.includes(group.selected))group.selected=''
-  }))
   document.querySelectorAll('[data-del]').forEach(button=>button.addEventListener('click',()=>{
-    const row=button.closest('[data-i]'),list=state[button.dataset.del],item=list[Number(row.dataset.i)]
-    if(item.id==='direct')return; list.splice(Number(row.dataset.i),1)
+    const row=button.closest('[data-i]'),list=state[button.dataset.del],item=button.dataset.del==='groups'?state.groups.find(value=>value.id===row.dataset.groupId):list[Number(row.dataset.i)]
+    if(!item)return
+    if(item.id==='direct')return
+    if(button.dataset.del==='groups'){
+      const index=list.findIndex(value=>value.id===item.id); if(index>=0)list.splice(index,1)
+      state.routes=state.routes.filter(route=>route.target!==item.id)
+      state.rule_groups=state.rule_groups.filter(rule=>rule.target!==item.id)
+      state.platforms=Object.fromEntries(Object.entries(state.platforms||{}).filter(([,platform])=>platform.group_id!==item.id))
+      render(); note('代理组已删除'); return
+    }
+    list.splice(Number(row.dataset.i),1)
     if(button.dataset.del==='subscriptions'){
       const owned=new Set(state.nodes.filter(node=>node.subscription_id===item.id).map(node=>node.id))
       state.nodes=state.nodes.filter(node=>!owned.has(node.id))
@@ -200,10 +296,11 @@ function bind(){
   }))
   $('add')?.addEventListener('click',()=>{
     if(tab==='nodes')state.nodes.push({id:'node-'+Date.now(),name:'新节点',display_name:'新节点',protocol:'http',engine:'direct-http',kind:'http',endpoint:'',connection:{},subscription_id:'',enabled:true,excluded:false,exclusion_reason:''})
-    else if(tab==='groups')state.groups.push({id:'group-'+Date.now(),name:'新代理组',mode:'select',node_ids:[],selected:'',enabled:true})
+    else if(tab==='groups'){openGroupDialog();return}
     else state.rule_groups.push({id:'rules-'+Date.now(),name:'新规则组',domains:[{host:'example.com',match:'exact'}],target:'direct',priority:100,enabled:true})
     render()
   })
+  document.querySelectorAll('[data-edit-group]').forEach(button=>button.addEventListener('click',()=>openGroupDialog(button.dataset.editGroup)))
   $('add-subscription')?.addEventListener('click',()=>{state.subscriptions.push({id:'sub-'+Date.now(),name:'新订阅',url:'',enabled:true,interval:60,node_ids:[],updated_at:0,next_refresh_at:0,upload:0,download:0,total:0,expire:0,last_error:'',consecutive_errors:0,errors:[]});render()})
   $('open-single-import')?.addEventListener('click',()=>openImportDialog('single'))
   $('open-batch-import')?.addEventListener('click',()=>openImportDialog('batch'))
@@ -300,6 +397,9 @@ document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener(
   $('save').addEventListener('click',()=>{readControl();$('diff-text').textContent=JSON.stringify({before:original,after:state},null,2);$('diff').showModal()})
   $('cancel').addEventListener('click',()=>$('diff').close())
   $('subscription-import-close').addEventListener('click',closeImportDialog)
+  $('proxy-group-close')?.addEventListener('click',closeGroupDialog)
+  $('proxy-group-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeGroupDialog()})
+  $('proxy-group-dialog')?.addEventListener('click',event=>{if(event.target===$('proxy-group-dialog'))closeGroupDialog()})
   $('confirm').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存')}catch(error){note(error.message,true)}})
 ;(async()=>{try{await api.ready(); await load()}catch(error){note(error.message || '页面初始化失败，请重新打开插件页面',true)}})()
 }

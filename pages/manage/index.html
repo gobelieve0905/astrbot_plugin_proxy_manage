@@ -12,7 +12,7 @@
 <body>
   <a class="skip-link" href="#content">跳到主要内容</a>
   <aside aria-label="主导航">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">PM</span><span><b>代理管理中心</b><small>流量控制 · 0.3.17</small></span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">PM</span><span><b>代理管理中心</b><small>流量控制 · 0.3.18</small></span></div>
     <nav>
       <span class="nav-label">工作区</span>
       <button data-tab="overview">概览</button>
@@ -41,6 +41,11 @@
     <div class="dialog-head"><div><small id="subscription-import-kicker">订阅来源</small><h2 id="subscription-import-title">导入订阅</h2></div><button id="subscription-import-close" type="button" class="quiet" aria-label="关闭订阅导入弹窗">关闭</button></div>
     <div id="subscription-import-body" class="import-dialog-body"></div>
     <div id="subscription-import-actions" class="dialog-actions"></div>
+  </dialog>
+  <dialog id="proxy-group-dialog" class="group-dialog" aria-labelledby="proxy-group-title">
+    <div class="dialog-head"><div><small>代理组配置</small><h2 id="proxy-group-title">新增代理组</h2></div><button id="proxy-group-close" type="button" class="quiet" aria-label="关闭代理组配置弹窗">关闭</button></div>
+    <div id="proxy-group-body" class="group-dialog-body"></div>
+    <div id="proxy-group-actions" class="dialog-actions"></div>
   </dialog>
   <script src="./app.js"></script>
 </body>
