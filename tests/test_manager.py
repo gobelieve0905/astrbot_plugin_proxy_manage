@@ -183,7 +183,12 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('proxy-group-dialog',html)
         self.assertIn('id="group-node-picker"',script)
         self.assertIn('data-group-node',script)
-        self.assertIn('自动选择首个可用成员',script)
+        self.assertIn('id="group-node-search"',script)
+        self.assertIn('id="group-select-visible"',script)
+        self.assertIn('id="group-clear-visible"',script)
+        self.assertIn('groupStrategy',script)
+        self.assertIn('按测速选择延迟最低节点',script)
+        self.assertNotIn('自动选择首个可用成员',script)
         self.assertIn('openGroupDialog',script)
         self.assertIn('noticeTimer=setTimeout',script)
         control_view=script[script.index("} else if(tab==='control')"):script.index("  } else {",script.index("} else if(tab==='control')"))]
@@ -1019,6 +1024,26 @@ class TestConfigurationRules(unittest.TestCase):
         group['selected'] = 'missing-node'
         with self.assertRaisesRegex(ValueError, '选择.*失效|失效.*选择'):
             manager.resolve('hk')
+
+    def test_automatic_group_selection_follows_mode_not_stale_default(self):
+        manager = self._manager_for_runtime()
+        group = next(item for item in manager.state['groups'] if item['id'] == 'hk')
+        group['node_ids'] = ['hk-1', 'sg-1']
+        group['selected'] = 'sg-1'
+        checked_at = int(self.module.time.time())
+        manager.health = {
+            'hk-1': {'status': 'ok', 'latency_ms': 80, 'checked_at': checked_at},
+            'sg-1': {'status': 'ok', 'latency_ms': 20, 'checked_at': checked_at},
+        }
+        _, selected = manager.resolve('hk')
+        self.assertEqual(selected['id'], 'sg-1')
+        manager.health = {}
+        _, selected = manager.resolve('hk')
+        self.assertEqual(selected['id'], 'hk-1')
+        group['mode'] = 'fallback'
+        manager.health = {'sg-1': {'status': 'ok', 'latency_ms': 20, 'checked_at': checked_at}}
+        _, selected = manager.resolve('hk')
+        self.assertEqual(selected['id'], 'sg-1')
 
     def test_direct_fallback_maps_to_mihomo_direct(self):
         document = self._manager_for_runtime()._runtime_document()

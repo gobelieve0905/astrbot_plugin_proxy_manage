@@ -8,7 +8,7 @@ if (!api || typeof api.ready !== 'function') {
 }
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
 const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名和目标出口',platforms:'生成域名规则；这不代表平台 SDK 已接入代理',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
-let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, editingGroupId=null
+let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
 let noticeTimer=null
@@ -19,9 +19,14 @@ function groupOptions(selected){ return state.groups.map(group=>`<option value="
 const groupModes=[
   {value:'select',label:'手动选择',help:'在运行状态中手动切换成员节点。'},
   {value:'url-test',label:'按延迟自动选择',help:'按测速目标和周期选择延迟最低的可用节点。'},
-  {value:'fallback',label:'故障自动切换',help:'优先使用当前节点，失败后按成员顺序切换。'},
+  {value:'fallback',label:'故障自动切换',help:'按成员顺序使用健康节点，故障后切换到下一个。'},
 ]
 const groupModeLabels=Object.fromEntries(groupModes.map(item=>[item.value,item.label]))
+function groupStrategy(mode){
+  if(mode==='url-test')return {title:'按测速选择延迟最低节点',detail:'根据最近有效测速结果选择延迟最低的可用节点；尚无测速结果时按成员顺序兜底。'}
+  if(mode==='fallback')return {title:'按成员顺序故障切换',detail:'按成员顺序使用首个健康节点；当前节点故障后切换到下一个，尚无健康记录时使用首个成员。'}
+  return {title:'由用户手动选择',detail:'运行时可在代理组状态中切换成员；未指定初始节点时按成员顺序使用首个可用节点。'}
+}
 function editableGroups(){ return state.groups.map((group,index)=>({group,index})).filter(item=>item.group.id!=='direct') }
 function groupMembers(group){ return state.nodes.filter(node=>group.node_ids?.includes(node.id)) }
 function nodeName(node){ return node?.display_name||node?.name||'未命名节点' }
@@ -32,6 +37,12 @@ function nodeSubscription(node){
 }
 function nodeLabel(node){ return `${nodeSubscription(node)} · ${nodeName(node)}` }
 function nodeDetails(node){ return `${nodeSubscription(node)} · ${node?.protocol||'unknown'} · ${node?.region||'其他'}` }
+function groupNodeMatches(node,query){
+  const terms=String(query||'').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  if(!terms.length)return true
+  const text=[nodeSubscription(node),nodeName(node),node?.display_name,node?.name,node?.protocol,node?.region].filter(Boolean).join(' ').toLocaleLowerCase()
+  return terms.every(term=>text.includes(term))
+}
 function runtimeNodeLabel(node){
   const source=state?.nodes?.find(item=>item.id===node?.id)
   return source?nodeLabel(source):(node?.display_name||'未命名节点')
@@ -138,7 +149,7 @@ function render(){
     const groups=editableGroups()
     html=`<section class="panel"><div class="bar"><div><small>按 Clash 风格组织出口</small><h2>代理组配置</h2></div><button id="add" class="primary">新增代理组</button></div>
       <p class="muted group-config-note">直连是内核内部的默认目标，不作为可编辑代理组展示。每个代理组在弹窗中选择模式和成员节点，保存页面配置后再应用到当前内核。</p>
-      ${groups.map(({group,index})=>{const members=groupMembers(group),selected=state.nodes.find(node=>node.id===group.selected);return `<article class="group-card" data-i="${index}" data-group-id="${esc(group.id)}"><div class="group-card-head"><div class="group-card-title"><b>${esc(group.name)}</b><span class="chip ${group.enabled?'ok':'pending'}">${group.enabled?'已启用':'已停用'}</span></div><div class="group-card-actions"><button data-edit-group="${esc(group.id)}">编辑</button><button data-del="groups" class="danger">删除</button></div></div><div class="group-card-meta"><span>模式：${esc(groupModeLabels[group.mode]||group.mode)}</span><span>成员：${members.length}</span>${selected?`<span>默认：${esc(nodeLabel(selected))}</span>`:''}${group.mode!=='select'?`<span>测速：每 ${esc(group.test_interval||300)} 秒</span>`:''}</div><div class="group-card-members">${members.map(node=>`<span class="chip" title="${esc(nodeDetails(node))}">${esc(nodeLabel(node))}</span>`).join('')||'<span class="muted">尚未选择节点</span>'}</div></article>`}).join('')||'<div class="group-empty"><b>还没有代理组</b><span>新增一个代理组后，在弹窗中选择节点和自动策略。</span></div>'}</section>
+      ${groups.map(({group,index})=>{const members=groupMembers(group),selected=group.mode==='select'&&state.nodes.find(node=>node.id===group.selected);return `<article class="group-card" data-i="${index}" data-group-id="${esc(group.id)}"><div class="group-card-head"><div class="group-card-title"><b>${esc(group.name)}</b><span class="chip ${group.enabled?'ok':'pending'}">${group.enabled?'已启用':'已停用'}</span></div><div class="group-card-actions"><button data-edit-group="${esc(group.id)}">编辑</button><button data-del="groups" class="danger">删除</button></div></div><div class="group-card-meta"><span>模式：${esc(groupModeLabels[group.mode]||group.mode)}</span><span>成员：${members.length}</span>${selected?`<span>初始：${esc(nodeLabel(selected))}</span>`:''}${group.mode!=='select'?`<span>策略：${esc(groupStrategy(group.mode).title)}</span><span>测速：每 ${esc(group.test_interval||300)} 秒</span>`:''}</div><div class="group-card-members">${members.map(node=>`<span class="chip" title="${esc(nodeDetails(node))}">${esc(nodeLabel(node))}</span>`).join('')||'<span class="muted">尚未选择节点</span>'}</div></article>`}).join('')||'<div class="group-empty"><b>还没有代理组</b><span>新增一个代理组后，在弹窗中选择节点和自动策略。</span></div>'}</section>
       <section class="panel"><div class="bar"><div><small>当前运行内核</small><h2>代理组状态</h2></div><button id="group-runtime-refresh">刷新状态</button></div>${runtimeGroups.length?runtimeGroups.map(group=>`<div class="control-group"><b>${esc(group.display_name)}</b><small>${esc(group.type)} · ${esc(group.selected_node_id?runtimeNodeLabel({id:group.selected_node_id}):group.selected_display_name||'无')}</small><select data-select="${esc(group.id)}">${group.members.map(node=>`<option value="${esc(node.id)}" ${node.id===group.selected_node_id?'selected':''} ${node.available?'':'disabled'}>${esc(runtimeNodeLabel(node))}${node.available?'':'（不可用）'}</option>`).join('')}</select></div>`).join(''):'<p class="muted">尚未读取运行状态，或当前内核没有可切换代理组。</p>'}</section>`
   } else if(tab==='routes'){
     html=`<section class="panel"><div class="bar"><h2>规则组</h2><button id="add">新增规则组</button></div>${state.rule_groups.map((rule,index)=>`<div class="group-card" data-i="${index}"><div class="table"><input data-k="name" value="${esc(rule.name)}"><input type="number" data-k="priority" value="${rule.priority}"><select data-k="target">${groupOptions(rule.target)}</select><label><input type="checkbox" data-k="enabled" ${rule.enabled?'checked':''}>启用</label><button data-del="rule_groups">删除</button></div><textarea data-domains rows="3" placeholder="每行：exact api.example.com 或 suffix example.com">${esc(rule.domains.map(domain=>domain.match+' '+domain.host).join('\n'))}</textarea></div>`).join('')}</section>`
@@ -207,14 +218,14 @@ function groupDialogError(message){
 }
 function renderGroupDialog(){
   const dialog=$('proxy-group-dialog'),body=$('proxy-group-body'),actions=$('proxy-group-actions'); if(!dialog||!body||!actions||!groupDraft)return
-  const mode=groupDraft.mode, automatic=mode==='url-test'||mode==='fallback'
+  const mode=groupDraft.mode, automatic=mode==='url-test'||mode==='fallback', allNodes=state.nodes||[], filteredNodes=allNodes.filter(node=>groupNodeMatches(node,groupNodeQuery)), visibleIds=filteredNodes.map(node=>node.id), visibleSelectedCount=visibleIds.filter(id=>groupDraft.node_ids.includes(id)).length, strategy=groupStrategy(mode)
   $('proxy-group-title').textContent=editingGroupId?'编辑代理组':'新增代理组'
   body.innerHTML=`<div id="group-dialog-error" class="group-dialog-error" role="alert" aria-live="assertive" hidden></div>
     <div class="group-form-grid">
       <label class="field-label" for="group-name"><span class="field-title">代理组名称<span class="required-mark">必填</span></span><input id="group-name" data-group-field="name" type="text" required maxlength="80" autocomplete="off" value="${esc(groupDraft.name)}" placeholder="例如：Telegram 主线路"><small>名称用于规则目标和运行内核显示。</small></label>
       <label class="field-label" for="group-mode"><span class="field-title">选择模式</span><select id="group-mode" data-group-field="mode" aria-describedby="group-mode-help">${groupModes.map(item=>`<option value="${item.value}" ${item.value===mode?'selected':''}>${item.label}</option>`).join('')}</select><small id="group-mode-help">${esc(groupModes.find(item=>item.value===mode)?.help||'')}</small></label>
     </div>
-    <fieldset class="group-form-section"><legend>节点成员</legend><div class="field-label"><span class="field-title">选择可用节点<span class="required-mark">至少一项</span></span><div id="group-node-picker" class="node-picker" role="group" aria-describedby="group-node-help" aria-label="代理组节点成员">${state.nodes.map(node=>`<button type="button" class="node-picker-option ${groupDraft.node_ids.includes(node.id)?'selected':''}" aria-pressed="${groupDraft.node_ids.includes(node.id)}" data-group-node="${esc(node.id)}"><span>${esc(nodeLabel(node))}</span><small>${esc(nodeDetails(node))}${node.invalid_reference?' · 引用失效':''}</small></button>`).join('')||'<span class="muted node-picker-empty">暂无节点，请先导入订阅</span>'}</div><small id="group-node-help">点击节点即可选中，再次点击取消；每个节点会显示所属订阅。</small></div><label class="field-label" for="group-selected"><span class="field-title">默认节点</span><select id="group-selected" data-group-field="selected" ${groupDraft.node_ids.length?'':'disabled'}><option value="">自动选择首个可用成员</option>${state.nodes.filter(node=>groupDraft.node_ids.includes(node.id)).map(node=>`<option value="${esc(node.id)}" ${node.id===groupDraft.selected?'selected':''}>${esc(nodeLabel(node))}</option>`).join('')}</select><small>手动模式使用此节点作为初始选择；自动模式按策略选择，未指定时从首个可用成员开始。</small></label></fieldset>
+    <fieldset class="group-form-section"><legend>节点成员</legend><div class="field-label"><span class="field-title">选择可用节点<span class="required-mark">至少一项</span></span><div class="group-node-toolbar"><label class="field-label group-node-search" for="group-node-search"><span class="field-title">搜索节点</span><input id="group-node-search" type="search" autocomplete="off" value="${esc(groupNodeQuery)}" placeholder="搜索订阅、节点、协议或地区" aria-controls="group-node-picker"></label><div class="group-node-actions" aria-label="节点批量选择"><button id="group-select-visible" type="button" ${filteredNodes.length?'':'disabled'}>全选</button><button id="group-clear-visible" type="button" ${visibleSelectedCount?'':'disabled'}>全不选</button></div></div><div class="group-node-summary" aria-live="polite">已选 ${groupDraft.node_ids.length} 个 · 显示 ${filteredNodes.length} 个${groupNodeQuery.trim()?` · 当前筛选已选 ${visibleSelectedCount} 个`:''}</div><div id="group-node-picker" class="node-picker" role="group" aria-describedby="group-node-help" aria-label="代理组节点成员">${filteredNodes.map(node=>`<button type="button" class="node-picker-option ${groupDraft.node_ids.includes(node.id)?'selected':''}" aria-pressed="${groupDraft.node_ids.includes(node.id)}" data-group-node="${esc(node.id)}"><span>${esc(nodeLabel(node))}</span><small>${esc(nodeDetails(node))}${node.invalid_reference?' · 引用失效':''}</small></button>`).join('')||(groupNodeQuery.trim()?'<span class="muted node-picker-empty">没有匹配节点，请修改关键词。</span>':'<span class="muted node-picker-empty">暂无节点，请先导入订阅</span>')}</div><small id="group-node-help">点击节点即可选中，再次点击取消；全选和全不选只作用于当前筛选结果。</small></div>${automatic?`<div class="group-strategy-summary" role="status"><span class="field-title">自动选择策略</span><b>${esc(strategy.title)}</b><small>${esc(strategy.detail)}</small></div>`:`<label class="field-label" for="group-selected"><span class="field-title">初始节点</span><select id="group-selected" data-group-field="selected" ${groupDraft.node_ids.length?'':'disabled'}><option value="">未指定（成员顺序首个可用）</option>${state.nodes.filter(node=>groupDraft.node_ids.includes(node.id)).map(node=>`<option value="${esc(node.id)}" ${node.id===groupDraft.selected?'selected':''}>${esc(nodeLabel(node))}</option>`).join('')}</select><small>${esc(strategy.detail)}</small></label>`}</fieldset>
     <fieldset class="group-form-section"><legend>自动策略参数</legend><div class="group-form-grid"><label class="field-label" for="group-test-url"><span class="field-title">测速目标</span><input id="group-test-url" data-group-field="test_url" type="url" ${automatic?'':'disabled'} value="${esc(groupDraft.test_url)}" placeholder="https://www.gstatic.com/generate_204"><small>仅自动模式使用 HTTP/HTTPS 目标。</small></label><label class="field-label" for="group-test-interval"><span class="field-title">测速周期（秒）</span><input id="group-test-interval" data-group-field="test_interval" type="number" min="30" max="86400" step="1" ${automatic?'':'disabled'} value="${esc(groupDraft.test_interval)}"><small>范围 30 至 86400 秒。</small></label><label class="field-label" for="group-tolerance"><span class="field-title">切换容差（毫秒）</span><input id="group-tolerance" data-group-field="tolerance" type="number" min="0" max="5000" step="1" ${automatic?'':'disabled'} value="${esc(groupDraft.tolerance)}"><small>延迟差异小于该值时不频繁切换。</small></label><label class="field-label" for="group-failure-policy"><span class="field-title">全部不可用时</span><select id="group-failure-policy" data-group-field="failure_policy" ${automatic?'':'disabled'}><option value="fail-closed" ${groupDraft.failure_policy==='fail-closed'?'selected':''}>失败关闭</option><option value="keep-last" ${groupDraft.failure_policy==='keep-last'?'selected':''}>保留最后选择</option></select><small>不会自动绕过代理改为直连。</small></label></div></fieldset>
     <label class="group-enabled"><input id="group-enabled" data-group-field="enabled" type="checkbox" ${groupDraft.enabled?'checked':''}>启用此代理组</label>`
   actions.innerHTML='<button id="proxy-group-cancel" type="button" class="quiet">取消</button><button id="proxy-group-save" type="button" class="primary">保存代理组</button>'
@@ -230,25 +241,28 @@ function renderGroupDialog(){
     if(groupDraft.selected&&!groupDraft.node_ids.includes(groupDraft.selected))groupDraft.selected=''
     renderGroupDialog(); requestAnimationFrame(()=>document.querySelector(`[data-group-node="${CSS.escape(id)}"]`)?.focus())
   }))
-  $('group-mode')?.addEventListener('change',event=>{groupDraft.mode=event.target.value;renderGroupDialog();requestAnimationFrame(()=>$('group-mode')?.focus())})
+  $('group-node-search')?.addEventListener('input',event=>{groupNodeQuery=event.target.value;renderGroupDialog();requestAnimationFrame(()=>{const input=$('group-node-search');input?.focus();input?.setSelectionRange(groupNodeQuery.length,groupNodeQuery.length)})})
+  $('group-select-visible')?.addEventListener('click',()=>{groupDraft.node_ids=[...new Set([...groupDraft.node_ids,...visibleIds])];renderGroupDialog();requestAnimationFrame(()=>$('group-select-visible')?.focus())})
+  $('group-clear-visible')?.addEventListener('click',()=>{groupDraft.node_ids=groupDraft.node_ids.filter(id=>!visibleIds.includes(id));if(groupDraft.selected&&!groupDraft.node_ids.includes(groupDraft.selected))groupDraft.selected='';renderGroupDialog();requestAnimationFrame(()=>$('group-clear-visible')?.focus())})
+  $('group-mode')?.addEventListener('change',event=>{groupDraft.mode=event.target.value;if(groupDraft.mode!=='select')groupDraft.selected='';renderGroupDialog();requestAnimationFrame(()=>$('group-mode')?.focus())})
   $('proxy-group-cancel')?.addEventListener('click',closeGroupDialog)
   $('proxy-group-save')?.addEventListener('click',saveGroupDialog)
 }
 function openGroupDialog(groupId=''){
   const source=groupId?state.groups.find(group=>group.id===groupId):null
   if(source?.id==='direct')return
-  groupDialogReturnFocus=document.activeElement; editingGroupId=groupId||''; groupDraft=groupDraftFrom(source); renderGroupDialog()
+  groupDialogReturnFocus=document.activeElement; editingGroupId=groupId||''; groupNodeQuery=''; groupDraft=groupDraftFrom(source); renderGroupDialog()
   const dialog=$('proxy-group-dialog'); dialog?.showModal(); requestAnimationFrame(()=>$('group-name')?.focus())
 }
 function closeGroupDialog({restore=true}={}){
   const dialog=$('proxy-group-dialog'); if(dialog?.open)dialog.close()
-  const target=groupDialogReturnFocus; groupDialogReturnFocus=null; groupDraft=null; editingGroupId=null
+  const target=groupDialogReturnFocus; groupDialogReturnFocus=null; groupNodeQuery=''; groupDraft=null; editingGroupId=null
   if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})
 }
 function readGroupDialog(){
   if(!groupDraft)return null
   const values={...groupDraft}
-  values.name=String($('group-name')?.value||'').trim(); values.mode=$('group-mode')?.value||'select'; values.node_ids=[...groupDraft.node_ids]; values.selected=$('group-selected')?.value||''
+  values.name=String($('group-name')?.value||'').trim(); values.mode=$('group-mode')?.value||'select'; values.node_ids=[...groupDraft.node_ids]; values.selected=values.mode==='select'?($('group-selected')?.value||''):''
   values.enabled=Boolean($('group-enabled')?.checked); values.test_url=String($('group-test-url')?.value||'').trim(); values.test_interval=Number($('group-test-interval')?.value||300); values.tolerance=Number($('group-tolerance')?.value||0); values.failure_policy=$('group-failure-policy')?.value||'fail-closed'
   return values
 }

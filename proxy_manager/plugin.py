@@ -503,15 +503,17 @@ class ProxyManager(Star):
         group=next((item for item in self.state['groups'] if item['id']==group_id and item['enabled']),None)
         if not group: raise ValueError('代理组不存在或未启用')
         if group['mode']=='direct': return group,None
-        if group['selected'] and group['selected'] not in {node['id'] for node in self.state['nodes']}:
+        if group['mode']=='select' and group['selected'] and group['selected'] not in {node['id'] for node in self.state['nodes']}:
             raise ValueError('代理组手动选择已失效：'+group['name'])
         nodes=[node for node in self.state['nodes'] if node['id'] in group['node_ids'] and node['enabled']
                and not node.get('excluded') and node.get('support',{}).get('status','supported')=='supported']
         if not nodes: raise ValueError('代理组没有可用节点')
-        if group['selected'] and not any(node['id']==group['selected'] for node in nodes):
+        if group['mode']=='select' and group['selected'] and not any(node['id']==group['selected'] for node in nodes):
             raise ValueError('代理组手动选择不可用或已失效：'+group['name'])
-        selected=next((node for node in nodes if node['id']==group['selected']),nodes[0])
-        if group['mode'] in {'url-test','fallback'}:
+        if group['mode']=='select':
+            selected=next((node for node in nodes if node['id']==group['selected']),nodes[0])
+        else:
+            selected=nodes[0]
             healthy=[]
             now=int(time.time())
             for node in nodes:
