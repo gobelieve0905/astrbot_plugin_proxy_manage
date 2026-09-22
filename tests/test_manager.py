@@ -181,7 +181,9 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('group-runtime-refresh',script)
         self.assertIn('refreshGroupStatus',script)
         self.assertIn('proxy-group-dialog',html)
-        self.assertIn('select id="group-node-ids" required multiple',script)
+        self.assertIn('id="group-node-picker"',script)
+        self.assertIn('data-group-node',script)
+        self.assertIn('自动选择首个可用成员',script)
         self.assertIn('openGroupDialog',script)
         self.assertIn('noticeTimer=setTimeout',script)
         control_view=script[script.index("} else if(tab==='control')"):script.index("  } else {",script.index("} else if(tab==='control')"))]
