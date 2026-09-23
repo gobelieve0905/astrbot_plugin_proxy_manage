@@ -106,8 +106,9 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
     groups=[]
     for item in group_values:
         if not isinstance(item,dict) or not ident(item.get('id')): continue
+        group_name=' '.join(str(item.get('name',item['id'])).split())
         groups.append({
-            'id':ident(item['id']), 'name':str(item.get('name',item['id']))[:80],
+            'id':ident(item['id']), 'name':group_name[:80],
             'kernel_name':'DIRECT' if ident(item['id'])=='direct' else 'group-'+ident(item['id']),
             'mode':item.get('mode') if item.get('mode') in MODES else 'select',
             'node_ids':list(dict.fromkeys(aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value))),
@@ -278,7 +279,7 @@ def validate_state(value: object) -> dict:
     for item in value['subscriptions']:
         if not isinstance(item,dict) or not safe_url(item.get('url')):
             raise ValueError('订阅地址无效，只允许 HTTP 或 HTTPS')
-    state,_=normalize_state(value); node_ids=set(); group_ids=set()
+    state,_=normalize_state(value); node_ids=set(); group_ids=set(); group_names={}
     for node in state['nodes']:
         if node['id'] in node_ids: raise ValueError('节点 ID 重复：'+node['id'])
         node_ids.add(node['id'])
@@ -289,6 +290,11 @@ def validate_state(value: object) -> dict:
     for group in state['groups']:
         if group['id'] in group_ids: raise ValueError('代理组 ID 重复：'+group['id'])
         group_ids.add(group['id'])
+        group_name=' '.join(str(group.get('name','')).split())
+        if not group_name: raise ValueError('代理组名称不能为空')
+        group_key=group_name.casefold()
+        if group_key in group_names: raise ValueError('代理组名称重复：'+group_name)
+        group_names[group_key]=group['id']
         missing=set(group['node_ids'])-node_ids
         if missing: raise ValueError('代理组引用不存在节点：'+next(iter(missing)))
         if group['mode']!='direct' and not group['node_ids']: raise ValueError('代理组至少需要一个节点：'+group['id'])

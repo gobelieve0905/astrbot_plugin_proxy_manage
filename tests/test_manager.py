@@ -170,7 +170,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.18',html)
+        self.assertIn('流量控制 · 0.3.19',html)
         self.assertIn('平台域名模板',html)
         self.assertIn('traffic_inventory',script)
         self.assertIn('kernel-resources',script)
@@ -188,6 +188,8 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('id="group-clear-visible"',script)
         self.assertIn('groupStrategy',script)
         self.assertIn('按测速选择延迟最低节点',script)
+        self.assertIn('groups-runtime-section',script)
+        self.assertNotIn('按 Clash 风格组织出口',script)
         self.assertNotIn('自动选择首个可用成员',script)
         self.assertIn('id="diff-content"',html)
         self.assertNotIn('id="diff-text"',html)
@@ -521,6 +523,24 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertFalse(self.module.safe_url("file:///etc/passwd"))
         self.assertTrue(self.module.safe_url("socks5://mihomo:7891"))
         self.assertFalse(self.module.safe_url("http://user:password@proxy:8080"))
+
+    def test_proxy_group_names_are_unique_ignoring_case_and_whitespace(self):
+        manager=self._manager_for_runtime()
+        candidate=copy.deepcopy(manager.state)
+        candidate['groups']=[
+            {'id':'direct','name':'直连','mode':'direct','node_ids':[],'selected':'','enabled':True},
+            {'id':'first','name':'线路 A','mode':'select','node_ids':['hk-1'],'selected':'hk-1','enabled':True},
+            {'id':'second','name':'  线路   a ','mode':'select','node_ids':['sg-1'],'selected':'sg-1','enabled':True},
+        ]
+        with self.assertRaisesRegex(ValueError,'代理组名称重复'):
+            manager._validate(candidate)
+
+    def test_proxy_group_name_cannot_be_empty(self):
+        manager=self._manager_for_runtime()
+        candidate=copy.deepcopy(manager.state)
+        candidate['groups'][1]['name']='   '
+        with self.assertRaisesRegex(ValueError,'代理组名称不能为空'):
+            manager._validate(candidate)
 
     def test_user_controlled_urls_reject_private_and_metadata_addresses(self):
         from proxy_manager.traffic.safe_http import validate_public_url
