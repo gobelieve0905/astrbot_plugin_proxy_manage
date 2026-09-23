@@ -1089,6 +1089,17 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 .runtime-group-select select { min-height: 38px; }
 .runtime-group-note { color: var(--muted); font-size: 11px; }
 .runtime-group-error { margin: 0; padding: 8px 10px; border-left: 3px solid var(--danger); background: var(--danger-soft); color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+.runtime-group-selection { display: grid; gap: 3px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.runtime-group-selection span, .runtime-group-selection small { color: var(--muted); font-size: 11px; }
+.runtime-group-selection b { overflow-wrap: anywhere; font-size: 12px; }
+.runtime-group-evidence { margin-top: 10px; border-top: 1px solid var(--line); }
+.runtime-group-evidence > summary { padding: 10px 0 2px; color: var(--muted-strong); font-size: 12px; }
+.runtime-group-members { display: grid; gap: 6px; margin-top: 8px; }
+.runtime-group-member { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--input); }
+.runtime-group-member.current { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); }
+.runtime-group-member span { display: flex; flex-wrap: wrap; gap: 5px 8px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.runtime-group-member span small { color: var(--accent-strong); font-size: 10px; font-weight: 700; }
+.runtime-group-member b { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12px; }
 .panel-lede { margin: 5px 0 0; }
 .group-accordion { margin-top: 12px; border-top: 1px solid var(--line); }
 .group-accordion > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto 18px; align-items: center; gap: 14px; min-width: 0; padding: 16px 0; list-style: none; }
@@ -1115,8 +1126,9 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 .compact-node-health > small { color: var(--muted); font-size: 11px; }
 .compact-node-actions { display: flex; justify-content: flex-end; gap: 7px; }
 .compact-node-actions button { min-height: 36px; padding: 6px 10px; }
-.node-dialog { width: min(680px, calc(100vw - 32px)); }
-.node-dialog-body { max-height: min(620px, calc(100vh - 170px)); padding: 22px 24px; overflow: auto; }
+.node-dialog { width: min(680px, calc(100vw - 32px)); height: min(820px, calc(100vh - 32px)); max-height: none; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
+.node-dialog .dialog-head, .node-dialog .dialog-actions { min-height: 0; }
+.node-dialog-body { min-height: 0; padding: 22px 24px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 .node-dialog-error { margin-bottom: 16px; padding: 10px 12px; border-left: 3px solid var(--danger); background: var(--danger-soft); color: var(--danger); font-size: 12px; font-weight: 600; }
 .node-dialog-error[hidden] { display: none; }
 .node-detail-form { display: grid; gap: 16px; }

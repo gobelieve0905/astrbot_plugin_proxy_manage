@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -186,11 +187,33 @@ class SingBoxAdapter(CoreAdapter):
             runtime_group=proxies_response.json().get('proxies',{}).get(name,{})
             selected=str(runtime_group.get('now','')) if isinstance(runtime_group,dict) else ''
             if not selected: raise ValueError('内核未返回当前代理组节点')
-            response=await client.get('/proxies/'+quote(selected,safe='')+'/delay',
-                                      params={'url':target,'timeout':timeout*1000})
-            response.raise_for_status(); delay=response.json().get('delay')
+            members=[node.get('kernel_name') for node in state.get('nodes',[])
+                     if node.get('id') in group.get('node_ids',[])
+                     and node.get('enabled',True) and not node.get('excluded')
+                     and not node.get('invalid_reference')
+                     and self.id in node.get('adapters',[self.id])
+                     and node.get('support',{}).get('status','supported')=='supported'
+                     and node.get('kernel_name')]
+            if selected not in members: members.append(selected)
+
+            async def probe_member(kernel_name):
+                try:
+                    response=await client.get('/proxies/'+quote(kernel_name,safe='')+'/delay',
+                                              params={'url':target,'timeout':timeout*1000})
+                    response.raise_for_status(); delay=response.json().get('delay')
+                    if not isinstance(delay,int): raise ValueError()
+                    return {'kernel_name':kernel_name,'latency_ms':delay}
+                except (httpx.HTTPError,TypeError,ValueError):
+                    return {'kernel_name':kernel_name,'latency_ms':None,'error':'测速失败'}
+
+            member_results=await asyncio.gather(*(probe_member(kernel_name) for kernel_name in members))
+            refreshed=await client.get('/proxies'); refreshed.raise_for_status()
+            refreshed_group=refreshed.json().get('proxies',{}).get(name,{})
+            selected=str(refreshed_group.get('now','')) if isinstance(refreshed_group,dict) else selected
+        current=next((item for item in member_results if item['kernel_name']==selected),None)
+        delay=current.get('latency_ms') if current else None
         if not isinstance(delay,int): raise ValueError('sing-box 控制接口未返回代理组延迟')
-        return {'latency_ms':delay,'selected_kernel_name':selected}
+        return {'latency_ms':delay,'selected_kernel_name':selected,'member_results':member_results}
 
     async def proxies(self, state: dict) -> dict:
         fetched=await self.fetch_runtime(state)

@@ -1588,9 +1588,39 @@ class ProxyManager(Star):
                 if not node: raise ValueError('测速完成，但内核未能确认本次测速使用的节点')
                 if node['id'] not in group.get('node_ids',[]):
                     raise ValueError('测速完成，但内核当前节点不属于该代理组')
+                member_results=[]
+                for item in result.get('member_results',[]) if isinstance(result.get('member_results'),list) else []:
+                    if not isinstance(item,dict): continue
+                    kernel_name=str(item.get('kernel_name',''))
+                    member=next((candidate for candidate in self.state['nodes']
+                                 if candidate.get('kernel_name')==kernel_name
+                                 and candidate.get('id') in group.get('node_ids',[])),None)
+                    if not member: continue
+                    latency=item.get('latency_ms')
+                    member_results.append({'node_id':member['id'],'node_name':member.get('display_name',member.get('name','')),
+                                           'latency_ms':latency if isinstance(latency,int) else None,
+                                           **({} if isinstance(latency,int) else {'error':str(item.get('error') or '测速失败')})})
+                if not member_results:
+                    member_results=[{'node_id':node['id'],'node_name':node.get('display_name',node.get('name','')),
+                                     'latency_ms':result.get('latency_ms')}]
+                valid_members=[item for item in member_results if isinstance(item.get('latency_ms'),int)]
+                minimum=min((item['latency_ms'] for item in valid_members),default=None)
+                selected_latency=next((item['latency_ms'] for item in valid_members if item['node_id']==node['id']),None)
+                selection={}
+                if group.get('mode')=='url-test' and minimum is not None and selected_latency is not None:
+                    tolerance=max(0,int(group.get('tolerance',0) or 0))
+                    within_tolerance=selected_latency<=minimum+tolerance
+                    selection={'state':'within_tolerance' if within_tolerance else 'not_lowest',
+                               'selected_latency_ms':selected_latency,'minimum_latency_ms':minimum,
+                               'tolerance_ms':tolerance,
+                               'message':('当前节点在最低延迟 + 容差范围内，内核可以继续保持当前选择。'
+                                          if within_tolerance else '当前节点不在最低延迟 + 容差范围内，等待内核下一次选优或刷新状态。')}
+                elif group.get('mode')=='url-test':
+                    selection={'state':'unconfirmed','message':'成员测速结果不完整，暂时无法核对自动选优。'}
                 checked_at=int(time.time())
                 probe={'latency_ms':result.get('latency_ms'),'checked_at':checked_at,'node_id':node['id'],
                        'node_name':node.get('display_name',node.get('name','')),
+                       'member_results':member_results,'selection':selection,
                        'target_fingerprint':self._group_test_fingerprint(target),
                        'members':sorted(group.get('node_ids',[]))}
                 if not isinstance(probe['latency_ms'],int): raise ValueError('内核未返回有效代理组延迟')

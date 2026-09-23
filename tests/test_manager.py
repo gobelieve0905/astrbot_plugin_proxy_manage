@@ -197,6 +197,9 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('data-node-details',script)
         self.assertIn('compact-node-card',script)
         self.assertIn('node-detail-facts',script + styles)
+        self.assertIn('runtime-group-selection',script + styles)
+        self.assertIn('runtime-group-evidence',script + styles)
+        self.assertIn('grid-template-rows: auto minmax(0, 1fr) auto',styles)
         self.assertNotIn('按 Clash 风格组织出口',script)
         self.assertNotIn('自动选择首个可用成员',script)
         self.assertIn('id="diff-content"',html)
@@ -1083,14 +1086,17 @@ class TestConfigurationRules(unittest.TestCase):
         def response(payload): return self.module.httpx.Response(200,json=payload,request=request)
         client=AsyncMock(); client.__aenter__.return_value=client
         client.get=AsyncMock(side_effect=[response({'proxies':{'group-hk':{'now':'node-hk-1'}}}),
-                                          response({'delay':42})])
+                                          response({'delay':42}),
+                                          response({'proxies':{'group-hk':{'now':'node-hk-1'}}})])
         with patch.object(self.module.httpx,'AsyncClient',return_value=client):
             result=asyncio.run(manager._adapter().probe_group(manager.state,manager.state['groups'][1],
                                                               'https://www.gstatic.com/generate_204',8))
-        self.assertEqual(result,{'latency_ms':42,'selected_kernel_name':'node-hk-1'})
+        self.assertEqual(result,{'latency_ms':42,'selected_kernel_name':'node-hk-1',
+                                 'member_results':[{'kernel_name':'node-hk-1','latency_ms':42}]})
         self.assertEqual(client.get.await_args_list[0].args[0],'/proxies')
         self.assertEqual(client.get.await_args_list[1].args[0],'/proxies/node-hk-1/delay')
         self.assertEqual(client.get.await_args_list[1].kwargs['params']['timeout'],8000)
+        self.assertEqual(client.get.await_args_list[2].args[0],'/proxies')
 
     def test_group_probe_persists_real_current_node_and_latency(self):
         manager=self._manager_for_runtime()
@@ -1104,6 +1110,8 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(result['latency_ms'],42); self.assertEqual(result['node_id'],'hk-1')
         self.assertIn('target_fingerprint',manager.group_health['hk'])
         self.assertNotIn('target',manager.group_health['hk'])
+        self.assertEqual(manager.group_health['hk']['member_results'][0]['node_id'],'hk-1')
+        self.assertEqual(manager.group_health['hk']['selection']['state'],'within_tolerance')
         self.assertEqual(manager.group_health['hk']['node_name'],'HK 1'); manager.persist_group_health.assert_called_once()
 
     def test_group_probe_rejects_unapplied_group_and_private_targets(self):
