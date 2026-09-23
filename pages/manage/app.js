@@ -8,7 +8,7 @@ if (!api || typeof api.ready !== 'function') {
 }
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
 const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名和目标出口',platforms:'生成域名规则；这不代表平台 SDK 已接入代理',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
-let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null
+let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', openGroupIds=new Set()
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
 let noticeTimer=null
@@ -46,6 +46,13 @@ function groupNodeMatches(node,query){
 function runtimeNodeLabel(node){
   const source=state?.nodes?.find(item=>item.id===node?.id)
   return source?nodeLabel(source):(node?.display_name||'未命名节点')
+}
+function runtimeGroupSummary(group){
+  if(!controlResult)return {label:'未读取',className:'pending',current:'尚未读取运行状态'}
+  if(!group)return {label:'未读取',className:'pending',current:'当前内核未返回此代理组'}
+  if(!group.runtime_available)return {label:'待应用',className:'pending',current:'尚未应用到当前内核'}
+  if(!group.selected_node_id&&!group.selected_display_name)return {label:'待核对',className:'pending',current:'内核尚未返回当前节点'}
+  return {label:'运行中',className:'ok',current:group.selected_node_id?runtimeNodeLabel({id:group.selected_node_id}):group.selected_display_name}
 }
 function groupDraftFrom(group){
   const source=group||{}
@@ -139,20 +146,18 @@ function render(){
     const source=$('node-source')?.value||'全部', protocol=$('node-protocol')?.value||'全部', region=$('node-region')?.value||'全部', status=$('node-status')?.value||'全部'
     const subscriptionNames=Object.fromEntries(state.subscriptions.map(item=>[item.id,item.name||item.id])), sourceEntries=[...new Map(state.nodes.map(node=>[node.subscription_id||'manual',{id:node.subscription_id||'manual',label:node.subscription_id?(subscriptionNames[node.subscription_id]||'未命名订阅'):'手动节点'}])).values()], protocols=[...new Set(state.nodes.map(node=>node.protocol))], regions=[...new Set(state.nodes.map(node=>node.region||'其他'))]
     const shown=state.nodes.map((node,index)=>({node,index})).filter(({node})=>(source==='全部'||(node.subscription_id||'manual')===source)&&(protocol==='全部'||node.protocol===protocol)&&(region==='全部'||(node.region||'其他')===region)&&(status==='全部'||(node.invalid_reference?'失效':health(node.id).status)===status)), visibleIds=shown.map(({node})=>node.id), visibleSelectedCount=visibleIds.filter(id=>selectedProbeNodeIds.has(id)).length, selectedCount=state.nodes.filter(node=>selectedProbeNodeIds.has(node.id)).length
-    html=`<section class="panel"><div class="bar"><h2>代理节点</h2><div class="actions"><button id="add">新增节点</button><button id="test-selected" ${selectedCount?'':'disabled'}>测速所选 (${selectedCount})</button><button id="test-all">测速全部</button></div></div>
+    html=`<section class="panel"><div class="bar"><div><h2>代理节点</h2><p class="muted panel-lede">列表保留名称、状态和延迟；连接参数及诊断信息可在节点详情中查看。</p></div><div class="actions"><button id="add">新增节点</button><button id="test-selected" ${selectedCount?'':'disabled'}>测速所选 (${selectedCount})</button><button id="test-all">测速全部</button></div></div>
       <div class="filter"><select id="node-source"><option value="全部">全部</option>${sourceEntries.map(entry=>`<option value="${esc(entry.id)}" ${entry.id===source?'selected':''}>${esc(entry.label)}</option>`).join('')}</select><select id="node-protocol"><option>全部</option>${protocols.map(value=>`<option ${value===protocol?'selected':''}>${esc(value)}</option>`).join('')}</select><select id="node-region"><option>全部</option>${regions.map(value=>`<option ${value===region?'selected':''}>${esc(value)}</option>`).join('')}</select><select id="node-status"><option>全部</option>${['ok','error','timeout','unknown','失效'].map(value=>`<option ${value===status?'selected':''}>${esc(value)}</option>`).join('')}</select></div>
       <div class="node-select-toolbar"><span id="probe-selection-summary" aria-live="polite">已选 ${selectedCount} 个 · 当前筛选 ${shown.length} 个（已选 ${visibleSelectedCount} 个）</span><div class="node-select-actions"><button id="select-visible-nodes" type="button" ${shown.length?'':'disabled'}>全选</button><button id="clear-visible-nodes" type="button" ${visibleSelectedCount?'':'disabled'}>全不选</button></div></div>
-      ${shown.map(({node,index})=>{const item=health(node.id),support=node.support||{status:'unverified',reason:'尚未验证'};const memberships=state.groups.filter(group=>group.node_ids.includes(node.id)).map(group=>group.name).join('、')||'未加入组';return `<div class="node-card" data-i="${index}">
-        <div class="table"><label class="node-select-checkbox"><input type="checkbox" data-probe-select="${esc(node.id)}" aria-label="选择 ${esc(nodeLabel(node))} 测速" ${selectedProbeNodeIds.has(node.id)?'checked':''}></label><input data-k="name" value="${esc(node.display_name||node.name)}"><span class="chip">${esc(node.protocol||'unknown')} · ${esc(node.engine||'')}</span><span class="chip ${support.status==='supported'?'ok':'pending'}">${esc({supported:'已支持',unverified:'未验证',unsupported:'不支持'}[support.status]||'未验证')}</span><input data-k="endpoint" value="${esc(node.endpoint)}" placeholder="完整连接 URI 或 HTTP/SOCKS 地址"><label><input type="checkbox" data-k="excluded" ${node.excluded?'checked':''}>确认排除测速/组选优</label><button data-del="nodes">删除</button></div>
-        <div class="node-meta"><span class="chip ${node.invalid_reference?'invalid':item.status}">${node.invalid_reference?'引用失效':statusLabel(item)}</span><b>${item.latency_ms??'--'}</b><span>ms</span><span>${time(item.checked_at)}</span><span>${esc(node.subscription_id?'订阅：'+(subscriptionNames[node.subscription_id]||'未命名订阅'):'手动节点')}</span><span>${esc(memberships)}</span>${node.suspected_notice?'<span class="chip pending">疑似订阅提示</span>':''}<button data-test="${esc(node.id)}">测速</button></div>
-        ${support.reason?`<div class="node-error">${esc(support.reason)}</div>`:''}${node.notice_reason?`<div class="muted">${esc(node.notice_reason)}，请人工确认是否排除。</div>`:''}${item.error?`<div class="node-error">${esc(item.error)}</div>`:''}</div>`}).join('')||'<p class="muted">暂无节点。</p>'}</section>`
+      ${shown.map(({node,index})=>{const item=health(node.id),support=node.support||{status:'unverified',reason:'尚未验证'};const runtimeStatus=node.invalid_reference?'invalid':item.status;return `<article class="node-card compact-node-card" data-i="${index}">
+        <div class="compact-node-main"><label class="node-select-checkbox"><input type="checkbox" data-probe-select="${esc(node.id)}" aria-label="选择 ${esc(nodeLabel(node))} 测速" ${selectedProbeNodeIds.has(node.id)?'checked':''}></label><div class="compact-node-identity"><input data-k="name" value="${esc(node.display_name||node.name)}" aria-label="节点名称"><div class="compact-node-subline"><span class="chip">${esc(node.protocol||'unknown')}</span><span class="chip ${support.status==='supported'?'ok':'pending'}">${esc({supported:'已支持',unverified:'未验证',unsupported:'不支持'}[support.status]||'未验证')}</span><span class="muted">${esc(node.region||'其他')}</span></div></div><div class="compact-node-health"><span class="chip ${runtimeStatus}">${node.invalid_reference?'引用失效':statusLabel(item)}</span><b>${item.latency_ms??'--'} <small>ms</small></b><small>${time(item.checked_at)}</small></div><div class="compact-node-actions"><button data-test="${esc(node.id)}">测速</button><button data-node-details="${esc(node.id)}">详情</button><button data-del="nodes" class="danger">删除</button></div></div>
+      </article>`}).join('')||'<p class="muted">暂无节点。</p>'}</section>`
   } else if(tab==='groups'){
-    const runtimeGroups=controlResult?.groups||[]
+    const runtimeGroups=new Map((controlResult?.groups||[]).map(group=>[group.id,group]))
     const groups=editableGroups()
-    html=`<section class="panel groups-panel"><div class="bar"><div><h2>代理组配置</h2></div><button id="add" class="primary">新增代理组</button></div>
-      <p class="muted group-config-note">直连是内核内部的默认目标，不作为可编辑代理组展示。每个代理组在弹窗中选择模式和成员节点；保存页面配置后，还需在“内核管理”点击“应用代理配置”才会写入当前内核。</p>
-      ${groups.map(({group,index})=>{const members=groupMembers(group),selected=group.mode==='select'&&state.nodes.find(node=>node.id===group.selected);return `<article class="group-card" data-i="${index}" data-group-id="${esc(group.id)}"><div class="group-card-head"><div class="group-card-title"><b>${esc(group.name)}</b><span class="chip ${group.enabled?'ok':'pending'}">${group.enabled?'已启用':'已停用'}</span></div><div class="group-card-actions"><button data-edit-group="${esc(group.id)}">编辑</button><button data-del="groups" class="danger">删除</button></div></div><div class="group-card-meta"><span>模式：${esc(groupModeLabels[group.mode]||group.mode)}</span><span>成员：${members.length}</span>${selected?`<span>初始：${esc(nodeLabel(selected))}</span>`:''}${group.mode!=='select'?`<span>策略：${esc(groupStrategy(group.mode).title)}</span><span>测速：每 ${esc(group.test_interval||300)} 秒</span>`:''}</div><div class="group-card-members">${members.map(node=>`<span class="chip" title="${esc(nodeDetails(node))}">${esc(nodeLabel(node))}</span>`).join('')||'<span class="muted">尚未选择节点</span>'}</div></article>`}).join('')||'<div class="group-empty"><b>还没有代理组</b><span>新增一个代理组后，在弹窗中选择节点和自动策略。</span></div>'}
-      <div class="groups-runtime-section"><div class="bar"><div><small>当前运行内核</small><h2>代理组状态</h2></div><button id="group-runtime-refresh">刷新状态</button></div>${runtimeGroups.length?runtimeGroups.map(group=>{const probe=group.last_probe,probing=groupProbeRunning.has(group.id),error=groupProbeErrors[group.id],canProbe=controlResult?.group_probe_supported&&group.runtime_available;return `<article class="runtime-group" data-runtime-group="${esc(group.id)}"><div class="runtime-group-head"><div><b>${esc(group.display_name)}</b><small>${esc(group.type||'运行组')}</small></div><button type="button" data-group-probe="${esc(group.id)}" ${canProbe&&!probing?'':'disabled'}>${probing?'测速中…':'测速'}</button></div><div class="runtime-group-facts"><div><span>当前连接节点</span><b>${esc(group.selected_node_id?runtimeNodeLabel({id:group.selected_node_id}):group.selected_display_name||'无')}</b></div><div><span>最近组测速</span><b>${probe?`${esc(probe.latency_ms)} ms`:'-- ms'}</b><small>${probe?`${esc(probe.node_name||'测速节点')} · ${time(probe.checked_at)}${probe.stale?' · 配置已变更':''}`:'尚未测速'}</small></div></div>${error?`<p class="runtime-group-error" role="alert">${esc(error)}</p>`:''}<label class="runtime-group-select"><span>切换当前节点</span><select data-select="${esc(group.id)}">${group.members.map(node=>`<option value="${esc(node.id)}" ${node.id===group.selected_node_id?'selected':''} ${node.available?'':'disabled'}>${esc(runtimeNodeLabel(node))}${node.available?'':'（不可用）'}</option>`).join('')}</select></label>${!canProbe?`<small class="runtime-group-note">${controlResult?.adapter==='xray'?'当前内核不支持代理组控制面测速。':controlResult?.group_probe_message||(!group.runtime_available?'代理组尚未应用到当前内核。':'当前内核不支持代理组测速。')}</small>`:''}</article>`}).join(''):controlResult?.message?`<p class="muted">${esc(controlResult.message)}</p>`:'<p class="muted">尚未读取运行状态，或当前内核没有可切换代理组。</p>'}</div></section>`
+    html=`<section class="panel groups-panel"><div class="bar"><div><h2>代理组</h2><p class="muted panel-lede">每个代理组的配置和内核状态收在同一项中，展开后管理节点与运行操作。</p></div><div class="actions"><button id="group-runtime-refresh">刷新状态</button><button id="add" class="primary">新增代理组</button></div></div>
+      <p class="muted group-config-note">保存页面配置后，还需在“内核管理”点击“应用代理配置”才会写入当前内核。直连是内核内部默认目标，不作为可编辑代理组展示。</p>
+      ${groups.map(({group,index})=>{const members=groupMembers(group),selected=group.mode==='select'&&state.nodes.find(node=>node.id===group.selected),runtime=runtimeGroups.get(group.id),summary=runtimeGroupSummary(runtime),opened=openGroupIds.has(group.id),probe=runtime?.last_probe,probing=groupProbeRunning.has(group.id),error=groupProbeErrors[group.id],canProbe=Boolean(controlResult?.group_probe_supported&&runtime?.runtime_available);return `<details class="group-accordion" data-group-accordion="${esc(group.id)}" data-group-id="${esc(group.id)}" ${opened?'open':''}><summary><span class="group-summary-copy"><b>${esc(group.name)}</b><small>${esc(groupModeLabels[group.mode]||group.mode)} · ${members.length} 个成员 · 当前：${esc(summary.current)}</small></span><span class="chip ${summary.className}">${summary.label}</span><span class="group-summary-toggle" aria-hidden="true"></span></summary><div class="group-accordion-body"><div class="group-accordion-toolbar"><div class="group-card-meta"><span>成员：${members.length}</span>${selected?`<span>初始：${esc(nodeLabel(selected))}</span>`:''}${group.mode!=='select'?`<span>策略：${esc(groupStrategy(group.mode).title)}</span><span>测速：每 ${esc(group.test_interval||300)} 秒</span>`:''}</div><div class="group-card-actions"><button type="button" data-edit-group="${esc(group.id)}">编辑配置</button><button type="button" data-del="groups" class="danger">删除</button></div></div><div class="group-card-members">${members.map(node=>`<span class="chip" title="${esc(nodeDetails(node))}">${esc(nodeLabel(node))}</span>`).join('')||'<span class="muted">尚未选择节点</span>'}</div><section class="group-runtime-inline" aria-label="${esc(group.name)}运行状态"><div class="runtime-group-head"><div><b>运行状态</b><small>${esc(runtime?.type||groupModeLabels[group.mode]||'运行组')}</small></div><button type="button" data-group-probe="${esc(group.id)}" ${canProbe&&!probing?'':'disabled'}>${probing?'测速中…':'测速'}</button></div><div class="runtime-group-facts"><div><span>当前连接节点</span><b>${esc(runtime?.selected_node_id?runtimeNodeLabel({id:runtime.selected_node_id}):runtime?.selected_display_name||'无')}</b></div><div><span>最近组测速</span><b>${probe?`${esc(probe.latency_ms)} ms`:'-- ms'}</b><small>${probe?`${esc(probe.node_name||'测速节点')} · ${time(probe.checked_at)}${probe.stale?' · 配置已变更':''}`:'尚未测速'}</small></div></div>${error?`<p class="runtime-group-error" role="alert">${esc(error)}</p>`:''}${runtime?.runtime_available?`<label class="runtime-group-select"><span>切换当前节点</span><select data-select="${esc(group.id)}" aria-label="切换${esc(group.name)}的当前节点">${runtime.members.map(node=>`<option value="${esc(node.id)}" ${node.id===runtime.selected_node_id?'selected':''} ${node.available?'':'disabled'}>${esc(runtimeNodeLabel(node))}${node.available?'':'（不可用）'}</option>`).join('')}</select></label>`:''}${!canProbe?`<small class="runtime-group-note">${controlResult?.adapter==='xray'?'当前内核不支持代理组控制面测速。':controlResult?.group_probe_message||(!runtime?.runtime_available?'代理组尚未应用到当前内核。':'当前内核不支持代理组测速。')}</small>`:''}</section></div></details>`}).join('')||'<div class="group-empty"><b>还没有代理组</b><span>新增代理组后，可在同一项中查看配置和运行状态。</span></div>'}</section>`
   } else if(tab==='routes'){
     html=`<section class="panel"><div class="bar"><h2>规则组</h2><button id="add">新增规则组</button></div>${state.rule_groups.map((rule,index)=>`<div class="group-card" data-i="${index}"><div class="table"><input data-k="name" value="${esc(rule.name)}"><input type="number" data-k="priority" value="${rule.priority}"><select data-k="target">${groupOptions(rule.target)}</select><label><input type="checkbox" data-k="enabled" ${rule.enabled?'checked':''}>启用</label><button data-del="rule_groups">删除</button></div><textarea data-domains rows="3" placeholder="每行：exact api.example.com 或 suffix example.com">${esc(rule.domains.map(domain=>domain.match+' '+domain.host).join('\n'))}</textarea></div>`).join('')}</section>`
   } else if(tab==='platforms'){
@@ -212,6 +217,46 @@ function openImportDialog(mode='single'){
 }
 function closeImportDialog(){
   importPreview=null; const dialog=$('subscription-import-dialog'); if(dialog?.open)dialog.close(); const target=importDialogReturnFocus; importDialogReturnFocus=null; target?.focus?.();
+}
+
+function nodeDialogError(message){
+  const error=$('node-dialog-error'); if(!error)return
+  error.textContent=message||''; error.hidden=!message
+}
+function nodeGroupNames(node){
+  return state.groups.filter(group=>group.node_ids?.includes(node.id)).map(group=>group.name).join('、')||'未加入代理组'
+}
+function renderNodeDialog(){
+  const node=state?.nodes?.find(item=>item.id===nodeDialogNodeId),body=$('proxy-node-body'),actions=$('proxy-node-actions');
+  if(!node||!body||!actions)return
+  const item=health(node.id),support=node.support||{status:'unverified',reason:'尚未验证'},subscription=node.subscription_id?(state.subscriptions.find(value=>value.id===node.subscription_id)?.name||'未命名订阅'):'手动节点'
+  $('proxy-node-title').textContent=node.display_name||node.name||'节点详情'
+  body.innerHTML=`<div id="node-dialog-error" class="node-dialog-error" role="alert" aria-live="assertive" hidden></div>
+    <div class="node-detail-form"><label class="field-label" for="node-detail-name"><span class="field-title">节点名称</span><input id="node-detail-name" data-node-field="name" type="text" maxlength="120" value="${esc(node.display_name||node.name)}"><small>名称会显示在节点列表、代理组成员和运行状态中。</small></label>
+      <label class="field-label" for="node-detail-endpoint"><span class="field-title">连接入口</span><input id="node-detail-endpoint" data-node-field="endpoint" type="text" value="${esc(node.endpoint)}" placeholder="完整连接 URI 或 HTTP/SOCKS 地址"><small>已配置凭据只显示为 [configured]，留空会由后端校验。</small></label></div>
+    <label class="node-detail-excluded"><input id="node-detail-excluded" data-node-field="excluded" type="checkbox" ${node.excluded?'checked':''}><span><b>确认排除测速/组选优</b><small>排除后节点仍保留在配置中，但不会参与测速或自动组选优。</small></span></label>
+    <div class="node-detail-section"><h3>节点信息</h3><div class="node-detail-facts"><div><span>协议</span><b>${esc(node.protocol||'unknown')}</b></div><div><span>执行内核</span><b>${esc(node.engine||node.executor||'未指定')}</b></div><div><span>支持状态</span><b class="chip ${support.status==='supported'?'ok':'pending'}">${esc({supported:'已支持',unverified:'未验证',unsupported:'不支持'}[support.status]||'未验证')}</b></div><div><span>地区</span><b>${esc(node.region||'其他')}</b></div><div><span>订阅来源</span><b>${esc(subscription)}</b></div><div><span>所属代理组</span><b>${esc(nodeGroupNames(node))}</b></div></div></div>
+    <div class="node-detail-section"><h3>最近测速</h3><div class="node-detail-facts"><div><span>状态</span><b class="chip ${node.invalid_reference?'invalid':item.status}">${node.invalid_reference?'引用失效':esc(statusLabel(item))}</b></div><div><span>延迟</span><b>${item.latency_ms??'--'} ms</b></div><div><span>检查时间</span><b>${esc(time(item.checked_at))}</b></div></div>${support.reason?`<p class="node-dialog-note">${esc(support.reason)}</p>`:''}${node.notice_reason?`<p class="node-dialog-note">${esc(node.notice_reason)}</p>`:''}${item.error?`<p class="node-dialog-error node-dialog-error-inline" role="alert">${esc(item.error)}</p>`:''}</div>`
+  actions.innerHTML='<button id="proxy-node-cancel" type="button" class="quiet">取消</button><button id="proxy-node-save" type="button" class="primary">保存节点</button>'
+  bindNodeDialogFields()
+  $('proxy-node-cancel')?.addEventListener('click',closeNodeDialog)
+  $('proxy-node-save')?.addEventListener('click',saveNodeDialog)
+}
+function openNodeDialog(nodeId=''){
+  const node=state.nodes.find(item=>item.id===nodeId); if(!node)return
+  nodeDialogReturnFocus=document.activeElement; nodeDialogNodeId=nodeId; renderNodeDialog(); const dialog=$('proxy-node-dialog'); dialog?.showModal(); requestAnimationFrame(()=>$('node-detail-name')?.focus())
+}
+function closeNodeDialog({restore=true}={}){
+  const dialog=$('proxy-node-dialog'); if(dialog?.open)dialog.close()
+  const target=nodeDialogReturnFocus; nodeDialogReturnFocus=null; nodeDialogNodeId=''
+  if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})
+}
+function saveNodeDialog(){
+  const node=state.nodes.find(item=>item.id===nodeDialogNodeId),name=String($('node-detail-name')?.value||'').trim(),endpoint=String($('node-detail-endpoint')?.value||'').trim()
+  if(!node)return
+  if(!name){nodeDialogError('节点名称不能为空。');return}
+  node.name=name; node.display_name=name; node.user_alias=name; node.endpoint=endpoint; node.excluded=Boolean($('node-detail-excluded')?.checked)
+  const savedId=node.id; closeNodeDialog({restore:false}); render(); requestAnimationFrame(()=>document.querySelector(`[data-node-details="${CSS.escape(savedId)}"]`)?.focus()); note('节点详情已更新')
 }
 
 function groupDialogError(message){
@@ -287,6 +332,13 @@ function saveGroupDialog(){
   const savedId=values.id; closeGroupDialog({restore:false}); render(); requestAnimationFrame(()=>{const trigger=[...document.querySelectorAll('[data-edit-group]')].find(button=>button.dataset.editGroup===savedId);(trigger||$('add'))?.focus()}); note(isEditing?'代理组已更新':'代理组已创建')
 }
 
+function bindNodeDialogFields(){
+  document.querySelectorAll('[data-node-field]').forEach(input=>input.addEventListener('input',()=>{
+    const node=state.nodes.find(item=>item.id===nodeDialogNodeId); if(!node)return
+    if(input.dataset.nodeField==='name'){$('proxy-node-title').textContent=input.value.trim()||'节点详情';nodeDialogError('')}
+  }))
+}
+
 function bind(){
   document.querySelectorAll('[data-k]').forEach(input=>input.addEventListener('change',()=>{
     const row=input.closest('[data-i]'); if(!row)return
@@ -296,10 +348,14 @@ function bind(){
     else { const item=state.rule_groups[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value }
   }))
   document.querySelectorAll('[data-domains]').forEach(input=>input.addEventListener('change',()=>{const item=state.rule_groups[Number(input.closest('[data-i]').dataset.i)];item.domains=input.value.split('\n').map(line=>line.trim().split(/\s+/,2)).filter(parts=>parts.length===2).map(([match,host])=>({match:match==='suffix'?'suffix':'exact',host}))}))
+  document.querySelectorAll('[data-node-details]').forEach(button=>button.addEventListener('click',()=>openNodeDialog(button.dataset.nodeDetails)))
+  document.querySelectorAll('[data-group-accordion]').forEach(details=>details.addEventListener('toggle',()=>{const id=details.dataset.groupAccordion;if(details.open)openGroupIds.add(id);else openGroupIds.delete(id)}))
   document.querySelectorAll('[data-del]').forEach(button=>button.addEventListener('click',()=>{
-    const row=button.closest('[data-i]'),list=state[button.dataset.del],item=button.dataset.del==='groups'?state.groups.find(value=>value.id===row.dataset.groupId):list[Number(row.dataset.i)]
+    const row=button.closest('[data-i],[data-group-id]'),list=state[button.dataset.del],item=button.dataset.del==='groups'?state.groups.find(value=>value.id===row?.dataset.groupId):list?.[Number(row?.dataset.i)]
     if(!item)return
     if(item.id==='direct')return
+    const labels={nodes:'节点',subscriptions:'订阅',groups:'代理组',rule_groups:'规则组'}
+    if(!confirm(`确定删除${labels[button.dataset.del]||'此项'}“${item.display_name||item.name||item.id}”吗？删除会在保存配置后生效。`))return
     if(button.dataset.del==='groups'){
       const index=list.findIndex(value=>value.id===item.id); if(index>=0)list.splice(index,1)
       state.routes=state.routes.filter(route=>route.target!==item.id)
@@ -561,6 +617,9 @@ document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener(
   $('proxy-group-close')?.addEventListener('click',closeGroupDialog)
   $('proxy-group-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeGroupDialog()})
   $('proxy-group-dialog')?.addEventListener('click',event=>{if(event.target===$('proxy-group-dialog'))closeGroupDialog()})
+  $('proxy-node-close')?.addEventListener('click',closeNodeDialog)
+  $('proxy-node-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeNodeDialog()})
+  $('proxy-node-dialog')?.addEventListener('click',event=>{if(event.target===$('proxy-node-dialog'))closeNodeDialog()})
   $('confirm').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存')}catch(error){note(error.message,true)}})
 ;(async()=>{try{await api.ready(); await load()}catch(error){note(error.message || '页面初始化失败，请重新打开插件页面',true)}})()
 }
