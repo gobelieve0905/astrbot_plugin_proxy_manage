@@ -618,7 +618,18 @@ async function load(){ try{ state=await api.apiGet('state');selectedProbeNodeIds
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render();if(tab==='groups')refreshGroupStatus()}))
   $('reload').addEventListener('click',load)
   $('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('rollback',{});original=structuredClone(state);controlResult=null;importPreview=null;render();note('已恢复上一版配置')}catch(error){note(error.message,true)}})
-  $('save').addEventListener('click',()=>{readControl();$('diff-content').innerHTML=renderChangePreview(original,state);$('diff').showModal()})
+  $('save').addEventListener('click',()=>{
+    const dialog=$('diff'),content=$('diff-content')
+    try{
+      readControl()
+      content.innerHTML=renderChangePreview(original||{},state||{})
+      if(!dialog.open)dialog.showModal()
+    }catch(error){
+      content.innerHTML='<div class="change-empty"><b>无法生成配置预览</b><span>请刷新页面后重试。</span></div>'
+      note(error?.message||'配置预览生成失败',true)
+      if(!dialog.open)dialog.showModal()
+    }
+  })
   $('cancel').addEventListener('click',()=>$('diff').close())
   $('subscription-import-close').addEventListener('click',closeImportDialog)
   $('proxy-group-close')?.addEventListener('click',closeGroupDialog)

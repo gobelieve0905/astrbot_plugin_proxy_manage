@@ -1172,10 +1172,15 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 /* Save preview: summarize configuration changes without exposing the raw document. */
 #diff {
   width: min(920px, calc(100vw - 32px));
-  max-height: min(820px, calc(100vh - 24px));
+  height: min(820px, calc(100vh - 24px));
+  max-height: none;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 #diff .change-preview {
-  max-height: min(660px, calc(100vh - 168px));
+  min-height: 0;
+  max-height: none;
   padding: 20px;
   overflow: auto;
   overscroll-behavior: contain;
@@ -1228,9 +1233,9 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 .change-empty b { color: var(--text); font-size: 15px; }
 .change-empty span { font-size: 12px; }
 @media (max-width: 620px) {
-  #diff { width: calc(100vw - 18px); max-height: calc(100vh - 14px); }
+  #diff { width: calc(100vw - 18px); height: calc(100vh - 14px); }
   #diff .dialog-head, #diff .dialog-actions { padding: 15px 16px; }
-  #diff .change-preview { max-height: calc(100vh - 142px); padding: 16px; }
+  #diff .change-preview { padding: 16px; }
   .change-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .change-entry-head { flex-direction: column; gap: 5px; }
   .change-entry-head small { max-width: none; text-align: left; }
