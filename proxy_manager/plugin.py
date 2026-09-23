@@ -39,6 +39,7 @@ from .traffic.audit import AstrBotTrafficAudit
 
 DIRECT_PROBE_SCHEMES = frozenset({'http', 'https', 'socks', 'socks5', 'socks5h'})
 PROBE_KERNEL_RETRY_DELAY = 0.2
+DEFAULT_GROUP_TEST_URL = 'https://www.gstatic.com/generate_204'
 
 
 class ProxyManager(Star):
@@ -51,15 +52,17 @@ class ProxyManager(Star):
         self.backup=self.data_dir/'config.previous.json'
         self.migration_backup=self.data_dir/'config.pre-v5.json'
         self.health_path=self.data_dir/'health.json'
+        self.group_health_path=self.data_dir/'group-health.json'
         self.events_path=self.data_dir/'events.jsonl'
         self.runtime_path=self.data_dir/'runtime-application.json'
         self.runtime_backup=self.data_dir/'runtime-application.previous.json'
-        for private_path in (self.path,self.backup,self.migration_backup,self.health_path,self.events_path,self.runtime_path,self.runtime_backup):
+        for private_path in (self.path,self.backup,self.migration_backup,self.health_path,self.group_health_path,self.events_path,self.runtime_path,self.runtime_backup):
             if private_path.exists():
                 try: private_path.chmod(0o600)
                 except OSError: logger.warning('代理中心私有文件权限收紧失败：'+private_path.name)
         self.refresh_lock=asyncio.Lock(); self.operation_lock=asyncio.Lock()
-        self.state=self._load(); self.health=self._load_health()
+        self.state=self._load(); self.health=self._load_health(); self.group_health=self._load_group_health()
+        if getattr(self,'_group_health_migrated',False): self.persist_group_health()
         self._bind_owned_runtime()
         self.astrbot_proxy=AstrBotProxyTransaction(self.data_dir)
         self.traffic_audit=AstrBotTrafficAudit(Path(os.environ.get('ASTRBOT_ROOT','/astrbot')))
@@ -311,6 +314,43 @@ class ProxyManager(Star):
         except (OSError,ValueError):
             return {}
 
+    def _load_group_health(self) -> dict:
+        try:
+            raw=json.loads(self.group_health_path.read_text(encoding='utf-8'))
+            if not isinstance(raw,dict): return {}
+            result={}; migrated=False
+            for group_id,value in raw.items():
+                if not isinstance(value,dict): continue
+                record=dict(value); target=record.pop('target',None)
+                if target is not None: migrated=True
+                if not record.get('target_fingerprint') and target:
+                    record['target_fingerprint']=self._group_test_fingerprint(target)
+                result[str(group_id)]=record
+            self._group_health_migrated=migrated
+            return result
+        except (OSError,ValueError):
+            return {}
+
+    @staticmethod
+    def _group_test_fingerprint(target: object) -> str:
+        return hashlib.sha256(str(target).encode('utf-8')).hexdigest()
+
+    def persist_group_health(self):
+        try:
+            sanitized={}
+            for group_id,value in self.group_health.items():
+                if not isinstance(value,dict): continue
+                record=dict(value); target=record.pop('target',None)
+                if not record.get('target_fingerprint') and target:
+                    record['target_fingerprint']=self._group_test_fingerprint(target)
+                sanitized[str(group_id)]=record
+            self.group_health=sanitized
+            temp=self.group_health_path.with_suffix('.tmp')
+            temp.write_text(json.dumps(self.group_health,ensure_ascii=False,indent=2),encoding='utf-8')
+            temp.chmod(0o600); temp.replace(self.group_health_path)
+        except OSError:
+            logger.warning('代理组测速状态写入失败')
+
     def _load_events(self) -> list[dict]:
         try:
             return [json.loads(line) for line in self.events_path.read_text(encoding='utf-8').splitlines()[-100:] if line]
@@ -326,6 +366,7 @@ class ProxyManager(Star):
             ('rollback',self.rollback,['POST']), ('subscription-preview',self.subscription_preview,['POST']),
             ('subscription-import',self.subscription_import,['POST']), ('subscription-refresh',self.subscription_refresh,['POST']),
             ('control-status',self.control_status,['GET']), ('control-select',self.control_select,['POST']),
+            ('control-group-probe',self.control_group_probe,['POST']),
             ('node-probe',self.node_probe,['POST']), ('nodes-probe',self.nodes_probe,['POST']),
             ('probe-task',self.probe_task,['POST']), ('probe-task-status',self.probe_task_status,['POST']),
             ('probe-task-cancel',self.probe_task_cancel,['POST']),
@@ -1468,7 +1509,8 @@ class ProxyManager(Star):
             adapter=self._adapter()
             if adapter.capabilities().get('control')=='process-only':
                 return json_response({'version':'','adapter':adapter.id,'control':'process-only','groups':[],
-                                      'message':'该内核不提供统一 HTTP 控制面，代理组切换需重新应用配置'})
+                                      'group_probe_supported':False,
+                                      'message':'该内核不提供统一 HTTP 控制面，代理组切换和测速不可用'})
             data=await adapter.proxies(self.state)
             runtime=data.get('proxies',{})
             nodes={node.get('kernel_name'):node for node in self.state['nodes']}
@@ -1487,11 +1529,77 @@ class ProxyManager(Star):
                 selected=nodes.get(current.get('now')) if isinstance(current,dict) else None
                 groups.append({'id':group['id'],'display_name':group['name'],'kernel_name':kernel_name,
                                'type':current.get('type','') if isinstance(current,dict) else '',
+                               'runtime_available':isinstance(current,dict) and bool(current),
                                'selected_node_id':selected.get('id','') if selected else '',
                                'selected_display_name':selected.get('display_name',selected.get('name','')) if selected else '',
                                'members':members})
-            return json_response({'version':data.get('version'),'adapter':adapter.id,'groups':groups})
+            for group in groups:
+                probe=self.group_health.get(group['id'])
+                source_group=next((item for item in self.state['groups'] if item['id']==group['id']),{})
+                if probe:
+                    expected_target=str(source_group.get('test_url') or DEFAULT_GROUP_TEST_URL)
+                    expected_members=sorted(source_group.get('node_ids',[]))
+                    group['last_probe']={**probe,'stale':probe.get('target_fingerprint')!=self._group_test_fingerprint(expected_target) or
+                                         probe.get('members')!=expected_members}
+            group_probe_supported=bool(adapter.capabilities().get('group_probe')) and self.state['control'].get('deployment')=='dedicated'
+            group_probe_message=('共享内核为只读状态检查，不能发起代理组测速。'
+                                 if adapter.capabilities().get('group_probe') and not group_probe_supported else '')
+            return json_response({'version':data.get('version'),'adapter':adapter.id,
+                                  'group_probe_supported':group_probe_supported,
+                                  'group_probe_message':group_probe_message,'groups':groups})
         except (ValueError,httpx.HTTPError,TypeError): return error_response('控制接口连接失败，请检查地址、密钥和网络')
+
+    async def control_group_probe(self):
+        try:
+            payload=await request.json()
+            group_id=ident(payload.get('group_id'))
+            timeout=max(1,min(int(payload.get('timeout',5) or 5),15))
+            adapter=self._adapter()
+            if not adapter.capabilities().get('group_probe'):
+                raise ValueError('当前内核不提供代理组测速控制接口')
+            control,_=adapter.control(self.state)
+            if control.get('deployment')!='dedicated':
+                raise ValueError('共享内核为只读状态检查，不能发起代理组测速')
+            group=next((item for item in self.state['groups'] if item['id']==group_id and item['id']!='direct'),None)
+            if not group or not group.get('enabled',True): raise ValueError('代理组不存在或已停用')
+            target=str(group.get('test_url') or DEFAULT_GROUP_TEST_URL)
+            if not safe_url(target): raise ValueError('代理组测速目标只允许 HTTP 或 HTTPS 地址')
+            await validate_public_url(target)
+            async with self.operation_lock:
+                adapter=self._adapter()
+                if not adapter.capabilities().get('group_probe'):
+                    raise ValueError('当前内核不提供代理组测速控制接口')
+                control,_=adapter.control(self.state)
+                if control.get('deployment')!='dedicated':
+                    raise ValueError('共享内核为只读状态检查，不能发起代理组测速')
+                group=next((item for item in self.state['groups'] if item['id']==group_id and item['id']!='direct'),None)
+                if not group or not group.get('enabled',True): raise ValueError('代理组不存在或已停用')
+                latest_target=str(group.get('test_url') or DEFAULT_GROUP_TEST_URL)
+                if latest_target!=target:
+                    if not safe_url(latest_target): raise ValueError('代理组测速目标只允许 HTTP 或 HTTPS 地址')
+                    await validate_public_url(latest_target)
+                    target=latest_target
+                data=await adapter.proxies(self.state)
+                runtime=(data.get('proxies') or {}).get(group.get('kernel_name','group-'+group['id']))
+                if not isinstance(runtime,dict): raise ValueError('代理组尚未应用到当前内核')
+                result=await adapter.probe_group(self.state,group,target,timeout)
+                selected_name=result.get('selected_kernel_name','')
+                node=next((item for item in self.state['nodes'] if item.get('kernel_name')==selected_name),None)
+                if not node: raise ValueError('测速完成，但内核未能确认本次测速使用的节点')
+                if node['id'] not in group.get('node_ids',[]):
+                    raise ValueError('测速完成，但内核当前节点不属于该代理组')
+                checked_at=int(time.time())
+                probe={'latency_ms':result.get('latency_ms'),'checked_at':checked_at,'node_id':node['id'],
+                       'node_name':node.get('display_name',node.get('name','')),
+                       'target_fingerprint':self._group_test_fingerprint(target),
+                       'members':sorted(group.get('node_ids',[]))}
+                if not isinstance(probe['latency_ms'],int): raise ValueError('内核未返回有效代理组延迟')
+                self.group_health[group_id]=probe; self.persist_group_health()
+            self.event({'action':'group_probe','group_id':group_id,'result':'ok','adapter':adapter.id,
+                        'latency_ms':probe['latency_ms']})
+            return json_response({'group_id':group_id,**probe})
+        except ValueError as exc: return error_response(str(exc))
+        except httpx.HTTPError: return error_response('代理组测速失败或超时，请检查内核控制接口')
 
     async def control_select(self):
         try:
@@ -1527,6 +1635,11 @@ class ProxyManager(Star):
         if any(node_id not in live_ids for node_id in self.health):
             self.health={node_id:value for node_id,value in self.health.items() if node_id in live_ids}
             self.persist_health()
+        live_groups={group['id'] for group in self.state['groups'] if group['id']!='direct'}
+        stale_groups=set(self.group_health)-live_groups
+        if stale_groups:
+            self.group_health={group_id:value for group_id,value in self.group_health.items() if group_id in live_groups}
+            self.persist_group_health()
         self.probe_tasks={task_id:task for task_id,task in self.probe_tasks.items()
                           if task.get('status')=='running' or now-int(task.get('finished_at',task.get('started_at',now)) or now)<3600}
         self.previews={key:value for key,value in self.previews.items() if now-int(value.get('at',0) or 0)<900}

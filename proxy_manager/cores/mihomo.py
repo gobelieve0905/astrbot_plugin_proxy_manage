@@ -21,7 +21,7 @@ class MihomoAdapter(CoreAdapter):
             'protocols':{'anytls','http','https','socks','socks5','socks5h'},
             'groups':{'select','url-test','fallback'},
             'rules':{'exact','suffix'},
-            'probe':True,'hot_reload':True,'inspect':True,
+            'probe':True,'group_probe':True,'hot_reload':True,'inspect':True,
             'platforms':['linux','darwin','windows'],
         }
 
@@ -298,6 +298,19 @@ class MihomoAdapter(CoreAdapter):
         response.raise_for_status(); data=response.json()
         if not isinstance(data.get('delay'),int): raise ValueError('内核控制接口未返回延迟')
         return int(data['delay'])
+
+    async def probe_group(self, state: dict, group: dict, target: str, timeout: int) -> dict:
+        control,headers=self.control(state); name=group.get('kernel_name','group-'+group['id'])
+        async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=timeout,trust_env=False) as client:
+            proxies_response=await client.get('/proxies'); proxies_response.raise_for_status()
+            runtime_group=proxies_response.json().get('proxies',{}).get(name,{})
+            selected=str(runtime_group.get('now','')) if isinstance(runtime_group,dict) else ''
+            if not selected: raise ValueError('内核未返回当前代理组节点')
+            response=await client.get('/proxies/'+quote(selected,safe='')+'/delay',
+                                      params={'url':target,'timeout':timeout*1000})
+            response.raise_for_status(); latency=response.json().get('delay')
+        if not isinstance(latency,int): raise ValueError('内核未返回当前代理组成员的测速结果')
+        return {'latency_ms':latency,'selected_kernel_name':selected}
 
     async def group_selection(self, state: dict, group: dict) -> str:
         control,headers=self.control(state)

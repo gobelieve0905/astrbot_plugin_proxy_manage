@@ -636,7 +636,7 @@ class TestConfigurationRules(unittest.TestCase):
 
     def test_startup_hardens_existing_private_files(self):
         with tempfile.TemporaryDirectory() as directory:
-            paths = [Path(directory) / name for name in ('config.json','config.previous.json','health.json','events.jsonl')]
+            paths = [Path(directory) / name for name in ('config.json','config.previous.json','health.json','group-health.json','events.jsonl')]
             for path in paths:
                 path.write_text('{}'); path.chmod(0o644)
             context = types.SimpleNamespace(register_web_api=lambda *args: None)
@@ -677,6 +677,8 @@ class TestConfigurationRules(unittest.TestCase):
         manager.events_path = Path(manager._test_dir.name) / "events.jsonl"
         manager.health = {}
         manager.health_path = Path(manager._test_dir.name) / "health.json"
+        manager.group_health = {}
+        manager.group_health_path = Path(manager._test_dir.name) / "group-health.json"
         manager.path = Path(manager._test_dir.name) / "config.json"
         manager.backup = Path(manager._test_dir.name) / "config.previous.json"
         manager.runtime_path = Path(manager._test_dir.name) / "runtime-application.json"
@@ -1047,6 +1049,80 @@ class TestConfigurationRules(unittest.TestCase):
             result=asyncio.run(manager.control_select())
         self.assertTrue(result['ok'])
         put_client.request.assert_awaited_once_with('PUT','/proxies/group-hk',json={'name':'node-hk-1'})
+
+    def test_mihomo_group_probe_reads_current_member_without_changing_group(self):
+        manager=self._manager_for_runtime(); request=self.module.httpx.Request('GET','http://mihomo:9090/group/group-hk/delay')
+        def response(payload): return self.module.httpx.Response(200,json=payload,request=request)
+        client=AsyncMock(); client.__aenter__.return_value=client
+        client.get=AsyncMock(side_effect=[response({'proxies':{'group-hk':{'now':'node-hk-1'}}}),
+                                          response({'delay':42})])
+        with patch.object(self.module.httpx,'AsyncClient',return_value=client):
+            result=asyncio.run(manager._adapter().probe_group(manager.state,manager.state['groups'][1],
+                                                              'https://www.gstatic.com/generate_204',8))
+        self.assertEqual(result,{'latency_ms':42,'selected_kernel_name':'node-hk-1'})
+        self.assertEqual(client.get.await_args_list[0].args[0],'/proxies')
+        self.assertEqual(client.get.await_args_list[1].args[0],'/proxies/node-hk-1/delay')
+        self.assertEqual(client.get.await_args_list[1].kwargs['params']['timeout'],8000)
+
+    def test_group_probe_persists_real_current_node_and_latency(self):
+        manager=self._manager_for_runtime()
+        manager.persist_group_health=Mock()
+        manager.event=Mock()
+        fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'group_id':'hk','timeout':8}))
+        with patch('proxy_manager.plugin.request',fake_request), patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(manager._adapter(),'proxies',AsyncMock(return_value={'proxies':{'group-hk':{'now':'node-hk-1'}}})), \
+             patch.object(manager._adapter(),'probe_group',AsyncMock(return_value={'latency_ms':42,'selected_kernel_name':'node-hk-1'})):
+            result=asyncio.run(manager.control_group_probe())
+        self.assertEqual(result['latency_ms'],42); self.assertEqual(result['node_id'],'hk-1')
+        self.assertIn('target_fingerprint',manager.group_health['hk'])
+        self.assertNotIn('target',manager.group_health['hk'])
+        self.assertEqual(manager.group_health['hk']['node_name'],'HK 1'); manager.persist_group_health.assert_called_once()
+
+    def test_group_probe_rejects_unapplied_group_and_private_targets(self):
+        manager=self._manager_for_runtime(); fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'group_id':'hk'}))
+        with patch('proxy_manager.plugin.request',fake_request), patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(manager._adapter(),'proxies',AsyncMock(return_value={'proxies':{}})):
+            result=asyncio.run(manager.control_group_probe())
+        self.assertEqual(result['status'],400); self.assertIn('尚未应用',result['message'])
+
+        manager.state['groups'][1]['test_url']='http://127.0.0.1/'
+        with patch('proxy_manager.plugin.request',fake_request):
+            result=asyncio.run(manager.control_group_probe())
+        self.assertEqual(result['status'],400); self.assertIn('禁止访问',result['message'])
+
+    def test_control_status_marks_group_probe_stale_after_members_change(self):
+        manager=self._manager_for_runtime()
+        manager.group_health={'hk':{'latency_ms':42,'checked_at':123,'node_id':'hk-1','node_name':'HK 1',
+                                    'target_fingerprint':manager._group_test_fingerprint('https://www.gstatic.com/generate_204'),
+                                    'members':['hk-1']}}
+        with patch.object(manager._adapter(),'proxies',AsyncMock(return_value={
+                'version':'1.19.0',
+                'proxies':{'group-hk':{'type':'Selector','now':'node-hk-1'},
+                           'group-sg':{'type':'Selector','now':'node-sg-1'}}})):
+            status=asyncio.run(manager.control_status())
+        hk=next(group for group in status['groups'] if group['id']=='hk')
+        self.assertFalse(hk['last_probe']['stale'])
+        self.assertNotIn('target',hk['last_probe'])
+        manager.state['groups'][1]['node_ids'].append('sg-1')
+        with patch.object(manager._adapter(),'proxies',AsyncMock(return_value={
+                'version':'1.19.0',
+                'proxies':{'group-hk':{'type':'Selector','now':'node-hk-1'},
+                           'group-sg':{'type':'Selector','now':'node-sg-1'}}})):
+            status=asyncio.run(manager.control_status())
+        hk=next(group for group in status['groups'] if group['id']=='hk')
+        self.assertTrue(hk['last_probe']['stale'])
+
+    def test_group_probe_rejects_xray_and_shared_kernel(self):
+        manager=self._manager_for_runtime(); manager.state['control']['adapter']='xray'
+        fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'group_id':'hk'}))
+        with patch('proxy_manager.plugin.request',fake_request):
+            result=asyncio.run(manager.control_group_probe())
+        self.assertEqual(result['status'],400); self.assertIn('不提供代理组测速',result['message'])
+
+        manager.state['control']['adapter']='mihomo'; manager.state['control']['deployment']='existing'
+        with patch('proxy_manager.plugin.request',fake_request):
+            result=asyncio.run(manager.control_group_probe())
+        self.assertEqual(result['status'],400); self.assertIn('只读状态检查',result['message'])
 
     def test_missing_manual_selection_does_not_fall_back_silently(self):
         manager = self._manager_for_runtime()

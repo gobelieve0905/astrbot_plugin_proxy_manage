@@ -46,6 +46,8 @@ class CoreAdapter(ABC):
     @abstractmethod
     async def probe(self, state: dict, node: dict, target: str, timeout: int) -> int: ...
     @abstractmethod
+    async def probe_group(self, state: dict, group: dict, target: str, timeout: int) -> dict: ...
+    @abstractmethod
     async def proxies(self, state: dict) -> dict: ...
     @abstractmethod
     async def group_selection(self, state: dict, group: dict) -> str: ...
@@ -95,4 +97,4 @@ class UnsupportedAdapter(CoreAdapter):
     def capabilities(self): return {'id':self.id,'supported':False,'protocols':set(),'groups':set(),'rules':set()}
     def artifact(self): return {'adapter':self.id,'version':'','artifacts':{},'status':'unsupported'}
     render=validate=serialize=config_filename=command=inspect=verify=expected_rules=fail_closed_document=control=_fail
-    fetch_runtime=apply=select=probe=proxies=group_selection=connection_snapshot=_afail
+    fetch_runtime=apply=select=probe=probe_group=proxies=group_selection=connection_snapshot=_afail

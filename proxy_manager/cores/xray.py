@@ -27,6 +27,7 @@ class XrayAdapter(CoreAdapter):
             'groups': {'select'},
             'rules': {'exact', 'suffix'},
             'probe': False,
+            'group_probe': False,
             'hot_reload': False,
             'inspect': False,
             'control': 'process-only',
@@ -285,6 +286,9 @@ class XrayAdapter(CoreAdapter):
 
     async def probe(self, state: dict, node: dict, target: str, timeout: int) -> int:
         raise ValueError('Xray 暂不支持通过控制接口测速，请使用直接节点测速')
+
+    async def probe_group(self, state: dict, group: dict, target: str, timeout: int) -> dict:
+        raise ValueError('Xray 不提供代理组控制接口，暂不支持代理组测速')
 
     async def proxies(self, state: dict) -> dict:
         return {'version': '', 'proxies': {}}

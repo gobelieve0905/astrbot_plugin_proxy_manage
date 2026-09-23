@@ -16,7 +16,7 @@ class SingBoxAdapter(CoreAdapter):
 
     def capabilities(self) -> dict:
         return {'id':self.id,'protocols':{'anytls','http','https','socks','socks5','socks5h'},
-                'groups':{'select','url-test'},'rules':{'exact','suffix'},'probe':True,
+                'groups':{'select','url-test'},'rules':{'exact','suffix'},'probe':True,'group_probe':True,
                 'hot_reload':True,'inspect':True,'platforms':['linux','darwin','windows']}
 
     def artifact(self) -> dict:
@@ -178,6 +178,19 @@ class SingBoxAdapter(CoreAdapter):
             response.raise_for_status(); delay=response.json().get('delay')
         if not isinstance(delay,int): raise ValueError('sing-box 控制接口未返回延迟')
         return delay
+
+    async def probe_group(self, state: dict, group: dict, target: str, timeout: int) -> dict:
+        control,headers=self.control(state); name=group.get('kernel_name','group-'+group['id'])
+        async with httpx.AsyncClient(base_url=control['url'],headers=headers,timeout=timeout,trust_env=False) as client:
+            proxies_response=await client.get('/proxies'); proxies_response.raise_for_status()
+            runtime_group=proxies_response.json().get('proxies',{}).get(name,{})
+            selected=str(runtime_group.get('now','')) if isinstance(runtime_group,dict) else ''
+            if not selected: raise ValueError('内核未返回当前代理组节点')
+            response=await client.get('/proxies/'+quote(selected,safe='')+'/delay',
+                                      params={'url':target,'timeout':timeout*1000})
+            response.raise_for_status(); delay=response.json().get('delay')
+        if not isinstance(delay,int): raise ValueError('sing-box 控制接口未返回代理组延迟')
+        return {'latency_ms':delay,'selected_kernel_name':selected}
 
     async def proxies(self, state: dict) -> dict:
         fetched=await self.fetch_runtime(state)

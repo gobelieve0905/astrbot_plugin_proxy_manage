@@ -1075,6 +1075,20 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 .group-dialog-error { margin-bottom: 16px; padding: 10px 12px; border-left: 3px solid var(--danger); background: var(--danger-soft); color: var(--danger); font-size: 12px; font-weight: 600; }
 .group-dialog-error[hidden] { display: none; }
 .group-dialog .dialog-head, .group-dialog .dialog-actions { padding-left: 24px; padding-right: 24px; }
+.runtime-group { display: grid; gap: 12px; min-width: 0; padding: 16px 0; border-top: 1px solid var(--line); }
+.runtime-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.runtime-group-head > div { display: grid; gap: 2px; min-width: 0; }
+.runtime-group-head b { overflow-wrap: anywhere; font-size: 14px; }
+.runtime-group-head small, .runtime-group-facts small { color: var(--muted); font-size: 11px; }
+.runtime-group-head button { min-width: 76px; min-height: 36px; padding: 6px 11px; }
+.runtime-group-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.runtime-group-facts > div { display: grid; gap: 3px; min-width: 0; }
+.runtime-group-facts span, .runtime-group-select > span { color: var(--muted); font-size: 11px; font-weight: 650; }
+.runtime-group-facts b { min-width: 0; overflow-wrap: anywhere; font-size: 13px; font-variant-numeric: tabular-nums; }
+.runtime-group-select { display: grid; grid-template-columns: minmax(110px, .6fr) minmax(0, 1.4fr); align-items: center; gap: 12px; }
+.runtime-group-select select { min-height: 38px; }
+.runtime-group-note { color: var(--muted); font-size: 11px; }
+.runtime-group-error { margin: 0; padding: 8px 10px; border-left: 3px solid var(--danger); background: var(--danger-soft); color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
 @media (max-width: 700px) {
   .group-card-head { align-items: flex-start; flex-direction: column; gap: 11px; }
   .group-card-actions { width: 100%; }
@@ -1083,6 +1097,8 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   .group-node-toolbar { grid-template-columns: 1fr; gap: 8px; }
   .group-node-actions { justify-content: flex-start; }
   .node-picker { grid-template-columns: 1fr; max-height: 300px; }
+  .runtime-group-facts { grid-template-columns: 1fr; }
+  .runtime-group-select { grid-template-columns: 1fr; gap: 5px; }
   .group-dialog-body { padding: 18px; }
   .group-dialog .dialog-head, .group-dialog .dialog-actions { padding-left: 18px; padding-right: 18px; }
 }
