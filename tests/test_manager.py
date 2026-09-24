@@ -205,6 +205,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('id="diff-content"',html)
         self.assertNotIn('id="diff-text"',html)
         self.assertIn('renderChangePreview',script)
+        self.assertIn('dialog:not([open])',styles)
         self.assertNotIn("JSON.stringify({before:original,after:state})",script)
         self.assertIn('openGroupDialog',script)
         self.assertIn('noticeTimer=setTimeout',script)

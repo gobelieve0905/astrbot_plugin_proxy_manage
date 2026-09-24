@@ -417,6 +417,9 @@ summary { cursor: pointer; color: var(--muted-strong); font-weight: 600; }
 summary:hover { color: var(--accent-strong); }
 summary::marker { color: var(--accent); }
 dialog { width: min(860px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--panel); color: var(--text); box-shadow: var(--shadow-md); }
+/* Custom display rules below (for example grid-based dialogs) must not make
+   unopened native dialogs render as empty panels during initial page load. */
+dialog:not([open]) { display: none !important; }
 dialog::backdrop { background: rgb(15 23 42 / 0.52); backdrop-filter: blur(3px); }
 dialog .dialog-head, dialog .dialog-actions { padding: 18px 20px; }
 dialog .dialog-head { border-bottom: 1px solid var(--line); }
