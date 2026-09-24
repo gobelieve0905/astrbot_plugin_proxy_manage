@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import httpx
+import time
 from astrbot.api.star import StarTools, register
 
 if __package__:

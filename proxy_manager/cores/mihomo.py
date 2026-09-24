@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl, quote, unquote, urlsplit
 import httpx
 
 from .base import CoreAdapter
+from ..domain.constants import RULE_TYPE_SET, RULE_TYPES_REQUIRING_DECLARATION
 from ..domain.model import compiled_rules
 
 
@@ -21,7 +22,7 @@ class MihomoAdapter(CoreAdapter):
             'id':self.id,
             'protocols':{'anytls','http','https','socks','socks5','socks5h'},
             'groups':{'select','url-test','fallback'},
-            'rules':{'exact','suffix'},
+            'rules':set(RULE_TYPE_SET-RULE_TYPES_REQUIRING_DECLARATION),
             'probe':True,'group_probe':True,'hot_reload':True,'inspect':True,
             'platforms':['linux','darwin','windows'],
         }
@@ -107,8 +108,13 @@ class MihomoAdapter(CoreAdapter):
         rules=[]
         for route in compiled:
             if route['target'] not in names: continue
-            host=route['host'].removeprefix('*.')
-            rules.append(('DOMAIN' if route['match']=='exact' else 'DOMAIN-SUFFIX')+','+host+','+names[route['target']])
+            rule_type=str(route.get('type') or ('DOMAIN' if route.get('match')=='exact' else 'DOMAIN-SUFFIX')).upper()
+            if rule_type not in RULE_TYPE_SET:
+                raise ValueError('Mihomo 不支持规则类型：'+rule_type)
+            if rule_type in RULE_TYPES_REQUIRING_DECLARATION:
+                raise ValueError(rule_type+' 需要单独配置规则集合/子规则；当前版本尚未提供对应配置，不能应用此规则')
+            payload=str(route.get('payload') or route.get('host','')).removeprefix('*.')
+            rules.append((rule_type+(','+payload if payload else ''))+','+names[route['target']])
         rules.append('MATCH,'+names.get('direct','DIRECT'))
         control=state['control']; entry=state.get('proxy_entry',{})
         document={'mode':'rule','log-level':'silent','proxies':proxies,

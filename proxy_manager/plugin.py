@@ -676,8 +676,10 @@ class ProxyManager(Star):
                            'group':{'id':group['id'],'name':group['name'],'kernel_name':group.get('kernel_name')}})
             result['entry']={'state':'passed','message':'AstrBot 进程继承的全局代理已返回 HTTPS 响应' if use_environment else '统一代理入口已返回 HTTPS 响应'}
             result['trace']={'request_correlated':bool(trace)}
-            expected_rule='DOMAIN' if route and route['match']=='exact' else ('DOMAIN-SUFFIX' if route else 'MATCH')
-            expected_payload=(route['host'].removeprefix('*.') if route else '')
+            expected_rule=(str(route.get('type') or ('DOMAIN' if route.get('match')=='exact' else 'DOMAIN-SUFFIX')).upper()
+                           if route else 'MATCH')
+            expected_payload=(str(route.get('payload') or route.get('host','')).removeprefix('*.')
+                              if route else '')
             rule_matched=bool(trace and trace.get('rule')==expected_rule and (
                 expected_rule=='MATCH' or trace.get('rule_payload')==expected_payload
             ))

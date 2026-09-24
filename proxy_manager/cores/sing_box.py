@@ -9,6 +9,7 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 
 from .base import CoreAdapter
+from ..domain.constants import RULE_TYPE_SET
 from ..domain.model import compiled_rules
 
 
@@ -17,7 +18,7 @@ class SingBoxAdapter(CoreAdapter):
 
     def capabilities(self) -> dict:
         return {'id':self.id,'protocols':{'anytls','http','https','socks','socks5','socks5h'},
-                'groups':{'select','url-test'},'rules':{'exact','suffix'},'probe':True,'group_probe':True,
+                'groups':{'select','url-test'},'rules':{'DOMAIN','DOMAIN-SUFFIX'},'probe':True,'group_probe':True,
                 'hot_reload':True,'inspect':True,'platforms':['linux','darwin','windows']}
 
     def artifact(self) -> dict:
@@ -81,8 +82,12 @@ class SingBoxAdapter(CoreAdapter):
         for route in compiled:
             target=names.get(route['target'])
             if not target: continue
-            key='domain' if route['match']=='exact' else 'domain_suffix'
-            rules.append({key:[route['host'].removeprefix('*.')],'action':'route','outbound':target})
+            rule_type=str(route.get('type') or ('DOMAIN' if route.get('match')=='exact' else 'DOMAIN-SUFFIX')).upper()
+            if rule_type not in {'DOMAIN','DOMAIN-SUFFIX'}:
+                raise ValueError('sing-box 暂不支持规则类型：'+rule_type+'；请切换到 Mihomo 或改用 DOMAIN/DOMAIN-SUFFIX')
+            key='domain' if rule_type=='DOMAIN' else 'domain_suffix'
+            payload=str(route.get('payload') or route.get('host','')).removeprefix('*.')
+            rules.append({key:[payload],'action':'route','outbound':target})
         control=state['control']; entry=state['proxy_entry']
         return {'log':{'level':'warn'},'inbounds':self._inbounds(entry),
                 'outbounds':outbounds,'route':{'rules':rules,'final':'DIRECT','auto_detect_interface':True},

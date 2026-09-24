@@ -1198,6 +1198,7 @@ class TestConfigurationRules(unittest.TestCase):
     def test_missing_manual_selection_does_not_fall_back_silently(self):
         manager = self._manager_for_runtime()
         group = next(item for item in manager.state['groups'] if item['id'] == 'hk')
+        group['mode'] = 'select'
         group['node_ids'] = ['missing-node', 'hk-1']
         group['selected'] = 'missing-node'
         with self.assertRaisesRegex(ValueError, '选择.*失效|失效.*选择'):

@@ -9,6 +9,40 @@ HTTP_PROTOCOLS={'http','https','socks','socks5','socks5h'}
 KINDS={"http","https","socks5","socks5h","mihomo","sing-box","xray"}
 MODES={"direct","select","url-test","fallback"}
 MATCHES={"exact","suffix"}
+# Clash/Mihomo rule types.  Keep the normalized model deliberately close to
+# Clash's public rule vocabulary so rules can be imported/exported without
+# losing information.  Adapter-specific capability checks decide whether a
+# selected core can actually render a given type.
+RULE_TYPES=(
+    'DOMAIN','DOMAIN-SUFFIX','DOMAIN-KEYWORD','DOMAIN-REGEX','GEOSITE','GEOIP',
+    'DOMAIN-WILDCARD','SRC-GEOIP','IP-ASN','SRC-IP-ASN','IP-CIDR','IP-CIDR6','SRC-IP-CIDR',
+    'IP-SUFFIX','SRC-IP-SUFFIX','SRC-PORT','DST-PORT','IN-PORT','DSCP',
+    'PROCESS-NAME','PROCESS-NAME-WILDCARD','PROCESS-PATH','PROCESS-PATH-WILDCARD',
+    'PROCESS-NAME-REGEX','PROCESS-PATH-REGEX','NETWORK','UID','IN-TYPE','IN-USER','IN-NAME',
+    'REMATCH-NAME','SUB-RULE','RULE-SET',
+    'AND','OR','NOT','MATCH'
+)
+RULE_TYPE_SET=set(RULE_TYPES)
+# These Clash rule forms require separately managed rule-provider/sub-rule
+# declarations. They remain recognizable in imported text, but this plugin's
+# normalized model does not yet own those declarations, so Mihomo must reject
+# them before configuration is written or applied.
+RULE_TYPES_REQUIRING_DECLARATION={'RULE-SET','SUB-RULE'}
+RULE_TYPE_ALIASES={
+    'DOMAINSUFFIX':'DOMAIN-SUFFIX','DOMAIN_SUFFIX':'DOMAIN-SUFFIX',
+    'DOMAINKEYWORD':'DOMAIN-KEYWORD','DOMAIN_KEYWORD':'DOMAIN-KEYWORD',
+    'DOMAINREGEX':'DOMAIN-REGEX','DOMAIN_REGEX':'DOMAIN-REGEX',
+    'SRCIPCIDR':'SRC-IP-CIDR','SRC_IP_CIDR':'SRC-IP-CIDR',
+    'IPSUFFIX':'IP-SUFFIX','IP_SUFFIX':'IP-SUFFIX',
+    'SRCIPSUFFIX':'SRC-IP-SUFFIX','SRC_IP_SUFFIX':'SRC-IP-SUFFIX',
+    'SRCPORT':'SRC-PORT','SRC_PORT':'SRC-PORT','DSTPORT':'DST-PORT','DST_PORT':'DST-PORT',
+    'INPORT':'IN-PORT','IN_PORT':'IN-PORT','PROCESSNAME':'PROCESS-NAME','PROCESS_NAME':'PROCESS-NAME',
+    'PROCESSPATH':'PROCESS-PATH','PROCESS_PATH':'PROCESS-PATH',
+    'PROCESSNAMEREGEX':'PROCESS-NAME-REGEX','PROCESS_NAME_REGEX':'PROCESS-NAME-REGEX',
+    'PROCESSPATHREGEX':'PROCESS-PATH-REGEX','PROCESS_PATH_REGEX':'PROCESS-PATH-REGEX',
+    'INTYPE':'IN-TYPE','IN_TYPE':'IN-TYPE','INUSER':'IN-USER','IN_USER':'IN-USER',
+    'INNAME':'IN-NAME','IN_NAME':'IN-NAME','RULESET':'RULE-SET','RULE_SET':'RULE-SET',
+}
 ADVANCED_SCHEMES={"ss","ssr","vmess","vless","trojan","hysteria","hysteria2","tuic","anytls"}
 SUPPORTED_PROTOCOLS={'anytls','http','https','socks','socks5','socks5h'}
 NOTICE_PATTERNS=(

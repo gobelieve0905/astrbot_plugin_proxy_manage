@@ -4,7 +4,7 @@ import copy
 import hashlib
 import re
 
-from .constants import DIRECT, HTTP_PROTOCOLS, KINDS, MATCHES, MODES
+from .constants import DIRECT, HTTP_PROTOCOLS, KINDS, MATCHES, MODES, RULE_TYPE_ALIASES, RULE_TYPE_SET
 from .identity import canonical_connection, infer_protocol, parameter_version, protocol_support, region_of, stable_node_id, suspected_notice
 from .security import ident, safe_proxy_endpoint, safe_url
 
@@ -65,6 +65,48 @@ def normalize_node(item: dict, aliases: dict[str,str]) -> dict|None:
         'suspected_notice':bool(item.get('suspected_notice',notice)),
         'notice_reason':str(item.get('notice_reason',notice_reason))[:160],
     }
+
+
+def _normalize_rule(item: object, *, legacy_string_suffix: bool=False) -> dict|None:
+    """Normalize a rule without tying the model to one core's config shape."""
+    if isinstance(item, str):
+        parts=[part.strip() for part in item.split(',')]
+        if legacy_string_suffix and len(parts)==1:
+            raw_type='DOMAIN-SUFFIX'; payload=parts[0]
+        else:
+            raw_type=parts[0] if parts else ''
+            payload=','.join(parts[1:]).strip()
+    elif isinstance(item, dict):
+        raw_type=item.get('type') or item.get('kind') or ''
+        payload=item.get('payload')
+        if payload is None:
+            payload=item.get('host','')
+        if not raw_type and item.get('match') in MATCHES:
+            raw_type='DOMAIN' if item.get('match')=='exact' else 'DOMAIN-SUFFIX'
+        elif not raw_type:
+            raw_type='DOMAIN'
+    else:
+        return None
+    raw_type=str(raw_type).strip().upper().replace(' ', '-')
+    raw_type=RULE_TYPE_ALIASES.get(raw_type,raw_type)
+    if not raw_type and legacy_string_suffix:
+        raw_type='DOMAIN-SUFFIX'
+        payload=str(item or '')
+    if raw_type not in RULE_TYPE_SET:
+        return None
+    payload=str(payload or '').strip()
+    if raw_type=='MATCH': payload=''
+    if raw_type in {'DOMAIN','DOMAIN-SUFFIX'}:
+        from .security import safe_host
+        try: payload=safe_host(payload)
+        except ValueError: return None
+    elif len(payload)>4096:
+        return None
+    elif raw_type!='MATCH' and not payload:
+        return None
+    return {'type':raw_type,'payload':payload,
+            'host':payload if raw_type in {'DOMAIN','DOMAIN-SUFFIX'} else '',
+            'match':'exact' if raw_type=='DOMAIN' else ('suffix' if raw_type=='DOMAIN-SUFFIX' else '')}
 
 
 def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
@@ -146,19 +188,18 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
         target=ident(item.get('target'))
         if target not in group_ids: continue
         domains=[]
-        for domain in item.get('domains',[]) if isinstance(item.get('domains'),list) else []:
-            try:
-                if isinstance(domain,str): host=safe_host(domain); match='suffix'
-                else: host=safe_host(domain.get('host')); match=domain.get('match') if domain.get('match') in MATCHES else 'exact'
-                domains.append({'host':host,'match':match})
-            except (ValueError,AttributeError): continue
+        raw_rules=item.get('rules') if isinstance(item.get('rules'),list) else item.get('domains',[])
+        if not isinstance(raw_rules,list): raw_rules=[]
+        for domain in raw_rules:
+            normalized=_normalize_rule(domain,legacy_string_suffix=isinstance(domain,str))
+            if normalized: domains.append(normalized)
         if domains:
             rule_groups.append({'id':ident(item.get('id')) or f'rules-{index+1}','name':str(item.get('name','规则组'))[:80],
                                 'domains':domains,'priority':max(1,min(int(item.get('priority',100) or 100),10000)),
                                 'target':target,'enabled':bool(item.get('enabled',True))})
     if not rule_groups:
         for route in routes:
-            rule_groups.append({'id':route['id'],'name':route['host'],'domains':[{'host':route['host'],'match':route['match']}],
+            rule_groups.append({'id':route['id'],'name':route['host'],'domains':[_normalize_rule({'host':route['host'],'match':route['match']})],
                                 'priority':route['priority'],'target':route['target'],'enabled':route['enabled']})
 
     platforms={}
@@ -203,18 +244,22 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
     # would leave them available for grouping and probing even though their
     # source no longer exists.  Apply this ownership rule while normalizing so
     # disk loads, saves, imports and API callers all get the same result.
-    active_subscription_ids={subscription['id'] for subscription in subscriptions}
-    ignored_by_subscription={
-        subscription['id']:set(subscription.get('ignored_node_ids',[]))
-        for subscription in subscriptions
-    }
-    removed_node_ids={node['id'] for node in nodes
-                      if node.get('subscription_id') and (
-                          node.get('subscription_id') not in active_subscription_ids
-                          or node['id'] in ignored_by_subscription.get(node.get('subscription_id'),set())
-                      )}
-    if removed_node_ids:
-        nodes=[node for node in nodes if node['id'] not in removed_node_ids]
+    # A complete persisted state always has a subscriptions array.  Older
+    # callers (and migration helpers) may normalize a node-only fragment;
+    # preserve those nodes until ownership information is actually present.
+    if isinstance(source.get('subscriptions'),list):
+        active_subscription_ids={subscription['id'] for subscription in subscriptions}
+        ignored_by_subscription={
+            subscription['id']:set(subscription.get('ignored_node_ids',[]))
+            for subscription in subscriptions
+        }
+        removed_node_ids={node['id'] for node in nodes
+                          if node.get('subscription_id') and (
+                              node.get('subscription_id') not in active_subscription_ids
+                              or node['id'] in ignored_by_subscription.get(node.get('subscription_id'),set())
+                          )}
+        if removed_node_ids:
+            nodes=[node for node in nodes if node['id'] not in removed_node_ids]
 
     live_node_ids={node['id'] for node in nodes}
     for subscription in subscriptions:
@@ -314,9 +359,15 @@ def validate_state(value: object) -> dict:
     for rule_group in state['rule_groups']:
         if rule_group['target'] not in group_ids: raise ValueError('规则组引用不存在代理组：'+rule_group['id'])
         if not rule_group['enabled']: continue
-        for domain in rule_group['domains']:
-            key=(domain['host'],domain['match'],rule_group['priority'])
-            if key in seen_domains: raise ValueError('规则冲突：'+domain['host']+' 与 '+seen_domains[key])
+        for domain in rule_group.get('domains',[]):
+            rule_type=str(domain.get('type') or ('DOMAIN' if domain.get('match')=='exact' else 'DOMAIN-SUFFIX')).upper()
+            payload=str(domain.get('payload') or domain.get('host') or '')
+            if rule_type not in RULE_TYPE_SET: raise ValueError('规则类型不支持：'+rule_type)
+            if rule_type!='MATCH' and not payload: raise ValueError('规则参数不能为空：'+rule_type)
+            if rule_type in {'RULE-SET','SUB-RULE'}:
+                raise ValueError(rule_type+' 需要单独配置规则集合/子规则，当前版本不能应用')
+            key=(rule_type,payload,rule_group['priority'])
+            if key in seen_domains: raise ValueError('规则冲突：'+payload+' 与 '+seen_domains[key])
             seen_domains[key]=rule_group['name']
     sub_ids=set(); sub_names={}
     for subscription in state['subscriptions']:
@@ -345,17 +396,24 @@ def compiled_rules(state:dict) -> list[dict]:
     compiled=[]
     for rule_group in state.get('rule_groups',[]):
         if not rule_group['enabled']: continue
-        for position,domain in enumerate(rule_group['domains']):
-            compiled.append({'rule_group_id':rule_group['id'],'rule_group':rule_group['name'],'host':domain['host'],
-                             'match':domain['match'],'target':rule_group['target'],'priority':rule_group['priority'],
-                             'position':position})
+        domains=rule_group.get('domains',rule_group.get('rules',[]))
+        for position,domain in enumerate(domains):
+            rule_type=str(domain.get('type') or ('DOMAIN' if domain.get('match')=='exact' else 'DOMAIN-SUFFIX')).upper()
+            payload=str(domain.get('payload') or domain.get('host') or '')
+            compiled.append({'rule_group_id':rule_group['id'],'rule_group':rule_group['name'],'host':domain.get('host',''),
+                             'match':domain.get('match',''),'type':rule_type,'payload':payload,
+                             'target':rule_group['target'],'priority':rule_group['priority'],'position':position})
     compiled.sort(key=lambda item:(item['priority'],item['position'],item['rule_group_id']))
     return compiled
 
 
 def match_rule(state:dict, host:str) -> dict|None:
     for route in compiled_rules(state):
-        base=route['host'].removeprefix('*.')
-        if (route['match']=='exact' and base==host) or (route['match']=='suffix' and (host==base or host.endswith('.'+base))):
+        if route.get('type')=='MATCH':
+            return route
+        if route.get('type') not in {None,'DOMAIN','DOMAIN-SUFFIX'}:
+            continue
+        base=(route.get('payload') or route.get('host','')).removeprefix('*.')
+        if (route.get('type','DOMAIN' if route.get('match')=='exact' else 'DOMAIN-SUFFIX')=='DOMAIN' and base==host) or (route.get('type')=='DOMAIN-SUFFIX' and (host==base or host.endswith('.'+base))):
             return route
     return None

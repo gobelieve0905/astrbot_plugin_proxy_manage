@@ -1174,19 +1174,19 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 .rule-card { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-subtle); transition: border-color 140ms ease, background-color 140ms ease; }
 .rule-card.drag-over { border-color: var(--accent); background: var(--accent-soft); }
 .rule-card.dragging { opacity: .52; }
-.rule-card-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; }
+.rule-card-head { display: grid; grid-template-columns: auto minmax(180px, 1fr) minmax(190px, 280px) auto auto; align-items: center; gap: 12px; }
 .rule-card-title { display: grid; gap: 4px; min-width: 0; }
 .rule-card-head b { overflow-wrap: anywhere; font-size: 14px; }
 .rule-card-head small { color: var(--muted); font-size: 12px; }
 .rule-drag-handle { min-height: 34px; padding: 6px 9px; cursor: grab; color: var(--muted-strong); touch-action: none; }
 .rule-drag-handle:active { cursor: grabbing; }
-.rule-card-controls { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--line); }
-.rule-target-control { display: grid; grid-template-columns: 110px minmax(180px, 320px); align-items: center; gap: 10px; color: var(--muted-strong); font-size: 12px; font-weight: 650; }
-.rule-target-control select { min-height: 38px; }
+.rule-target-inline { display: grid; grid-template-columns: auto minmax(130px, 1fr); align-items: center; gap: 8px; color: var(--muted-strong); font-size: 12px; font-weight: 650; }
+.rule-target-inline select { min-height: 38px; min-width: 0; }
 .rule-card-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .rule-card-actions button { min-height: 34px; padding: 6px 9px; }
-.rule-card-domains { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
-.rule-card-domains code { color: var(--accent-strong); font-size: 10px; }
+.rule-editor-modes { display: flex; flex-wrap: wrap; gap: 7px; }
+.rule-editor-modes .active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
+.rule-editor-modes button { min-height: 36px; padding: 7px 10px; }
 .action-confirm-dialog { width: min(480px, calc(100vw - 32px)); }
 .action-confirm-body { padding: 20px 24px; }
 .action-confirm-body p { margin: 0; overflow-wrap: anywhere; }
@@ -1218,7 +1218,7 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   .rule-card-head > .chip { grid-column: 3; grid-row: 1; }
   .rule-card-actions { grid-column: 1 / -1; }
   .rule-card-actions button { flex: 1 1 0; }
-  .rule-target-control { grid-template-columns: 1fr; gap: 5px; }
+  .rule-target-inline { grid-column: 1 / -1; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; }
   .rule-form-grid { grid-template-columns: 1fr; gap: 12px; }
   .rule-domain-row { grid-template-columns: 32px minmax(0, 1fr) 64px; gap: 7px; }
   .rule-domain-type { grid-column: 2; grid-row: 1; }
@@ -1236,6 +1236,7 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   .rule-dialog-body { padding: 16px; }
   .rule-form-grid { grid-template-columns: 1fr; gap: 14px; }
   .rule-card { padding: 13px; }
+  .rule-target-inline { grid-template-columns: 1fr; gap: 5px; }
 }
 
 /* Save preview: summarize configuration changes without exposing the raw document. */

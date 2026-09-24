@@ -25,7 +25,7 @@ class XrayAdapter(CoreAdapter):
             'id': self.id,
             'protocols': {'http', 'https', 'socks', 'socks5', 'socks5h', 'vmess', 'vless', 'trojan', 'ss'},
             'groups': {'select'},
-            'rules': {'exact', 'suffix'},
+            'rules': {'DOMAIN', 'DOMAIN-SUFFIX'},
             'probe': False,
             'group_probe': False,
             'hot_reload': False,
@@ -199,8 +199,11 @@ class XrayAdapter(CoreAdapter):
             target = names.get(route['target'])
             if not target:
                 continue
-            domain = route['host'].removeprefix('*.')
-            rules.append({'type': 'field', 'domain': [('full:' if route['match'] == 'exact' else 'domain:') + domain],
+            rule_type=str(route.get('type') or ('DOMAIN' if route.get('match')=='exact' else 'DOMAIN-SUFFIX')).upper()
+            if rule_type not in {'DOMAIN','DOMAIN-SUFFIX'}:
+                raise ValueError('Xray 暂不支持规则类型：'+rule_type+'；请切换到 Mihomo 或改用 DOMAIN/DOMAIN-SUFFIX')
+            domain = str(route.get('payload') or route.get('host','')).removeprefix('*.')
+            rules.append({'type': 'field', 'domain': [('full:' if rule_type == 'DOMAIN' else 'domain:') + domain],
                           'outboundTag': target})
         rules.append({'type': 'field', 'network': 'tcp,udp', 'outboundTag': names.get('direct', 'DIRECT')})
         entry = state.get('proxy_entry', {})
