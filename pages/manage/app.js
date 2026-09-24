@@ -6,8 +6,8 @@ if (!api || typeof api.ready !== 'function') {
   if(notice){notice.hidden=false;notice.textContent='AstrBot 页面桥接未就绪，请重新打开插件页面';if(typeof notice.showPopover==='function')notice.showPopover();else notice.setAttribute('data-visible','true')}
   return
 }
-const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',control:'内核管理',logs:'连接日志'}
-const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名、模板和目标出口',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
+const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',control:'内核管理',logs:'审计历史'}
+const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名、模板和目标出口',control:'管理插件自有内核、制品与运行配置',logs:'查看配置修改、订阅、内核和连接验证事件'}
 let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set(), ruleEditorMode='rows'
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
@@ -140,6 +140,56 @@ function statusLabel(item){ return {ok:'可用',error:'异常',timeout:'超时',
 function nodeSpeed(node){ const item=health(node.id); return item.status==='ok'&&item.latency_ms!==null&&item.latency_ms!==undefined&&Number.isFinite(Number(item.latency_ms))?`${item.latency_ms} ms`:'-- ms' }
 function kernelStateLabel(item){ return {running:'运行中',running_limited:'运行中（有限控制）',installed:'已安装',update_available:'有更新',not_installed:'未安装',invalid:'校验失败',unsupported:'平台不支持',stopped:'已停止',failed:'运行失败',connection_failed:'连接失败',auth_failed:'认证失败',disabled:'未启用'}[item?.state]||'未检查' }
 function kernelStateClass(item){ return ['running','running_limited','installed'].includes(item?.state)?'ok':(['update_available','not_installed','disabled'].includes(item?.state)?'pending':(['invalid','unsupported','failed','connection_failed','auth_failed'].includes(item?.state)?'invalid':'')) }
+const auditEventLabels={
+  save:'配置修改',rollback:'恢复配置',subscription_import:'导入订阅',subscription_refresh:'刷新订阅',
+  kernel_install:'内核安装',kernel_uninstall:'卸载内核',kernel_start:'启动内核',kernel_stop:'停止内核',
+  kernel_update_check:'检查内核更新',core_enable:'内核启用状态',adapter_select:'切换内核',runtime_apply:'应用代理配置',
+  verify_outbound:'出口验证',verify_astrbot_egress:'核心出口验证',probe:'连通性检测',group_probe:'代理组选优核对',
+  control_select:'切换代理组节点',astrbot_proxy_enable:'接入全局代理',astrbot_proxy_restore:'恢复全局代理',
+  integration_check:'接入范围检查',plugin_terminate:'插件生命周期'
+}
+const auditCategories={save:'配置',rollback:'配置',subscription_import:'订阅',subscription_refresh:'订阅',kernel_install:'内核',kernel_uninstall:'内核',kernel_start:'内核',kernel_stop:'内核',kernel_update_check:'内核',core_enable:'内核',adapter_select:'内核',runtime_apply:'运行',verify_outbound:'验证',verify_astrbot_egress:'验证',probe:'验证',group_probe:'验证',control_select:'运行',astrbot_proxy_enable:'接入',astrbot_proxy_restore:'接入',integration_check:'接入',plugin_terminate:'生命周期'}
+const auditResultLabels={ok:'成功',confirmed:'已确认',completed:'完成',installed:'已安装',pending_restart:'待重启',pending_apply:'待应用',proxy_configuration_retained:'配置已保留',fail_closed:'失败关闭',restore_failed:'恢复失败',failed:'失败',check_failed:'检查失败'}
+const auditChangeLabels={subscriptions:'订阅',nodes:'节点',groups:'代理组',routes:'分流规则',rule_groups:'规则组'}
+function auditResultClass(result){return ['failed','restore_failed','check_failed'].includes(result)?'invalid':['pending_restart','pending_apply','fail_closed'].includes(result)?'pending':['ok','confirmed','completed','installed','proxy_configuration_retained'].includes(result)?'ok':''}
+function auditResultLabel(result){return auditResultLabels[result]||result||'已记录'}
+function auditEventSummary(event){
+  const action=event.action, changes=event.changes||{}
+  if(action==='save'){
+    const parts=Object.entries(auditChangeLabels).map(([key,label])=>{const item=changes[key]||{};const total=Number(item.added||0)+Number(item.changed||0)+Number(item.deleted||0);return total?`${label} ${total} 项`:''}).filter(Boolean)
+    return parts.length?parts.join(' · '):'配置已保存，未检测到结构变化'
+  }
+  if(action==='subscription_refresh')return `节点变化：新增 ${event.added||0} · 变更 ${event.changed||0} · 删除 ${event.deleted||0} · 未变 ${event.unchanged||0}`
+  if(action==='subscription_import')return `已导入 ${event.count||0} 个订阅来源`
+  if(action==='kernel_install')return event.version?`制品版本 ${event.version}`:'内核资源任务已记录'
+  if(action==='core_enable')return `${event.adapter||'当前内核'}：${event.enabled?'已启用':'已停用'}`
+  if(action==='adapter_select')return `当前内核切换为 ${event.adapter||'未指定'}`
+  if(action==='runtime_apply')return event.result==='ok'?'代理配置已写入并完成核对':'代理配置应用未完成'
+  if(action==='verify_outbound'||action==='verify_astrbot_egress')return event.result==='confirmed'?'已取得同一请求的出口证据':'未确认实际出口'
+  if(action==='group_probe')return event.latency_ms!==undefined?`当前节点延迟 ${event.latency_ms} ms`:'代理组核对已完成'
+  if(action==='probe')return event.elapsed_ms!==undefined?`HTTP ${event.status||'--'} · ${event.elapsed_ms} ms`:'连通性检测已完成'
+  if(action==='control_select')return `已切换代理组当前节点${event.group_id?' · '+event.group_id:''}`
+  if(action==='kernel_update_check')return event.adapter?`已检查 ${event.adapter} 固定版本`:'内核更新检查已完成'
+  if(action==='plugin_terminate')return '保留代理配置，停止插件运行任务'
+  return event.message||'操作已记录'
+}
+function auditEventDetails(event){
+  const values=[]
+  if(event.adapter)values.push(['内核',event.adapter])
+  if(event.scope)values.push(['范围',event.scope==='astrbot-core'?'AstrBot 核心':'稳定代理入口'])
+  if(event.count!==undefined)values.push(['数量',event.count])
+  if(event.version)values.push(['版本',event.version])
+  if(event.added!==undefined)values.push(['新增',event.added])
+  if(event.changed!==undefined)values.push(['变更',event.changed])
+  if(event.deleted!==undefined)values.push(['删除',event.deleted])
+  if(event.unchanged!==undefined)values.push(['未变',event.unchanged])
+  if(event.message)values.push(['说明',event.message])
+  return values.length?`<details class="audit-details"><summary>查看详情</summary><div>${values.map(([label,value])=>`<span><b>${esc(label)}</b>${esc(value)}</span>`).join('')}</div></details>`:''
+}
+function auditEventHtml(event){
+  const action=String(event.action||'event'),result=String(event.result||''),title=auditEventLabels[action]||'系统事件',category=auditCategories[action]||'系统',status=auditResultClass(result)
+  return `<article class="audit-entry"><div class="audit-entry-time"><time datetime="${esc(event.at?new Date(event.at*1000).toISOString():'')}">${esc(event.at?new Date(event.at*1000).toLocaleString():'未知时间')}</time><span>${esc(category)}</span></div><div class="audit-entry-main"><div class="audit-entry-title"><b>${esc(title)}</b><span class="chip ${status}">${esc(auditResultLabel(result))}</span></div><p>${esc(auditEventSummary(event))}</p>${auditEventDetails(event)}</div></article>`
+}
 function renderTaskBanner(){
   const banner=$('task-banner'), running=probeTask?.status==='running'; if(!banner)return
   if(!running){banner.hidePopover?.();banner.hidden=true;banner.textContent='';return}
@@ -198,7 +248,7 @@ function render(){
   } else if(tab==='subscriptions'){
     const shown=state.subscriptions
     html=`<section class="panel import-entry-panel"><div class="bar"><div><small>来源接入</small><h2>导入订阅</h2><p class="muted">先预览节点、协议和地区，再确认写入配置。</p></div><div class="actions"><button id="open-single-import" class="primary">导入订阅</button><button id="open-batch-import">批量导入</button></div></div></section>
-      <section class="panel"><div class="bar"><h2>订阅列表</h2><button id="add-subscription">新增订阅</button></div>
+      <section class="panel subscriptions-panel"><div class="bar"><div><h2>订阅列表</h2><p class="muted panel-lede">订阅只能通过上方的导入入口新增；已有来源可编辑名称、刷新策略或删除。</p></div></div>
       ${shown.map(item=>subHtml(item)).join('')||'<p class="muted">暂无订阅。</p>'}</section>`
   } else if(tab==='nodes'){
     const source=$('node-source')?.value||'全部', protocol=$('node-protocol')?.value||'全部', region=$('node-region')?.value||'全部', status=$('node-status')?.value||'全部'
@@ -228,18 +278,20 @@ function render(){
     html=`<section class="panel kernel-current"><div class="section-head"><div><small>第一栏 · 当前选择 ${esc(currentId||'--')}</small><h2>运行控制</h2></div><span class="kernel-badge ${process.ready?'ok':process.state==='failed'?'invalid':'pending'}">${esc(process.ready?'运行中':process.state||'已停止')}</span></div><div class="runtime-control"><label><span>运行内核</span><select id="adapter-select" ${runnable.length?'':'disabled'}>${runnable.map(item=>`<option value="${esc(item.id)}" ${item.id===currentId?'selected':''}>${esc(item.display_name||item.id)}</option>`).join('')||'<option>没有可运行内核</option>'}</select></label><div class="runtime-actions"><button id="adapter-switch" ${runnable.length?'':'disabled'}>切换内核</button><button id="kernel-start" ${runnable.length?'':'disabled'}>启动</button><button id="kernel-stop">停止</button><button id="control-status">刷新状态</button><button id="runtime-apply" class="primary" ${runnable.length?'':'disabled'}>应用代理配置</button></div></div><div class="runtime-facts"><div><span>系统</span><b>${esc(artifact.platform?.os||'--')} / ${esc(artifact.platform?.arch||'--')}</b></div><div><span>运行状态</span><b>${esc(process.state||'未知')}</b></div><div><span>状态说明</span><b>${esc(kernelStatus.message||'尚未读取')}</b></div></div><p class="muted runtime-note">监听地址、控制密钥和稳定代理入口由插件管理，无需手工配置。</p></section>
       <section class="panel kernel-overview"><div class="bar"><div><small>第二栏 · ${installed}/${adapters.length} 已下载 · ${enabled}/${adapters.length} 已启用</small><h2>内核资源管理</h2></div><div class="actions"><button id="refresh-kernels">刷新资源状态</button><button id="check-all-kernels">检查全部更新</button></div></div><p class="muted">展开对应内核完成版本选择、下载、更新、卸载或离线安装。启用只代表允许运行，不会自动启动。</p><div class="kernel-resources">${adapters.map(item=>kernelCard(item,item.id===currentId&&process.state==='running')).join('')}</div></section>`
   } else {
-    html=`<section class="panel"><h2>连接日志</h2>${state.events.slice().reverse().map(event=>`<div class="log">${esc(event.action)} · ${esc(event.result||'')}<small>${new Date(event.at*1000).toLocaleString()}</small></div>`).join('')||'<p class="muted">暂无事件。</p>'}</section>`
+    const events=state.events.slice().reverse()
+    html=`<section class="panel audit-panel"><div class="bar"><div><small>运行与配置变更</small><h2>审计历史</h2><p class="muted panel-lede">记录配置修改、订阅导入/刷新、内核操作、连接验证和插件生命周期事件；不记录完整流量内容。</p></div><span class="audit-count">最近 ${events.length} 条</span></div><div class="audit-list">${events.map(auditEventHtml).join('')||'<p class="muted">暂无审计事件。</p>'}</div></section>`
   }
   $('content').innerHTML=html; renderTaskBanner(); bind()
 }
 
 function subHtml(item){
-  return `<div class="sub-card" data-i="${state.subscriptions.indexOf(item)}" data-id="${esc(item.id)}">
-    <div class="table"><input data-k="name" value="${esc(item.name)}" aria-label="订阅名称"><input data-k="url" value="${esc(item.url)}" aria-label="订阅链接"><label><input type="checkbox" data-k="enabled" ${item.enabled?'checked':''}>启用</label><button data-del="subscriptions">删除</button></div>
-    <div class="sub-meta"><span>${item.node_ids.length} 节点</span><span>${traffic(item)}</span><span>${expiry(item.expire)}</span><span>更新：${time(item.updated_at)}</span><span>下次：${nextRun(item)}</span><input class="interval" type="number" min="0" max="1440" data-k="interval" value="${item.interval}"><button data-refresh="${esc(item.id)}">刷新</button></div>
+  const source=item.url?`${String(item.url).split(':',1)[0]||'https'}://[configured]`:'未配置来源'
+  return `<article class="sub-card" data-i="${state.subscriptions.indexOf(item)}" data-id="${esc(item.id)}">
+    <div class="sub-card-head"><div class="sub-card-identity"><div class="sub-card-title"><input data-k="name" value="${esc(item.name)}" aria-label="订阅名称"><span class="chip ${item.enabled?'ok':'pending'}">${item.enabled?'已启用':'已停用'}</span></div><span class="sub-source" title="订阅地址已脱敏">${esc(source)}</span></div><div class="sub-card-summary"><span><b>${item.node_ids.length}</b> 节点</span><span>更新 ${time(item.updated_at)}</span><span>下次 ${nextRun(item)}</span></div><div class="sub-card-actions"><label class="sub-enabled"><input type="checkbox" data-k="enabled" ${item.enabled?'checked':''}>启用</label><button type="button" data-refresh="${esc(item.id)}">刷新</button><button type="button" data-del="subscriptions" class="danger">删除</button></div></div>
+    <div class="sub-card-meta"><span>流量：${traffic(item)}</span><span>到期：${expiry(item.expire)}</span><label>刷新间隔 <input class="interval" type="number" min="0" max="1440" data-k="interval" value="${item.interval}" aria-label="刷新间隔（分钟）"><em>分钟，0 为手动</em></label></div>
     ${item.last_error?`<div class="node-error">${esc(item.last_error)}（连续失败 ${item.consecutive_errors} 次）</div>`:''}
     ${item.last_diff?.at?`<details><summary>最近差异：新增 ${item.last_diff.added?.length||0}、变更 ${item.last_diff.changed?.length||0}、删除 ${item.last_diff.deleted?.length||0}、未变 ${item.last_diff.unchanged?.length||0}</summary><pre>${esc(JSON.stringify(item.last_diff,null,2))}</pre></details>`:''}
-    ${item.errors?.length?`<details><summary>错误历史 ${item.errors.length}</summary>${item.errors.slice().reverse().map(error=>`<div class="node-error">${new Date(error.at*1000).toLocaleString()} · ${esc(error.message)}</div>`).join('')}</details>`:''}</div>`
+    ${item.errors?.length?`<details><summary>错误历史 ${item.errors.length}</summary>${item.errors.slice().reverse().map(error=>`<div class="node-error">${new Date(error.at*1000).toLocaleString()} · ${esc(error.message)}</div>`).join('')}</details>`:''}</article>`
 }
 
 function importTraffic(traffic){
@@ -546,7 +598,6 @@ function bind(){
     card.addEventListener('dragleave',event=>{if(!card.contains(event.relatedTarget))card.classList.remove('drag-over')})
     card.addEventListener('drop',event=>{event.preventDefault();card.classList.remove('drag-over');const sourceId=event.dataTransfer?.getData('text/plain');if(!sourceId)return;const bounds=card.getBoundingClientRect();moveRuleGroup(sourceId,card.dataset.ruleId,event.clientY>bounds.top+bounds.height/2)})
   })
-  $('add-subscription')?.addEventListener('click',()=>{state.subscriptions.push({id:'sub-'+Date.now(),name:'新订阅',url:'',enabled:true,interval:60,node_ids:[],updated_at:0,next_refresh_at:0,upload:0,download:0,total:0,expire:0,last_error:'',consecutive_errors:0,errors:[]});render()})
   $('open-single-import')?.addEventListener('click',()=>openImportDialog('single'))
   $('open-batch-import')?.addEventListener('click',()=>openImportDialog('batch'))
   document.querySelectorAll('[data-refresh]').forEach(button=>button.addEventListener('click',()=>refreshSubscription(button.dataset.refresh)))

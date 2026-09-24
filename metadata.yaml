@@ -1,7 +1,7 @@
 name: astrbot_plugin_proxy_manage
 display_name: 代理管理中心
 desc: 可视化管理 AstrBot 的代理出口、分流策略、节点健康状态和连通性诊断。
-version: 0.3.20
+version: 0.3.21
 author: gobelieve
 repo: https://github.com/gobelieve0905/astrbot_plugin_proxy_manage
 astrbot_version: '>=4.28.0,<5'

@@ -507,6 +507,36 @@ class ProxyManager(Star):
         payload['control']=copy.deepcopy(self.state['control']); payload['control']['adapter']=requested
         payload['proxy_entry']=copy.deepcopy(self.state['proxy_entry'])
 
+    def _validate_subscription_save(self,payload:dict):
+        """Keep subscription creation and URL changes behind the import flow."""
+        requested=payload.get('subscriptions')
+        if not isinstance(requested,list):
+            return
+        existing={str(item.get('id')):item for item in self.state.get('subscriptions',[]) if isinstance(item,dict)}
+        for item in requested:
+            if not isinstance(item,dict):
+                raise ValueError('订阅配置格式无效')
+            subscription_id=str(item.get('id') or '')
+            previous=existing.get(subscription_id)
+            if previous is None:
+                raise ValueError('订阅只能通过“导入订阅”新增')
+            if str(item.get('url') or '') != str(previous.get('url') or ''):
+                raise ValueError('订阅地址只能通过重新导入订阅更新')
+
+    @staticmethod
+    def _audit_change_counts(previous:dict,candidate:dict) -> dict:
+        result={}
+        for key in ('subscriptions','nodes','groups','routes','rule_groups'):
+            old={str(item.get('id')):item for item in previous.get(key,[]) if isinstance(item,dict)}
+            new={str(item.get('id')):item for item in candidate.get(key,[]) if isinstance(item,dict)}
+            added=set(new)-set(old); deleted=set(old)-set(new)
+            changed={item_id for item_id in set(old)&set(new)
+                     if json.dumps(old[item_id],ensure_ascii=False,sort_keys=True)
+                     !=json.dumps(new[item_id],ensure_ascii=False,sort_keys=True)}
+            result[key]={'added':len(added),'changed':len(changed),'deleted':len(deleted),
+                         'unchanged':max(0,len(set(old)&set(new))-len(changed))}
+        return result
+
     async def state_page(self): return json_response(self.snapshot())
     async def events_page(self): return json_response({'events':redact_diagnostics(self.events[-100:])})
     async def templates(self): return json_response({'templates':TEMPLATES})
@@ -520,13 +550,13 @@ class ProxyManager(Star):
         try:
             payload=await request.json()
             if not isinstance(payload,dict): raise ValueError('配置格式无效')
-            self._restore_redacted(payload); candidate=self._validate(payload)
+            self._restore_redacted(payload); self._validate_subscription_save(payload); candidate=self._validate(payload)
             async with self.operation_lock:
                 previous=self.state
                 try: await self.persist(candidate)
                 except Exception:
                     self.state=previous; raise
-            self.event({'action':'save','result':'ok'})
+            self.event({'action':'save','result':'ok','changes':self._audit_change_counts(previous,candidate)})
             return json_response(self.snapshot())
         except (ValueError,TypeError) as exc: return error_response(str(exc))
         except OSError: return error_response('配置保存失败，已保留上一版配置',status_code=500)
@@ -537,6 +567,7 @@ class ProxyManager(Star):
             async with self.operation_lock:
                 candidate=self._validate(json.loads(self.backup.read_text(encoding='utf-8')))
                 await self.persist(candidate)
+            self.event({'action':'rollback','result':'ok'})
             return json_response(self.snapshot())
         except (OSError,ValueError,TypeError) as exc: return error_response(str(exc))
 
@@ -666,7 +697,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.20'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.21'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -839,7 +870,7 @@ class ProxyManager(Star):
                 url=str(entry.get('url','')).strip(); name=entry['name']
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.20'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.21'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -917,7 +948,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.20'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.21'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1061,8 +1092,10 @@ class ProxyManager(Star):
             if not adapter: raise ValueError('不支持或未知的内核适配器：'+adapter_id)
             manager=ArtifactManager(self.data_dir,adapter.artifact(),str(payload.get('version') or '') or None)
             result=await manager.check_update()
+            self.event({'action':'kernel_update_check','adapter':adapter_id,'result':result.get('state','ok'),'latest_version':result.get('latest_version','')})
             return json_response({'adapter':adapter_id,'artifact':manager.status(),'check':result})
         except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
+            self.event({'action':'kernel_update_check','adapter':str(locals().get('adapter_id','')),'result':'check_failed','message':safe_error(exc)})
             return error_response(str(exc),status_code=400)
 
     async def kernel_update_check_all(self):
@@ -1071,8 +1104,10 @@ class ProxyManager(Star):
             try:
                 manager=ArtifactManager(self.data_dir,adapter.artifact())
                 check=await manager.check_update()
+                self.event({'action':'kernel_update_check','adapter':adapter.id,'result':check.get('state','ok'),'latest_version':check.get('latest_version','')})
                 results.append({'adapter':adapter.id,'artifact':manager.status(),'check':check})
             except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
+                self.event({'action':'kernel_update_check','adapter':getattr(locals().get('adapter',None),'id',''),'result':'check_failed','message':safe_error(exc)})
                 results.append({'adapter':adapter.id,'check':{'state':'check_failed','message':str(exc)}})
         return json_response({'results':results,'checked_at':int(time.time())})
 
@@ -1208,11 +1243,21 @@ class ProxyManager(Star):
 
     async def kernel_start(self):
         try:
-            async with self.operation_lock: return json_response(await self._start_owned_kernel())
-        except (ValueError,OSError,RuntimeError) as exc: return error_response(str(exc),status_code=500)
+            async with self.operation_lock: result=await self._start_owned_kernel()
+            self.event({'action':'kernel_start','result':'ok' if result.get('ready') else 'failed','state':result.get('state','')})
+            return json_response(result)
+        except (ValueError,OSError,RuntimeError) as exc:
+            self.event({'action':'kernel_start','result':'failed','message':safe_error(exc)})
+            return error_response(str(exc),status_code=500)
 
     async def kernel_stop(self):
-        async with self.operation_lock: return json_response(await self._adapter().stop(self.supervisor))
+        try:
+            async with self.operation_lock: result=await self._adapter().stop(self.supervisor)
+            self.event({'action':'kernel_stop','result':'ok','state':result.get('state','') if isinstance(result,dict) else ''})
+            return json_response(result)
+        except (ValueError,OSError,RuntimeError) as exc:
+            self.event({'action':'kernel_stop','result':'failed','message':safe_error(exc)})
+            return error_response(str(exc),status_code=500)
 
     async def core_adapters(self):
         return json_response({'current':self._adapter().id,'adapters':[
@@ -1701,7 +1746,7 @@ class ProxyManager(Star):
         http_url,socks_url=self._entry_urls(); status=self.astrbot_proxy.mark_started(http_url,socks_url)
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.20 已加载')
+        logger.info('代理管理中心 0.3.21 已加载')
 
     async def terminate(self):
         if self.auto_task:

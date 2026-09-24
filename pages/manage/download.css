@@ -1,7 +1,7 @@
 .runtime-control { display: grid; grid-template-columns: minmax(210px, 1fr) minmax(0, 2fr); align-items: end; gap: 14px; margin-top: 18px; }
 .runtime-control > label { display: grid; gap: 6px; color: var(--muted-strong); font-size: 12px; font-weight: 700; }
-.runtime-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.runtime-actions button { flex: 1 1 120px; }
+.runtime-actions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.runtime-actions button { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .runtime-facts, .kernel-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
 .runtime-facts > div, .kernel-facts > div { min-width: 0; display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-subtle); }
 .runtime-facts span, .kernel-facts span { color: var(--muted); font-size: 11px; font-weight: 650; }
@@ -21,8 +21,8 @@
 .kernel-badge.invalid { border-color: color-mix(in srgb, var(--danger) 44%, var(--line)); background: var(--danger-soft); color: var(--danger); }
 .kernel-resource-body { padding: 0 14px 14px; }
 .kernel-message { margin: 12px 0 0; color: var(--muted-strong); font-size: 12px; overflow-wrap: anywhere; }
-.kernel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-.kernel-actions button { flex: 1 1 120px; }
+.kernel-actions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.kernel-actions button { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kernel-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 12px; margin-top: 12px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line)); border-radius: var(--radius-sm); background: var(--accent-soft); }
 .kernel-progress > div { min-width: 0; display: grid; gap: 2px; }
 .kernel-progress b { color: var(--accent-strong); font-size: 12px; overflow-wrap: anywhere; }
@@ -39,7 +39,7 @@
 .kernel-offline .inline { align-items: stretch; }
 @media (max-width: 900px) {
   .runtime-control { grid-template-columns: 1fr; }
-  .runtime-actions button { flex: 1 1 140px; }
+  .runtime-actions, .kernel-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .runtime-facts, .kernel-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 700px) {
@@ -47,6 +47,6 @@
   .kernel-resource > summary { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
   .kernel-resource-meta { grid-column: 1 / -1; grid-row: 2; }
   .kernel-badge { grid-column: 2; grid-row: 1; }
-  .kernel-actions button { flex: 1 1 calc(50% - 4px); }
+  .runtime-actions, .kernel-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kernel-offline .inline { flex-direction: column; }
 }
