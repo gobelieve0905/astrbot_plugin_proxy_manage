@@ -32,11 +32,11 @@
       <div><span id="crumb">概览</span><h1>代理管理中心</h1><p class="muted" id="page-subtitle">运行状态、节点健康和流量策略总览</p></div>
       <div class="actions"><button id="rollback">恢复上一版</button><button id="save" class="primary">预览并保存</button></div>
     </header>
-    <div id="notice" role="status" aria-live="polite" aria-atomic="true" hidden></div>
-    <div id="task-banner" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+    <div id="notice" popover="manual" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+    <div id="task-banner" popover="manual" role="status" aria-live="polite" aria-atomic="true" hidden></div>
     <section id="content"></section>
   </main>
-  <dialog id="diff" aria-labelledby="diff-title"><div class="dialog-head"><div><small>配置事务</small><h2 id="diff-title">确认配置变更</h2></div><button id="cancel" type="button" class="quiet" aria-label="取消配置变更">取消</button></div><div id="diff-content" class="change-preview" aria-live="polite"></div><div class="dialog-actions"><button id="confirm" type="button" class="primary">确认保存</button></div></dialog>
+  <dialog id="diff" aria-labelledby="diff-title"><div class="dialog-head"><div><small>配置事务</small><h2 id="diff-title">确认配置变更</h2></div><button id="cancel" type="button" class="quiet" aria-label="取消配置变更">取消</button></div><div id="diff-content" class="change-preview" aria-live="polite"></div><div class="dialog-actions"><button id="save-only" type="button" class="quiet">仅保存</button><button id="confirm" type="button" class="primary">保存并应用</button></div></dialog>
   <dialog id="subscription-import-dialog" class="import-dialog" aria-labelledby="subscription-import-title">
     <div class="dialog-head"><div><small id="subscription-import-kicker">订阅来源</small><h2 id="subscription-import-title">导入订阅</h2></div><button id="subscription-import-close" type="button" class="quiet" aria-label="关闭订阅导入弹窗">关闭</button></div>
     <div id="subscription-import-body" class="import-dialog-body"></div>
@@ -51,6 +51,16 @@
     <div class="dialog-head"><div><small>代理节点详情</small><h2 id="proxy-node-title">节点详情</h2></div><button id="proxy-node-close" type="button" class="quiet" aria-label="关闭节点详情弹窗">关闭</button></div>
     <div id="proxy-node-body" class="node-dialog-body"></div>
     <div id="proxy-node-actions" class="dialog-actions"></div>
+  </dialog>
+  <dialog id="rule-group-dialog" class="rule-dialog" aria-labelledby="rule-group-title">
+    <div class="dialog-head"><div><small>规则组配置</small><h2 id="rule-group-title">新增规则组</h2></div><button id="rule-group-close" type="button" class="quiet" aria-label="关闭规则组配置弹窗">关闭</button></div>
+    <div id="rule-group-body" class="rule-dialog-body"></div>
+    <div id="rule-group-actions" class="dialog-actions"></div>
+  </dialog>
+  <dialog id="action-confirm-dialog" class="action-confirm-dialog" aria-labelledby="action-confirm-title">
+    <div class="dialog-head"><div><small>操作确认</small><h2 id="action-confirm-title">确认操作</h2></div><button id="action-confirm-close" type="button" class="quiet" aria-label="取消操作">取消</button></div>
+    <div id="action-confirm-body" class="action-confirm-body"></div>
+    <div class="dialog-actions"><button id="action-confirm-cancel" type="button" class="quiet">取消</button><button id="action-confirm-submit" type="button" class="primary">确认操作</button></div>
   </dialog>
   <script src="./app.js"></script>
 </body>

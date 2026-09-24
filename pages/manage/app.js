@@ -2,19 +2,26 @@ function initialize() {
 const $ = id => document.getElementById(id)
 const api = window.AstrBotPluginPage
 if (!api || typeof api.ready !== 'function') {
-  document.getElementById('notice').hidden = false
-  document.getElementById('notice').textContent = 'AstrBot 页面桥接未就绪，请重新打开插件页面'
+  const notice=document.getElementById('notice')
+  if(notice){notice.hidden=false;notice.textContent='AstrBot 页面桥接未就绪，请重新打开插件页面';if(typeof notice.showPopover==='function')notice.showPopover();else notice.setAttribute('data-visible','true')}
   return
 }
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
 const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名和目标出口',platforms:'生成域名规则；这不代表平台 SDK 已接入代理',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
-let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', openGroupIds=new Set()
+let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set()
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
 let noticeTimer=null
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
-function note(text,error=false){const notice=$('notice');clearTimeout(noticeTimer);notice.textContent=text;notice.hidden=!text;notice.className=error?'error':'';if(text)noticeTimer=setTimeout(()=>{notice.hidden=true;notice.textContent=''},error?8000:3200)}
+function note(text,error=false){
+  const notice=$('notice'); if(!notice)return
+  clearTimeout(noticeTimer); notice.textContent=text||''; notice.className=error?'error':''
+  if(!text){notice.hidePopover?.();notice.hidden=true;return}
+  notice.hidden=false
+  if(typeof notice.showPopover==='function')notice.showPopover(); else notice.setAttribute('data-visible','true')
+  noticeTimer=setTimeout(()=>{notice.hidePopover?.();notice.hidden=true;notice.textContent=''},error?8000:3200)
+}
 function groupOptions(selected){ return state.groups.map(group=>`<option value="${esc(group.id)}" ${group.id===selected?'selected':''}>${esc(group.name)}</option>`).join('') }
 const groupModes=[
   {value:'select',label:'手动选择',help:'在运行状态中手动切换成员节点。'},
@@ -91,9 +98,9 @@ function kernelStateLabel(item){ return {running:'运行中',running_limited:'�
 function kernelStateClass(item){ return ['running','running_limited','installed'].includes(item?.state)?'ok':(['update_available','not_installed','disabled'].includes(item?.state)?'pending':(['invalid','unsupported','failed','connection_failed','auth_failed'].includes(item?.state)?'invalid':'')) }
 function renderTaskBanner(){
   const banner=$('task-banner'), running=probeTask?.status==='running'; if(!banner)return
-  if(!running){banner.hidden=true;banner.textContent='';return}
+  if(!running){banner.hidePopover?.();banner.hidden=true;banner.textContent='';return}
   const total=Math.max(1,Number(probeTask.total||0)), completed=Math.min(total,Number(probeTask.completed||0));
-  banner.innerHTML=`<div class="task-banner-inner"><progress aria-label="${esc(probeLabel)}进度" value="${completed}" max="${total}"></progress><span>${esc(probeLabel)}：${completed}/${total}</span><button id="cancel-probe" type="button" ${probeTask.status!=='running'?'disabled':''}>取消</button></div>`; banner.hidden=false
+  banner.innerHTML=`<div class="task-banner-inner"><progress aria-label="${esc(probeLabel)}进度" value="${completed}" max="${total}"></progress><span>${esc(probeLabel)}：${completed}/${total}</span><button id="cancel-probe" type="button" ${probeTask.status!=='running'?'disabled':''}>取消</button></div>`; banner.hidden=false; if(typeof banner.showPopover==='function')banner.showPopover();else banner.setAttribute('data-visible','true')
 }
 function requiresKernelProbe(nodeIds){
   const direct=new Set(['http','https','socks','socks5','socks5h']);
@@ -157,7 +164,7 @@ function render(){
       <div class="filter"><select id="node-source"><option value="全部">全部</option>${sourceEntries.map(entry=>`<option value="${esc(entry.id)}" ${entry.id===source?'selected':''}>${esc(entry.label)}</option>`).join('')}</select><select id="node-protocol"><option>全部</option>${protocols.map(value=>`<option ${value===protocol?'selected':''}>${esc(value)}</option>`).join('')}</select><select id="node-region"><option>全部</option>${regions.map(value=>`<option ${value===region?'selected':''}>${esc(value)}</option>`).join('')}</select><select id="node-status"><option>全部</option>${['ok','error','timeout','unknown','失效'].map(value=>`<option ${value===status?'selected':''}>${esc(value)}</option>`).join('')}</select></div>
       <div class="node-select-toolbar"><span id="probe-selection-summary" aria-live="polite">已选 ${selectedCount} 个 · 当前筛选 ${shown.length} 个（已选 ${visibleSelectedCount} 个）</span><div class="node-select-actions"><button id="select-visible-nodes" type="button" ${shown.length?'':'disabled'}>全选</button><button id="clear-visible-nodes" type="button" ${visibleSelectedCount?'':'disabled'}>全不选</button></div></div>
       ${shown.map(({node,index})=>{const item=health(node.id),support=node.support||{status:'unverified',reason:'尚未验证'};const runtimeStatus=node.invalid_reference?'invalid':item.status;return `<article class="node-card compact-node-card" data-i="${index}">
-        <div class="compact-node-main"><label class="node-select-checkbox"><input type="checkbox" data-probe-select="${esc(node.id)}" aria-label="选择 ${esc(nodeLabel(node))} 测速" ${selectedProbeNodeIds.has(node.id)?'checked':''}></label><div class="compact-node-identity"><input data-k="name" value="${esc(node.display_name||node.name)}" aria-label="节点名称"><div class="compact-node-subline"><span class="chip">${esc(node.protocol||'unknown')}</span><span class="chip ${support.status==='supported'?'ok':'pending'}">${esc({supported:'已支持',unverified:'未验证',unsupported:'不支持'}[support.status]||'未验证')}</span><span class="muted">${esc(node.region||'其他')}</span></div></div><div class="compact-node-health"><span class="chip ${runtimeStatus}">${node.invalid_reference?'引用失效':statusLabel(item)}</span><b>${item.latency_ms??'--'} <small>ms</small></b><small>${time(item.checked_at)}</small></div><div class="compact-node-actions"><button data-test="${esc(node.id)}">测速</button><button data-node-details="${esc(node.id)}">详情</button><button data-del="nodes" class="danger">删除</button></div></div>
+        <div class="compact-node-main"><label class="node-select-checkbox"><input type="checkbox" data-probe-select="${esc(node.id)}" aria-label="选择 ${esc(nodeLabel(node))} 测速" ${selectedProbeNodeIds.has(node.id)?'checked':''}></label><div class="compact-node-identity"><b class="compact-node-name">${esc(node.display_name||node.name)}</b><div class="compact-node-subline"><span class="chip">${esc(node.protocol||'unknown')}</span><span class="chip ${support.status==='supported'?'ok':'pending'}">${esc({supported:'已支持',unverified:'未验证',unsupported:'不支持'}[support.status]||'未验证')}</span><span class="muted">${esc(node.region||'其他')}</span></div></div><div class="compact-node-health"><span class="chip ${runtimeStatus}">${node.invalid_reference?'引用失效':statusLabel(item)}</span><b>${item.latency_ms??'--'} <small>ms</small></b><small>${time(item.checked_at)}</small></div><div class="compact-node-actions"><button type="button" data-test="${esc(node.id)}">测速</button><button type="button" data-node-details="${esc(node.id)}">详情</button><button type="button" data-del="nodes" class="danger">删除</button></div></div>
       </article>`}).join('')||'<p class="muted">暂无节点。</p>'}</section>`
   } else if(tab==='groups'){
     const runtimeGroups=new Map((controlResult?.groups||[]).map(group=>[group.id,group]))
@@ -166,7 +173,7 @@ function render(){
       <p class="muted group-config-note">保存页面配置后，还需在“内核管理”点击“应用代理配置”才会写入当前内核。直连是内核内部默认目标，不作为可编辑代理组展示。</p>
       ${groups.map(({group,index})=>{const members=groupMembers(group),selected=group.mode==='select'&&state.nodes.find(node=>node.id===group.selected),runtime=runtimeGroups.get(group.id),summary=runtimeGroupSummary(runtime),opened=openGroupIds.has(group.id),probe=runtime?.last_probe,probing=groupProbeRunning.has(group.id),error=groupProbeErrors[group.id],canProbe=Boolean(controlResult?.group_probe_supported&&runtime?.runtime_available);return `<details class="group-accordion" data-group-accordion="${esc(group.id)}" data-group-id="${esc(group.id)}" ${opened?'open':''}><summary><span class="group-summary-copy"><b>${esc(group.name)}</b><small>${esc(groupModeLabels[group.mode]||group.mode)} · ${members.length} 个成员 · 当前：${esc(summary.current)}</small></span><span class="chip ${summary.className}">${summary.label}</span><span class="group-summary-toggle" aria-hidden="true"></span></summary><div class="group-accordion-body"><div class="group-accordion-toolbar"><div class="group-card-meta"><span>成员：${members.length}</span>${selected?`<span>初始：${esc(nodeLabel(selected))}</span>`:''}${group.mode!=='select'?`<span>策略：${esc(groupStrategy(group.mode).title)}</span><span>测速：每 ${esc(group.test_interval||300)} 秒</span>`:''}</div><div class="group-card-actions"><button type="button" data-edit-group="${esc(group.id)}">编辑配置</button><button type="button" data-del="groups" class="danger">删除</button></div></div><div class="group-card-members">${members.map(node=>`<span class="chip" title="${esc(nodeDetails(node))}">${esc(nodeLabel(node))}</span>`).join('')||'<span class="muted">尚未选择节点</span>'}</div><section class="group-runtime-inline" aria-label="${esc(group.name)}运行状态"><div class="runtime-group-head"><div><b>运行状态</b><small>${esc(runtime?.type||groupModeLabels[group.mode]||'运行组')}</small></div><button type="button" data-group-probe="${esc(group.id)}" ${canProbe&&!probing?'':'disabled'}>${probing?'测速中…':'核对选优'}</button></div><div class="runtime-group-facts"><div><span>当前连接节点</span><b>${esc(runtime?.selected_node_id?runtimeNodeLabel({id:runtime.selected_node_id}):runtime?.selected_display_name||'无')}</b></div><div><span>最近选优核对</span><b>${probe?`${esc(probe.latency_ms)} ms`:'-- ms'}</b><small>${probe?`${esc(probe.node_name||'测速节点')} · ${time(probe.checked_at)}${probe.stale?' · 配置已变更':''}`:'尚未核对'}</small></div></div>${group.mode==='url-test'?'<small class="runtime-group-note">内核按周期自动选优；“核对选优”只展示成员结果，不会手动固定节点。</small>':''}${probe?runtimeGroupProbeEvidence(probe):''}${error?`<p class="runtime-group-error" role="alert">${esc(error)}</p>`:''}${runtime?.runtime_available?`<label class="runtime-group-select"><span>切换当前节点</span><select data-select="${esc(group.id)}" aria-label="切换${esc(group.name)}的当前节点">${runtime.members.map(node=>`<option value="${esc(node.id)}" ${node.id===runtime.selected_node_id?'selected':''} ${node.available?'':'disabled'}>${esc(runtimeNodeLabel(node))}${node.available?'':'（不可用）'}</option>`).join('')}</select></label>`:''}${!canProbe?`<small class="runtime-group-note">${controlResult?.adapter==='xray'?'当前内核不支持代理组控制面测速。':controlResult?.group_probe_message||(!runtime?.runtime_available?'代理组尚未应用到当前内核。':'当前内核不支持代理组测速。')}</small>`:''}</section></div></details>`}).join('')||'<div class="group-empty"><b>还没有代理组</b><span>新增代理组后，可在同一项中查看配置和运行状态。</span></div>'}</section>`
   } else if(tab==='routes'){
-    html=`<section class="panel"><div class="bar"><h2>规则组</h2><button id="add">新增规则组</button></div>${state.rule_groups.map((rule,index)=>`<div class="group-card" data-i="${index}"><div class="table"><input data-k="name" value="${esc(rule.name)}"><input type="number" data-k="priority" value="${rule.priority}"><select data-k="target">${groupOptions(rule.target)}</select><label><input type="checkbox" data-k="enabled" ${rule.enabled?'checked':''}>启用</label><button data-del="rule_groups">删除</button></div><textarea data-domains rows="3" placeholder="每行：exact api.example.com 或 suffix example.com">${esc(rule.domains.map(domain=>domain.match+' '+domain.host).join('\n'))}</textarea></div>`).join('')}</section>`
+    html=`<section class="panel routes-panel"><div class="bar"><div><h2>规则组</h2><p class="muted panel-lede">每个规则组将域名成员、优先级和目标出口收在同一项中，展开详情请使用弹窗编辑。</p></div><button id="add" class="primary" type="button">新增规则组</button></div><div class="rule-list">${state.rule_groups.map(rule=>`<article class="rule-card" data-rule-id="${esc(rule.id)}"><div class="rule-card-head"><div><b>${esc(rule.name)}</b><small>${rule.domains.length} 条域名 · 优先级 ${esc(rule.priority)} · ${esc(state.groups.find(group=>group.id===rule.target)?.name||'未指定目标')}</small></div><span class="chip ${rule.enabled?'ok':'pending'}">${rule.enabled?'已启用':'已停用'}</span><div class="rule-card-actions"><button type="button" data-edit-rule="${esc(rule.id)}">编辑配置</button><button type="button" data-del="rule_groups" class="danger">删除</button></div></div><div class="rule-card-domains">${rule.domains.map(domain=>`<span class="chip">${esc(domain.match)} ${esc(domain.host)}</span>`).join('')||'<span class="muted">暂无域名</span>'}</div></article>`).join('')||'<div class="group-empty"><b>还没有规则组</b><span>新增规则组后，可在弹窗中配置域名和目标代理组。</span></div>'}</div></section>`
   } else if(tab==='platforms'){
     html=`<section class="panel"><h2>平台域名模板</h2><p class="muted">这里只生成内核域名规则，不会自动配置平台 SDK，也不代表平台流量已经接入。</p>${Object.entries(state.templates).map(([id,template])=>{const domains=template.domains||template.hosts.map(host=>({host,match:'exact'}));return `<div class="platform"><b>${esc(template.name)}</b><small>${esc(domains.map(item=>item.match+' '+item.host).join(' · '))}</small><select data-platform="${esc(id)}">${groupOptions((state.platforms[id]||{}).group_id||'direct')}</select><button data-template="${esc(id)}">应用或更新域名模板</button></div>`}).join('')}</section>`
   } else if(tab==='control'){
@@ -266,6 +273,50 @@ function saveNodeDialog(){
   const savedId=node.id; closeNodeDialog({restore:false}); render(); requestAnimationFrame(()=>document.querySelector(`[data-node-details="${CSS.escape(savedId)}"]`)?.focus()); note('节点详情已更新')
 }
 
+function ruleDraftFrom(source={}){
+  const domains=Array.isArray(source.domains)?source.domains:[]
+  return {id:source.id||`rules-${Date.now()}`,name:source.name||'新规则组',domains:domains.length?domains.map(item=>({host:item.host||'',match:item.match==='suffix'?'suffix':'exact'})):[{host:'example.com',match:'exact'}],priority:Number(source.priority||100),target:source.target||'direct',enabled:source.enabled!==false}
+}
+function ruleDomainsText(domains){return (domains||[]).map(item=>`${item.match||'exact'} ${item.host||''}`.trim()).join('\n')}
+function ruleDialogError(message){const error=$('rule-group-dialog-error');if(!error)return;error.textContent=message||'';error.hidden=!message}
+function renderRuleDialog(){
+  const body=$('rule-group-body'),actions=$('rule-group-actions'); if(!body||!actions||!ruleDraft)return
+  $('rule-group-title').textContent=editingRuleId?'编辑规则组':'新增规则组'
+  body.innerHTML=`<div id="rule-group-dialog-error" class="rule-dialog-error" role="alert" aria-live="assertive" hidden></div>
+    <div class="rule-form-grid"><label class="field-label" for="rule-name"><span class="field-title">规则组名称<span class="required-mark">必填</span></span><input id="rule-name" type="text" maxlength="80" autocomplete="off" value="${esc(ruleDraft.name)}"><small>名称用于识别规则组和审计记录。</small></label>
+      <label class="field-label" for="rule-priority"><span class="field-title">优先级</span><input id="rule-priority" type="number" min="1" max="10000" step="1" value="${esc(ruleDraft.priority)}"><small>数字越小越优先匹配。</small></label>
+      <label class="field-label" for="rule-target"><span class="field-title">目标代理组</span><select id="rule-target">${groupOptions(ruleDraft.target)}</select></label>
+      <label class="field-label rule-enabled" for="rule-enabled"><input id="rule-enabled" type="checkbox" ${ruleDraft.enabled?'checked':''}><span><b>启用规则组</b><small>停用后不会写入运行内核规则。</small></span></label></div>
+    <label class="field-label rule-domains-label" for="rule-domains"><span class="field-title">域名成员<span class="required-mark">至少一项</span></span><textarea id="rule-domains" rows="9" placeholder="每行：exact api.example.com 或 suffix example.com">${esc(ruleDomainsText(ruleDraft.domains))}</textarea><small>每行一条；匹配方式填写 exact 或 suffix。</small></label>`
+  actions.innerHTML='<button id="rule-group-cancel" type="button" class="quiet">取消</button><button id="rule-group-save" type="button" class="primary">保存规则组</button>'
+  $('rule-group-cancel')?.addEventListener('click',closeRuleDialog); $('rule-group-save')?.addEventListener('click',saveRuleDialog)
+}
+function openRuleDialog(ruleId=''){
+  const source=ruleId?state.rule_groups.find(item=>item.id===ruleId):null
+  ruleDialogReturnFocus=document.activeElement; editingRuleId=source?.id||''; ruleDraft=ruleDraftFrom(source||{}); renderRuleDialog()
+  const dialog=$('rule-group-dialog'); dialog?.showModal(); requestAnimationFrame(()=>$('rule-name')?.focus())
+}
+function closeRuleDialog({restore=true}={}){
+  const dialog=$('rule-group-dialog'); if(dialog?.open)dialog.close(); const target=ruleDialogReturnFocus; ruleDialogReturnFocus=null; ruleDraft=null; editingRuleId=''; if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})
+}
+function saveRuleDialog(){
+  const name=String($('rule-name')?.value||'').trim(), priority=Number($('rule-priority')?.value||0), target=$('rule-target')?.value||'direct', enabled=Boolean($('rule-enabled')?.checked), domains=String($('rule-domains')?.value||'').split(/\r?\n/).map(line=>line.trim()).filter(Boolean).map(line=>{const parts=line.split(/\s+/,2);return {match:parts[0]==='suffix'?'suffix':'exact',host:parts[1]||parts[0]||''}}).filter(item=>item.host)
+  if(!name)return ruleDialogError('规则组名称不能为空。')
+  if(!Number.isInteger(priority)||priority<1||priority>10000)return ruleDialogError('优先级必须是 1 至 10000 的整数。')
+  if(!domains.length)return ruleDialogError('请至少填写一条域名规则。')
+  const isEditing=Boolean(editingRuleId),values={...ruleDraft,id:ruleDraft.id,name,priority,target,enabled,domains}; const index=state.rule_groups.findIndex(item=>item.id===editingRuleId)
+  if(index<0)state.rule_groups.push(values);else state.rule_groups[index]={...state.rule_groups[index],...values}
+  const savedId=values.id; closeRuleDialog({restore:false}); render(); requestAnimationFrame(()=>document.querySelector(`[data-edit-rule="${CSS.escape(savedId)}"]`)?.focus()); note(isEditing?'规则组已更新':'规则组已创建')
+}
+
+function openConfirmDialog({title='确认操作',message='',confirmLabel='确认操作',danger=false,onConfirm}){
+  const dialog=$('action-confirm-dialog'),body=$('action-confirm-body'),submit=$('action-confirm-submit'); if(!dialog||!body||!submit)return
+  confirmDialogReturnFocus=document.activeElement; confirmAction=onConfirm; $('action-confirm-title').textContent=title; body.innerHTML=`<p>${esc(message)}</p>`; submit.textContent=confirmLabel; submit.className=danger?'danger':'primary'; dialog.showModal(); requestAnimationFrame(()=>submit.focus())
+}
+function closeConfirmDialog({restore=true}={}){
+  const dialog=$('action-confirm-dialog'); if(dialog?.open)dialog.close(); const target=confirmDialogReturnFocus; confirmDialogReturnFocus=null; confirmAction=null; if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})
+}
+
 function groupDialogError(message){
   const error=$('group-dialog-error'); if(!error)return
   error.textContent=message||''; error.hidden=!message
@@ -346,6 +397,38 @@ function bindNodeDialogFields(){
   }))
 }
 
+function deleteConfigItem(kind,itemId){
+  const list=state[kind],index=list?.findIndex(item=>item.id===itemId),item=index>=0?list[index]:null
+  if(!item||item.id==='direct')return
+  list.splice(index,1)
+  if(kind==='groups'){
+    state.routes=state.routes.filter(route=>route.target!==item.id)
+    state.rule_groups=state.rule_groups.filter(rule=>rule.target!==item.id)
+    state.platforms=Object.fromEntries(Object.entries(state.platforms||{}).filter(([,platform])=>platform.group_id!==item.id))
+    render(); note('代理组已删除'); return
+  }
+  if(kind==='rule_groups'){
+    if(!state.rule_groups.length)state.routes=[]
+    render();note('规则组已删除');return
+  }
+  if(kind==='nodes'){
+    const nodeId=item.id, subscription=item.subscription_id?state.subscriptions.find(value=>value.id===item.subscription_id):null
+    selectedProbeNodeIds.delete(nodeId)
+    if(subscription){subscription.ignored_node_ids=[...new Set([...(subscription.ignored_node_ids||[]),nodeId])];subscription.node_ids=(subscription.node_ids||[]).filter(value=>value!==nodeId)}
+    state.health=Object.fromEntries(Object.entries(state.health||{}).filter(([id])=>id!==nodeId))
+    const removedGroups=new Set()
+    state.groups.forEach(group=>{group.node_ids=group.node_ids.filter(value=>value!==nodeId);if(group.selected===nodeId)group.selected='';if(group.id!=='direct'&&!group.node_ids.length)removedGroups.add(group.id)})
+    state.groups=state.groups.filter(group=>!removedGroups.has(group.id)); state.routes=state.routes.filter(route=>!removedGroups.has(route.target)); state.rule_groups=state.rule_groups.filter(rule=>!removedGroups.has(rule.target)); state.platforms=Object.fromEntries(Object.entries(state.platforms||{}).filter(([,platform])=>!removedGroups.has(platform.group_id)))
+    render(); note(subscription?'节点已删除，后续订阅刷新不会重新导入':'节点已删除'); return
+  }
+  if(kind==='subscriptions'){
+    const owned=new Set(state.nodes.filter(node=>node.subscription_id===item.id).map(node=>node.id)); owned.forEach(nodeId=>selectedProbeNodeIds.delete(nodeId)); state.nodes=state.nodes.filter(node=>!owned.has(node.id)); state.health=Object.fromEntries(Object.entries(state.health||{}).filter(([nodeId])=>!owned.has(nodeId)))
+    const removedGroups=new Set(); state.groups.forEach(group=>{group.node_ids=group.node_ids.filter(nodeId=>!owned.has(nodeId));if(group.selected&&!group.node_ids.includes(group.selected))group.selected='';if(group.id!=='direct'&&!group.node_ids.length)removedGroups.add(group.id)})
+    state.groups=state.groups.filter(group=>!removedGroups.has(group.id)); state.routes=state.routes.filter(route=>!removedGroups.has(route.target)); state.rule_groups=state.rule_groups.filter(rule=>!removedGroups.has(rule.target)); state.platforms=Object.fromEntries(Object.entries(state.platforms||{}).filter(([,platform])=>!removedGroups.has(platform.group_id)))
+    render(); note('订阅已删除，同时清理了其节点和失效引用')
+  }
+}
+
 function bind(){
   document.querySelectorAll('[data-k]').forEach(input=>input.addEventListener('change',()=>{
     const row=input.closest('[data-i]'); if(!row)return
@@ -357,65 +440,21 @@ function bind(){
   document.querySelectorAll('[data-domains]').forEach(input=>input.addEventListener('change',()=>{const item=state.rule_groups[Number(input.closest('[data-i]').dataset.i)];item.domains=input.value.split('\n').map(line=>line.trim().split(/\s+/,2)).filter(parts=>parts.length===2).map(([match,host])=>({match:match==='suffix'?'suffix':'exact',host}))}))
   document.querySelectorAll('[data-node-details]').forEach(button=>button.addEventListener('click',()=>openNodeDialog(button.dataset.nodeDetails)))
   document.querySelectorAll('[data-group-accordion]').forEach(details=>details.addEventListener('toggle',()=>{const id=details.dataset.groupAccordion;if(details.open)openGroupIds.add(id);else openGroupIds.delete(id)}))
-  document.querySelectorAll('[data-del]').forEach(button=>button.addEventListener('click',()=>{
-    const row=button.closest('[data-i],[data-group-id]'),list=state[button.dataset.del],item=button.dataset.del==='groups'?state.groups.find(value=>value.id===row?.dataset.groupId):list?.[Number(row?.dataset.i)]
-    if(!item)return
-    if(item.id==='direct')return
+  document.querySelectorAll('[data-del]').forEach(button=>button.addEventListener('click',event=>{
+    event.preventDefault(); event.stopPropagation()
+    const kind=button.dataset.del,list=state[kind],row=button.closest('[data-i],[data-group-id],[data-rule-id]'),item=kind==='groups'?state.groups.find(value=>value.id===row?.dataset.groupId):list?.find(value=>value.id===row?.dataset.ruleId)||list?.[Number(row?.dataset.i)]
+    if(!item||item.id==='direct')return
     const labels={nodes:'节点',subscriptions:'订阅',groups:'代理组',rule_groups:'规则组'}
-    if(!confirm(`确定删除${labels[button.dataset.del]||'此项'}“${item.display_name||item.name||item.id}”吗？删除会在保存配置后生效。`))return
-    if(button.dataset.del==='groups'){
-      const index=list.findIndex(value=>value.id===item.id); if(index>=0)list.splice(index,1)
-      state.routes=state.routes.filter(route=>route.target!==item.id)
-      state.rule_groups=state.rule_groups.filter(rule=>rule.target!==item.id)
-      state.platforms=Object.fromEntries(Object.entries(state.platforms||{}).filter(([,platform])=>platform.group_id!==item.id))
-      render(); note('代理组已删除'); return
-    }
-    list.splice(Number(row.dataset.i),1)
-    if(button.dataset.del==='nodes'){
-      const nodeId=item.id, subscription=item.subscription_id?state.subscriptions.find(value=>value.id===item.subscription_id):null
-      selectedProbeNodeIds.delete(nodeId)
-      if(subscription){
-        subscription.ignored_node_ids=[...new Set([...(subscription.ignored_node_ids||[]),nodeId])]
-        subscription.node_ids=(subscription.node_ids||[]).filter(value=>value!==nodeId)
-      }
-      state.health=Object.fromEntries(Object.entries(state.health||{}).filter(([id])=>id!==nodeId))
-      const removedGroups=new Set()
-      state.groups.forEach(group=>{
-        group.node_ids=group.node_ids.filter(value=>value!==nodeId)
-        if(group.selected===nodeId)group.selected=''
-        if(group.id!=='direct'&&!group.node_ids.length)removedGroups.add(group.id)
-      })
-      state.groups=state.groups.filter(group=>!removedGroups.has(group.id))
-      state.routes=state.routes.filter(route=>!removedGroups.has(route.target))
-      state.rule_groups=state.rule_groups.filter(rule=>!removedGroups.has(rule.target))
-      state.platforms=Object.fromEntries(Object.entries(state.platforms||{}).filter(([,platform])=>!removedGroups.has(platform.group_id)))
-      render(); note(subscription?'节点已删除，后续订阅刷新不会重新导入':'节点已删除'); return
-    }
-    if(button.dataset.del==='subscriptions'){
-      const owned=new Set(state.nodes.filter(node=>node.subscription_id===item.id).map(node=>node.id))
-      owned.forEach(nodeId=>selectedProbeNodeIds.delete(nodeId))
-      state.nodes=state.nodes.filter(node=>!owned.has(node.id))
-      state.health=Object.fromEntries(Object.entries(state.health||{}).filter(([nodeId])=>!owned.has(nodeId)))
-      const removedGroups=new Set()
-      state.groups.forEach(group=>{
-        group.node_ids=group.node_ids.filter(nodeId=>!owned.has(nodeId))
-        if(group.selected&&!group.node_ids.includes(group.selected))group.selected=''
-        if(group.id!=='direct'&&!group.node_ids.length)removedGroups.add(group.id)
-      })
-      state.groups=state.groups.filter(group=>!removedGroups.has(group.id))
-      state.routes=state.routes.filter(route=>!removedGroups.has(route.target))
-      state.rule_groups=state.rule_groups.filter(rule=>!removedGroups.has(rule.target))
-      state.platforms=Object.fromEntries(Object.entries(state.platforms||{}).filter(([,platform])=>!removedGroups.has(platform.group_id)))
-    }
-    render()
+    openConfirmDialog({title:`删除${labels[kind]||'配置'}`,message:`确定删除“${item.display_name||item.name||item.id}”吗？删除会在保存配置后生效。`,confirmLabel:'确认删除',danger:true,onConfirm:()=>deleteConfigItem(kind,item.id)})
   }))
   $('add')?.addEventListener('click',()=>{
     if(tab==='nodes')state.nodes.push({id:'node-'+Date.now(),name:'新节点',display_name:'新节点',protocol:'http',engine:'direct-http',kind:'http',endpoint:'',connection:{},subscription_id:'',enabled:true,excluded:false,exclusion_reason:''})
     else if(tab==='groups'){openGroupDialog();return}
-    else state.rule_groups.push({id:'rules-'+Date.now(),name:'新规则组',domains:[{host:'example.com',match:'exact'}],target:'direct',priority:100,enabled:true})
-    render()
+    else {openRuleDialog();return}
+    render(); if(tab==='nodes')requestAnimationFrame(()=>$('content')?.querySelector('[data-node-details]')?.focus())
   })
   document.querySelectorAll('[data-edit-group]').forEach(button=>button.addEventListener('click',()=>openGroupDialog(button.dataset.editGroup)))
+  document.querySelectorAll('[data-edit-rule]').forEach(button=>button.addEventListener('click',()=>openRuleDialog(button.dataset.editRule)))
   $('add-subscription')?.addEventListener('click',()=>{state.subscriptions.push({id:'sub-'+Date.now(),name:'新订阅',url:'',enabled:true,interval:60,node_ids:[],updated_at:0,next_refresh_at:0,upload:0,download:0,total:0,expire:0,last_error:'',consecutive_errors:0,errors:[]});render()})
   $('open-single-import')?.addEventListener('click',()=>openImportDialog('single'))
   $('open-batch-import')?.addEventListener('click',()=>openImportDialog('batch'))
@@ -451,7 +490,7 @@ function bind(){
   document.querySelectorAll('[data-kernel-check]').forEach(button=>button.addEventListener('click',()=>checkKernelUpdate(button.dataset.kernelCheck)))
   document.querySelectorAll('[data-kernel-enable]').forEach(button=>button.addEventListener('click',()=>toggleKernel(button.dataset.kernelEnable,button.dataset.enabled==='true')))
   document.querySelectorAll('[data-kernel-select]').forEach(button=>button.addEventListener('click',()=>selectKernel(button.dataset.kernelSelect)))
-  $('adapter-switch')?.addEventListener('click',async()=>{try{const selected=$('adapter-select').value;if(!confirm(`切换到 ${selected} 将停止当前内核，并要求重新安装和应用配置。`))return;await api.apiPost('adapter-select',{adapter:selected});await load();note(`已切换到 ${selected}`)}catch(error){note(error.message,true)}})
+  $('adapter-switch')?.addEventListener('click',()=>{const selected=$('adapter-select').value;openConfirmDialog({title:'切换运行内核',message:`切换到 ${selected} 将停止当前内核，并要求重新安装和应用配置。`,confirmLabel:'确认切换',onConfirm:async()=>{try{await api.apiPost('adapter-select',{adapter:selected});await load();note(`已切换到 ${selected}`)}catch(error){note(error.message,true)}}})})
   document.querySelectorAll('.kernel-resource').forEach(details=>details.addEventListener('toggle',()=>{const adapter=details.dataset.kernelCard;if(details.open)openKernelResources.add(adapter);else openKernelResources.delete(adapter)}))
   document.querySelectorAll('[data-kernel-version]').forEach(select=>select.addEventListener('change',()=>{const item=state.adapters?.find(value=>value.id===select.dataset.kernelVersion);if(item){item.artifact.selected_version=select.value;render()}}))
   document.querySelectorAll('[data-kernel-install]').forEach(button=>button.addEventListener('click',()=>{const select=button.closest('[data-kernel-card]')?.querySelector('[data-kernel-version]');startKernelInstall(button.dataset.kernelInstall,select?.value||button.dataset.version)}))
@@ -460,7 +499,7 @@ function bind(){
   $('kernel-start')?.addEventListener('click',()=>kernelAction('kernel-start','正在启动内核...'))
   $('kernel-stop')?.addEventListener('click',()=>kernelAction('kernel-stop','正在停止内核...'))
   document.querySelectorAll('[data-kernel-upload]').forEach(button=>button.addEventListener('click',()=>uploadKernel(button.dataset.kernelUpload,button.dataset.version)))
-  $('runtime-apply')?.addEventListener('click',async()=>{try{await saveChanges();await api.apiPost('runtime-apply',{});await load();if(tab==='groups')controlResult=await api.apiGet('control-status');render();note('代理配置已应用并完成运行状态核对')}catch(error){note(error.message,true)}})
+  $('runtime-apply')?.addEventListener('click',applyConfiguration)
   document.querySelectorAll('[data-select]').forEach(select=>select.addEventListener('change',async()=>{try{await api.apiPost('control-select',{group_id:select.dataset.select,node_id:select.value});await checkControl();note('代理组已切换')}catch(error){note(error.message,true)}}))
 }
 
@@ -563,6 +602,23 @@ function renderChangePreview(before,after){
 }
 function readControl(){}
 async function saveChanges(){ readControl(); state=await api.apiPost('save',state); original=structuredClone(state) }
+async function applyConfiguration(){
+  let stage='保存'
+  try{
+    await saveChanges()
+    stage='应用'
+    await api.apiPost('runtime-apply',{})
+    stage='刷新状态'
+    await load()
+    if(tab==='groups')controlResult=await api.apiGet('control-status')
+    render(); note('配置已保存、应用并完成运行状态核对')
+  }catch(error){
+    try{await load()}catch{}
+    render()
+    const message=stage==='保存'?`配置保存失败：${error.message}`:stage==='应用'?`配置已保存，但应用失败：${error.message}`:`配置已成功应用，但状态刷新失败：${error.message}`
+    note(message,true)
+  }
+}
 async function previewImport(){
   const batch=importMode==='batch', raw=batch?$('batch-sub-links')?.value||'':$('import-url')?.value||'', interval=Number($('import-interval')?.value||0); let items=[]
   if(batch){
@@ -597,7 +653,7 @@ async function runGroupProbe(groupId){
 function formatBytes(value){if(!value)return '0 B';const units=['B','KiB','MiB','GiB'];let size=value,index=0;while(size>=1024&&index<units.length-1){size/=1024;index++}return `${size.toFixed(index?1:0)} ${units[index]}`}
 async function startKernelInstall(adapter=state.control?.adapter||kernelStatus.adapter,version=''){try{const payload={adapter};if(version)payload.version=version;const install=await api.apiPost('kernel-install',payload);if(adapter===state.control?.adapter||adapter===kernelStatus.adapter)kernelStatus.install=install;const item=state.adapters?.find(value=>value.id===adapter);if(item)item.install=install;render();note((version?'内核更新':'内核安装')+'任务已创建');pollKernelInstall(adapter)}catch(error){note(error.message,true)}}
 async function cancelKernelInstall(adapter=state.control?.adapter||kernelStatus.adapter){try{const result=await api.apiPost('kernel-install-cancel',{adapter});if(adapter===state.control?.adapter||adapter===kernelStatus.adapter)kernelStatus.install=result;const item=state.adapters?.find(value=>value.id===adapter);if(item)item.install=result;render();note('在线安装已取消')}catch(error){note(error.message,true)}}
-async function uninstallKernel(adapter){if(!confirm(`确定卸载 ${adapter} 内核资源？已启用但未运行的内核会同时停用。`))return;try{const task=await api.apiPost('kernel-uninstall',{adapter});const item=state.adapters?.find(value=>value.id===adapter);if(item)item.install=task;render();pollKernelInstall(adapter)}catch(error){note(error.message,true)}}
+function uninstallKernel(adapter){openConfirmDialog({title:'卸载内核资源',message:`确定卸载 ${adapter} 内核资源？已启用但未运行的内核会同时停用。`,confirmLabel:'确认卸载',danger:true,onConfirm:async()=>{try{const task=await api.apiPost('kernel-uninstall',{adapter});const item=state.adapters?.find(value=>value.id===adapter);if(item)item.install=task;render();pollKernelInstall(adapter)}catch(error){note(error.message,true)}}})}
 async function checkKernelUpdate(adapter){try{note('正在检查 '+adapter+' 更新...');await api.apiPost('kernel-update-check',{adapter});await load();note(adapter+' 更新检查完成')}catch(error){note(error.message,true)}}
 async function checkAllKernelUpdates(){try{note('正在检查全部内核更新...');await api.apiPost('kernel-update-check-all',{});await load();note('全部内核更新检查完成')}catch(error){note(error.message,true)}}
 async function toggleKernel(adapter,enabled){try{await api.apiPost('core-enable',{adapter,enabled});await load();note(enabled?'内核已启用':'内核已停用')}catch(error){note(error.message,true)}}
@@ -631,6 +687,7 @@ document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener(
     }
   })
   $('cancel').addEventListener('click',()=>$('diff').close())
+  $('save-only').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存；当前内核未应用新配置')}catch(error){note(error.message,true)}})
   $('subscription-import-close').addEventListener('click',closeImportDialog)
   $('proxy-group-close')?.addEventListener('click',closeGroupDialog)
   $('proxy-group-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeGroupDialog()})
@@ -638,7 +695,15 @@ document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener(
   $('proxy-node-close')?.addEventListener('click',closeNodeDialog)
   $('proxy-node-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeNodeDialog()})
   $('proxy-node-dialog')?.addEventListener('click',event=>{if(event.target===$('proxy-node-dialog'))closeNodeDialog()})
-  $('confirm').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存')}catch(error){note(error.message,true)}})
+  $('rule-group-close')?.addEventListener('click',closeRuleDialog)
+  $('rule-group-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeRuleDialog()})
+  $('rule-group-dialog')?.addEventListener('click',event=>{if(event.target===$('rule-group-dialog'))closeRuleDialog()})
+  $('action-confirm-close')?.addEventListener('click',closeConfirmDialog)
+  $('action-confirm-cancel')?.addEventListener('click',closeConfirmDialog)
+  $('action-confirm-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeConfirmDialog()})
+  $('action-confirm-dialog')?.addEventListener('click',event=>{if(event.target===$('action-confirm-dialog'))closeConfirmDialog()})
+  $('action-confirm-submit')?.addEventListener('click',()=>{const action=confirmAction;closeConfirmDialog({restore:false});if(action)action()})
+  $('confirm').addEventListener('click',async()=>{$('diff').close();await applyConfiguration()})
 ;(async()=>{try{await api.ready(); await load()}catch(error){note(error.message || '页面初始化失败，请重新打开插件页面',true)}})()
 }
 
