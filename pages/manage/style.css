@@ -1189,7 +1189,7 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 .rule-card-head > .chip { grid-area: status; justify-self: end; }
 .rule-target-inline { grid-area: target; display: grid; grid-template-columns: auto minmax(130px, 1fr); align-items: center; gap: 8px; color: var(--muted-strong); font-size: 12px; font-weight: 650; }
 .rule-target-inline select { min-height: 36px; min-width: 0; }
-.rule-card-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; min-width: 0; }
+.rule-card-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; min-width: 0; }
 .rule-card-head > .rule-card-actions { grid-area: actions; align-self: center; }
 .rule-card-actions button { min-height: 32px; padding: 5px 8px; white-space: nowrap; }
 .rule-card-actions [data-edit-rule], .rule-card-actions [data-del] { grid-column: auto; }
