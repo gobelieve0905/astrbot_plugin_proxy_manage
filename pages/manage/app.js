@@ -29,11 +29,10 @@ const ruleTypeOptions=[
   ['IP-CIDR','匹配 IP 地址范围'],['IP-CIDR6','匹配 IP 地址范围（IPv6）'],['SRC-IP-CIDR','匹配来源 IP 地址范围'],['IP-SUFFIX','匹配 IP 后缀范围'],['SRC-IP-SUFFIX','匹配来源 IP 后缀范围'],
   ['SRC-PORT','匹配请求来源端口范围'],['DST-PORT','匹配请求目标端口范围'],['IN-PORT','匹配入站端口'],['DSCP','匹配 DSCP 标记'],['PROCESS-NAME','匹配进程名称'],
   ['PROCESS-NAME-WILDCARD','通配符匹配进程名称'],['PROCESS-PATH','匹配完整进程路径'],['PROCESS-PATH-WILDCARD','通配符匹配进程路径'],['PROCESS-NAME-REGEX','正则匹配完整进程名称'],['PROCESS-PATH-REGEX','正则匹配完整进程路径'],['NETWORK','匹配 TCP/UDP'],['UID','匹配 Linux USER ID'],
-  ['IN-TYPE','匹配入站类型'],['IN-USER','匹配入站用户名'],['IN-NAME','匹配入站名称'],['REMATCH-NAME','匹配规则匹配组名称'],['SUB-RULE','匹配至子规则（需要子规则声明）'],['RULE-SET','引用规则集合（需要规则集声明）'],['AND','逻辑与'],['OR','逻辑或'],['NOT','逻辑非'],['MATCH','匹配所有请求']
+  ['IN-TYPE','匹配入站类型'],['IN-USER','匹配入站用户名'],['IN-NAME','匹配入站名称'],['REMATCH-NAME','匹配规则匹配组名称'],['AND','逻辑与'],['OR','逻辑或'],['NOT','逻辑非'],['MATCH','匹配所有请求']
 ]
 const ruleTypeLabel=Object.fromEntries(ruleTypeOptions)
-const ruleTypesRequiringDeclaration=new Set(['RULE-SET','SUB-RULE'])
-const ruleTypeAliases={DOMAINSUFFIX:'DOMAIN-SUFFIX',DOMAIN_SUFFIX:'DOMAIN-SUFFIX',DOMAINKEYWORD:'DOMAIN-KEYWORD',DOMAIN_KEYWORD:'DOMAIN-KEYWORD',DOMAINREGEX:'DOMAIN-REGEX',DOMAIN_REGEX:'DOMAIN-REGEX',RULESET:'RULE-SET',RULE_SET:'RULE-SET'}
+const ruleTypeAliases={DOMAINSUFFIX:'DOMAIN-SUFFIX',DOMAIN_SUFFIX:'DOMAIN-SUFFIX',DOMAINKEYWORD:'DOMAIN-KEYWORD',DOMAIN_KEYWORD:'DOMAIN-KEYWORD',DOMAINREGEX:'DOMAIN-REGEX',DOMAIN_REGEX:'DOMAIN-REGEX'}
 function normalizeRuleType(value){const key=String(value||'').trim().toUpperCase().replace(/\s+/g,'-');return ruleTypeAliases[key]||key}
 function ruleEntry(item){const type=normalizeRuleType(item?.type||item?.kind||(item?.match==='suffix'?'DOMAIN-SUFFIX':'DOMAIN'));const payload=String(item?.payload??item?.host??'');return {type,payload,host:type==='DOMAIN'||type==='DOMAIN-SUFFIX'?payload:'',match:type==='DOMAIN'?'exact':type==='DOMAIN-SUFFIX'?'suffix':''}}
 function ruleText(entry){return entry.type==='MATCH'?entry.type:`${entry.type},${entry.payload}`}
@@ -41,7 +40,6 @@ function parseBulkRules(value){
   const rules=[],lines=String(value||'').split(/\r?\n/); for(let lineNumber=0;lineNumber<lines.length;lineNumber++){
     const line=lines[lineNumber].trim(); if(!line||line.startsWith('#')||line.startsWith('//'))continue
     const parts=line.split(','),type=normalizeRuleType(parts.shift()); if(!ruleTypeLabel[type])return {error:`第 ${lineNumber+1} 行的规则类型“${type||'空'}”不受支持。`}
-    if(ruleTypesRequiringDeclaration.has(type))return {error:`第 ${lineNumber+1} 行使用了 ${type}，请先配置对应的规则集合或子规则。`}
     const payload=parts.join(',').trim(); if(type!=='MATCH'&&!payload)return {error:`第 ${lineNumber+1} 行缺少规则参数。`}
     rules.push(ruleEntry({type,payload}))
   } return {rules,error:''}
@@ -327,7 +325,7 @@ function templateDomains(template){
   if(Array.isArray(template?.domains))return template.domains.map(ruleEntry)
   return (Array.isArray(template?.hosts)?template.hosts:[]).map(host=>ruleEntry({type:'DOMAIN',payload:String(host||'')}))
 }
-function ruleTypeOptionsHtml(selected){return ruleTypeOptions.map(([value,label])=>`<option value="${value}" ${value===selected?'selected':''} ${ruleTypesRequiringDeclaration.has(value)?'disabled':''}>${label}（${value}）</option>`).join('')}
+function ruleTypeOptionsHtml(selected){return ruleTypeOptions.map(([value,label])=>`<option value="${value}" ${value===selected?'selected':''}>${label}（${value}）</option>`).join('')}
 function ruleDomainRows(){
   return ruleDraft.domains.map((domain,index)=>{
     const item=ruleEntry(domain),isMatch=item.type==='MATCH'
@@ -357,10 +355,11 @@ function renderRuleDialog(){
   const body=$('rule-group-body'),actions=$('rule-group-actions'); if(!body||!actions||!ruleDraft)return
   $('rule-group-title').textContent=editingRuleId?'编辑规则组':'新增规则组'
   body.innerHTML=`<div id="rule-group-dialog-error" class="rule-dialog-error" role="alert" aria-live="assertive" hidden></div>
-    <label class="field-label rule-template-field" for="rule-template"><span class="field-title">规则组模板 <span class="optional-mark">可选</span></span><select id="rule-template"><option value="">从空白规则组开始</option>${Object.entries(state.templates||{}).map(([id,template])=>`<option value="${esc(id)}" ${ruleTemplateId===id?'selected':''}>${esc(template.name)}</option>`).join('')}</select><small>模板只预填规则组名称与规则，不会单独写入配置。</small></label>
-    <div class="rule-form-grid"><label class="field-label" for="rule-name"><span class="field-title">规则组名称<span class="required-mark">必填</span></span><input id="rule-name" type="text" maxlength="80" autocomplete="off" value="${esc(ruleDraft.name)}"><small>名称用于识别规则组和审计记录。</small></label>
-      <label class="field-label rule-enabled" for="rule-enabled"><input id="rule-enabled" type="checkbox" ${ruleDraft.enabled?'checked':''}><span><b>启用规则组</b><small>停用后不会写入运行内核规则。</small></span></label></div>
-    <section class="rule-domains-editor" aria-labelledby="rule-domains-title"><div class="rule-editor-toolbar"><div><h3 id="rule-domains-title">匹配规则 <span class="required-mark">至少一项</span></h3><small>支持 Clash Verge 常用规则类型；规则集和子规则需单独声明，目前暂不可用。</small></div><div class="rule-editor-toolbar-actions"><button type="button" class="quiet" id="rule-domain-add" ${ruleEditorMode==='bulk'?'hidden':''}>＋ 添加规则</button><div class="rule-editor-modes" role="group" aria-label="规则编辑方式"><button type="button" class="quiet ${ruleEditorMode==='rows'?'active':''}" data-rule-editor-mode="rows">逐条编辑</button><button type="button" class="quiet ${ruleEditorMode==='bulk'?'active':''}" data-rule-editor-mode="bulk">批量文本</button></div></div></div><div id="rule-editor-content"></div></section>`
+    <label class="field-label rule-template-field" for="rule-template"><span class="field-title">规则组模板 <span class="optional-mark">可选</span></span><select id="rule-template"><option value="">从空白规则组开始</option>${Object.entries(state.templates||{}).map(([id,template])=>`<option value="${esc(id)}" ${ruleTemplateId===id?'selected':''}>${esc(template.name)}</option>`).join('')}</select><small>模板仅预填内容，保存后才会加入配置。</small></label>
+    <div class="rule-form-grid"><label class="field-label" for="rule-name"><span class="field-title">规则组名称<span class="required-mark">必填</span></span><input id="rule-name" type="text" maxlength="80" autocomplete="off" value="${esc(ruleDraft.name)}"></label>
+      <label class="field-label" for="rule-target"><span class="field-title">目标代理组</span><select id="rule-target">${groupOptions(ruleDraft.target)}</select></label>
+      <label class="field-label rule-enabled" for="rule-enabled"><input id="rule-enabled" type="checkbox" ${ruleDraft.enabled?'checked':''}><span><b>启用规则组</b><small>停用后不参与匹配</small></span></label></div>
+    <section class="rule-domains-editor" aria-labelledby="rule-domains-title"><div class="rule-editor-toolbar"><div><h3 id="rule-domains-title">匹配规则 <span class="required-mark">至少一项</span></h3><small>共 ${ruleDraft.domains.length} 条</small></div><div class="rule-editor-toolbar-actions"><button type="button" class="quiet" id="rule-domain-add" ${ruleEditorMode==='bulk'?'hidden':''}>＋ 添加规则</button><div class="rule-editor-modes" role="group" aria-label="规则编辑方式"><button type="button" class="quiet ${ruleEditorMode==='rows'?'active':''}" data-rule-editor-mode="rows">逐条编辑</button><button type="button" class="quiet ${ruleEditorMode==='bulk'?'active':''}" data-rule-editor-mode="bulk">批量文本</button></div></div></div><div id="rule-editor-content"></div></section>`
   actions.innerHTML='<button id="rule-group-cancel" type="button" class="quiet">取消</button><button id="rule-group-save" type="button" class="primary">保存规则组</button>'
   renderRuleEditor()
   $('rule-template')?.addEventListener('change',event=>{ruleTemplateId=event.target.value;const template=state.templates?.[ruleTemplateId];if(template){ruleDraft.name=template.name||'新规则组';ruleDraft.domains=templateDomains(template)}else if(!editingRuleId){ruleDraft.name='新规则组';ruleDraft.domains=[ruleEntry({type:'DOMAIN',payload:''})]}renderRuleDialog();requestAnimationFrame(()=>(ruleTemplateId?$('rule-name'):document.querySelector('[data-rule-domain-payload]'))?.focus())})
@@ -378,12 +377,11 @@ function openRuleDialog(ruleId='',templateId=''){
 function closeRuleDialog({restore=true}={}){const dialog=$('rule-group-dialog'); if(dialog?.open)dialog.close(); const target=ruleDialogReturnFocus; ruleDialogReturnFocus=null; ruleDraft=null; editingRuleId=''; ruleTemplateId=''; ruleEditorMode='rows'; if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})}
 function saveRuleDialog(){
   if(ruleEditorMode==='bulk'){const parsed=parseBulkRules(ruleDraft.bulkText);if(parsed.error)return ruleDialogError(parsed.error);ruleDraft.domains=parsed.rules}
-  const name=String($('rule-name')?.value||'').trim(),enabled=Boolean($('rule-enabled')?.checked),domains=ruleDraft.domains.map(ruleEntry)
+  const name=String($('rule-name')?.value||'').trim(),target=$('rule-target')?.value||'direct',enabled=Boolean($('rule-enabled')?.checked),domains=ruleDraft.domains.map(ruleEntry)
   if(!name)return ruleDialogError('规则组名称不能为空。');if(!domains.length)return ruleDialogError('请至少填写一条规则。')
   const invalid=domains.find(item=>item.type!=='MATCH'&&!item.payload);if(invalid)return ruleDialogError(`规则类型 ${invalid.type} 缺少参数。`)
-  const undeclared=domains.find(item=>ruleTypesRequiringDeclaration.has(item.type));if(undeclared)return ruleDialogError(`规则类型 ${undeclared.type} 需要先配置对应的规则集合或子规则。`)
   const domainInvalid=domains.find(item=>(item.type==='DOMAIN'||item.type==='DOMAIN-SUFFIX')&&(item.payload.length>253||!/^(?:\*\.)?[a-z0-9.-]+$/i.test(item.payload)||item.payload.includes('..')));if(domainInvalid)return ruleDialogError(`“${domainInvalid.payload}”不是有效的域名格式。`)
-  const isEditing=Boolean(editingRuleId),values={...ruleDraft,id:ruleDraft.id,name,enabled,domains};delete values.bulkText;const index=state.rule_groups.findIndex(item=>item.id===editingRuleId);if(index<0)state.rule_groups.push(values);else state.rule_groups[index]={...state.rule_groups[index],...values};const savedId=values.id;closeRuleDialog({restore:false});render();requestAnimationFrame(()=>document.querySelector(`[data-edit-rule="${CSS.escape(savedId)}"]`)?.focus());note(isEditing?'规则组已更新':'规则组已创建')
+  const isEditing=Boolean(editingRuleId),values={...ruleDraft,id:ruleDraft.id,name,target,enabled,domains};delete values.bulkText;const index=state.rule_groups.findIndex(item=>item.id===editingRuleId);if(index<0)state.rule_groups.push(values);else state.rule_groups[index]={...state.rule_groups[index],...values};const savedId=values.id;closeRuleDialog({restore:false});render();requestAnimationFrame(()=>document.querySelector(`[data-edit-rule="${CSS.escape(savedId)}"]`)?.focus());note(isEditing?'规则组已更新':'规则组已创建')
 }
 
 function openConfirmDialog({title='确认操作',message='',confirmLabel='确认操作',danger=false,onConfirm}){

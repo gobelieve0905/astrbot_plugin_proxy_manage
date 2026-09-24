@@ -364,8 +364,6 @@ def validate_state(value: object) -> dict:
             payload=str(domain.get('payload') or domain.get('host') or '')
             if rule_type not in RULE_TYPE_SET: raise ValueError('规则类型不支持：'+rule_type)
             if rule_type!='MATCH' and not payload: raise ValueError('规则参数不能为空：'+rule_type)
-            if rule_type in {'RULE-SET','SUB-RULE'}:
-                raise ValueError(rule_type+' 需要单独配置规则集合/子规则，当前版本不能应用')
             key=(rule_type,payload,rule_group['priority'])
             if key in seen_domains: raise ValueError('规则冲突：'+payload+' 与 '+seen_domains[key])
             seen_domains[key]=rule_group['name']

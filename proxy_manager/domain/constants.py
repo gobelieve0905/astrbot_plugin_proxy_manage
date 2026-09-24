@@ -19,15 +19,10 @@ RULE_TYPES=(
     'IP-SUFFIX','SRC-IP-SUFFIX','SRC-PORT','DST-PORT','IN-PORT','DSCP',
     'PROCESS-NAME','PROCESS-NAME-WILDCARD','PROCESS-PATH','PROCESS-PATH-WILDCARD',
     'PROCESS-NAME-REGEX','PROCESS-PATH-REGEX','NETWORK','UID','IN-TYPE','IN-USER','IN-NAME',
-    'REMATCH-NAME','SUB-RULE','RULE-SET',
+    'REMATCH-NAME',
     'AND','OR','NOT','MATCH'
 )
 RULE_TYPE_SET=set(RULE_TYPES)
-# These Clash rule forms require separately managed rule-provider/sub-rule
-# declarations. They remain recognizable in imported text, but this plugin's
-# normalized model does not yet own those declarations, so Mihomo must reject
-# them before configuration is written or applied.
-RULE_TYPES_REQUIRING_DECLARATION={'RULE-SET','SUB-RULE'}
 RULE_TYPE_ALIASES={
     'DOMAINSUFFIX':'DOMAIN-SUFFIX','DOMAIN_SUFFIX':'DOMAIN-SUFFIX',
     'DOMAINKEYWORD':'DOMAIN-KEYWORD','DOMAIN_KEYWORD':'DOMAIN-KEYWORD',
@@ -41,7 +36,7 @@ RULE_TYPE_ALIASES={
     'PROCESSNAMEREGEX':'PROCESS-NAME-REGEX','PROCESS_NAME_REGEX':'PROCESS-NAME-REGEX',
     'PROCESSPATHREGEX':'PROCESS-PATH-REGEX','PROCESS_PATH_REGEX':'PROCESS-PATH-REGEX',
     'INTYPE':'IN-TYPE','IN_TYPE':'IN-TYPE','INUSER':'IN-USER','IN_USER':'IN-USER',
-    'INNAME':'IN-NAME','IN_NAME':'IN-NAME','RULESET':'RULE-SET','RULE_SET':'RULE-SET',
+    'INNAME':'IN-NAME','IN_NAME':'IN-NAME',
 }
 ADVANCED_SCHEMES={"ss","ssr","vmess","vless","trojan","hysteria","hysteria2","tuic","anytls"}
 SUPPORTED_PROTOCOLS={'anytls','http','https','socks','socks5','socks5h'}
