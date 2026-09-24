@@ -1415,3 +1415,76 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   .node-card .table { grid-template-columns: 26px minmax(0, 1fr); }
   .node-card .table input[data-k="endpoint"] { grid-column: 1 / -1; }
 }
+
+/* 0.3.21 detail surfaces: list rows stay read-only and secondary data moves behind an explicit action. */
+.sub-card-head { grid-template-columns: minmax(220px, 1.2fr) minmax(230px, 1fr) auto; }
+.sub-card-title { min-width: 0; }
+.sub-card-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.sub-card-actions button { min-height: 34px; padding: 6px 10px; white-space: nowrap; }
+.subscription-detail-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(720px, calc(100vw - 32px)); height: min(760px, calc(100vh - 32px)); max-height: none; overflow: hidden; }
+.subscription-detail-dialog .dialog-head, .subscription-detail-dialog .dialog-actions { min-height: 0; }
+.subscription-detail-body { min-height: 0; padding: 22px 24px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.subscription-detail-hero { display: grid; grid-template-columns: minmax(150px, .55fr) minmax(0, 1.45fr); gap: 12px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.subscription-detail-hero > div, .subscription-detail-facts > div { display: grid; gap: 5px; min-width: 0; }
+.subscription-detail-hero span, .subscription-detail-facts span, .subscription-detail-readonly > span { color: var(--muted); font-size: 11px; }
+.subscription-detail-hero code, .subscription-detail-readonly code { min-width: 0; overflow-wrap: anywhere; color: var(--muted-strong); font: 12px/1.5 "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }
+.subscription-detail-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin-top: 20px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--line); }
+.subscription-detail-facts > div { min-height: 70px; padding: 12px 14px; background: var(--panel-subtle); }
+.subscription-detail-facts b { min-width: 0; overflow-wrap: anywhere; font-size: 13px; font-variant-numeric: tabular-nums; }
+.subscription-detail-alert { margin-top: 16px; padding: 10px 12px; border-left: 3px solid var(--danger); background: var(--danger-soft); color: var(--danger); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.subscription-detail-section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
+.subscription-detail-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.subscription-detail-section-head small { color: var(--muted); font-size: 11px; }
+.subscription-detail-section-head h3 { margin-top: 3px; font-size: 14px; }
+.subscription-detail-section-head > span { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.subscription-detail-summary { margin-top: 10px; color: var(--muted-strong); font-size: 13px; font-weight: 650; }
+.subscription-history-details { margin-top: 10px; }
+.subscription-history-details summary { color: var(--muted); font-size: 11px; }
+.subscription-history-details pre { max-height: 220px; margin-top: 8px; }
+.subscription-error-list { display: grid; gap: 7px; margin-top: 11px; }
+.subscription-error-entry { display: grid; grid-template-columns: 155px minmax(0, 1fr); gap: 10px; padding: 9px 11px; border-left: 3px solid var(--danger); background: var(--danger-soft); color: var(--muted-strong); font-size: 11px; }
+.subscription-error-entry time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.subscription-error-entry span { min-width: 0; overflow-wrap: anywhere; }
+.subscription-edit-intro { margin-bottom: 20px; padding: 13px 15px; border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: 8px; background: var(--accent-soft); }
+.subscription-edit-intro b { font-size: 13px; }
+.subscription-edit-intro p { margin-top: 5px; color: var(--muted-strong); font-size: 12px; line-height: 1.5; }
+.subscription-edit-form { display: grid; gap: 17px; }
+.subscription-edit-enabled { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-subtle); }
+.subscription-edit-enabled span { display: grid; gap: 3px; }
+.subscription-edit-enabled b { font-size: 13px; }
+.subscription-edit-enabled small, .subscription-edit-form .field-label small { color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.45; }
+.subscription-detail-readonly { display: grid; gap: 6px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.audit-entry-title { min-width: 0; }
+.audit-detail-trigger { flex: 0 0 auto; min-height: 30px; margin-left: auto; padding: 5px 9px; border-color: transparent; color: var(--muted-strong); font-size: 11px; }
+.audit-detail-trigger:hover:not(:disabled) { border-color: var(--line); background: var(--panel-subtle); color: var(--accent-strong); }
+.audit-detail-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(620px, calc(100vw - 32px)); max-height: min(680px, calc(100vh - 32px)); overflow: hidden; }
+.audit-detail-dialog .dialog-head, .audit-detail-dialog .dialog-actions { min-height: 0; }
+.audit-detail-body { min-height: 0; padding: 22px 24px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.audit-detail-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .75fr) minmax(0, .75fr); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--line); }
+.audit-detail-summary > div { display: grid; align-content: start; gap: 5px; min-width: 0; min-height: 70px; padding: 12px; background: var(--panel-subtle); }
+.audit-detail-summary span { color: var(--muted); font-size: 11px; }
+.audit-detail-summary b { min-width: 0; overflow-wrap: anywhere; font-size: 12px; font-variant-numeric: tabular-nums; }
+.audit-detail-lede { margin-top: 18px; color: var(--muted-strong); font-size: 13px; line-height: 1.55; }
+.audit-detail-values { display: grid; gap: 1px; margin-top: 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--line); }
+.audit-detail-values > div { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; padding: 10px 12px; background: var(--panel-subtle); font-size: 12px; }
+.audit-detail-values span { color: var(--muted); }
+.audit-detail-values b { min-width: 0; overflow-wrap: anywhere; color: var(--muted-strong); font-weight: 600; }
+@media (max-width: 1100px) {
+  .sub-card-head { grid-template-columns: minmax(0, 1fr) auto; }
+  .sub-card-summary { grid-column: 1 / -1; grid-row: 2; }
+  .sub-card-actions { grid-column: 2; grid-row: 1; }
+}
+@media (max-width: 700px) {
+  .sub-card-head { grid-template-columns: 1fr; gap: 10px; }
+  .sub-card-summary, .sub-card-actions { grid-column: auto; grid-row: auto; justify-content: flex-start; }
+  .sub-card-actions { flex-wrap: wrap; }
+  .sub-card-actions button { flex: 1 1 0; }
+  .subscription-detail-dialog { width: calc(100vw - 18px); height: calc(100vh - 14px); }
+  .subscription-detail-dialog .dialog-head, .subscription-detail-dialog .dialog-actions, .audit-detail-dialog .dialog-head, .audit-detail-dialog .dialog-actions { padding: 15px 16px; }
+  .subscription-detail-body, .audit-detail-body { padding: 18px 16px; }
+  .subscription-detail-hero, .subscription-detail-facts { grid-template-columns: 1fr; }
+  .subscription-error-entry { grid-template-columns: 1fr; gap: 3px; }
+  .audit-detail-dialog { width: calc(100vw - 18px); max-height: calc(100vh - 14px); }
+  .audit-detail-summary { grid-template-columns: 1fr; }
+  .audit-detail-trigger { margin-left: 0; }
+}

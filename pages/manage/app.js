@@ -8,7 +8,7 @@ if (!api || typeof api.ready !== 'function') {
 }
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',control:'内核管理',logs:'审计历史'}
 const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名、模板和目标出口',control:'管理插件自有内核、制品与运行配置',logs:'查看配置修改、订阅、内核和连接验证事件'}
-let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set(), ruleEditorMode='rows'
+  let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set(), ruleEditorMode='rows', subscriptionDialogReturnFocus=null, subscriptionDialogId='', subscriptionDialogEditing=false, subscriptionDialogDraft=null, auditDialogReturnFocus=null, auditDialogEventIndex=-1
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
 let noticeTimer=null
@@ -173,8 +173,14 @@ function auditEventSummary(event){
   if(action==='plugin_terminate')return '保留代理配置，停止插件运行任务'
   return event.message||'操作已记录'
 }
-function auditEventDetails(event){
+function auditEventDetailValues(event){
   const values=[]
+  const changes=event.changes||{}
+  Object.entries(changes).forEach(([key,item])=>{
+    if(!item||typeof item!=='object')return
+    const summary=['added','changed','deleted','unchanged'].map(name=>item[name]!==undefined?`${name==='added'?'新增':name==='changed'?'变更':name==='deleted'?'删除':'未变'} ${item[name]}`:'').filter(Boolean).join(' · ')
+    if(summary)values.push([auditChangeLabels[key]||key,summary])
+  })
   if(event.adapter)values.push(['内核',event.adapter])
   if(event.scope)values.push(['范围',event.scope==='astrbot-core'?'AstrBot 核心':'稳定代理入口'])
   if(event.count!==undefined)values.push(['数量',event.count])
@@ -184,11 +190,32 @@ function auditEventDetails(event){
   if(event.deleted!==undefined)values.push(['删除',event.deleted])
   if(event.unchanged!==undefined)values.push(['未变',event.unchanged])
   if(event.message)values.push(['说明',event.message])
-  return values.length?`<details class="audit-details"><summary>查看详情</summary><div>${values.map(([label,value])=>`<span><b>${esc(label)}</b>${esc(value)}</span>`).join('')}</div></details>`:''
+  return values
+}
+function auditEventDetails(event){
+  const index=state.events.indexOf(event)
+  return `<button type="button" class="audit-detail-trigger" data-audit-details="${index}" aria-label="查看${esc(auditEventLabels[event.action]||'系统事件')}详情">查看详情</button>`
 }
 function auditEventHtml(event){
   const action=String(event.action||'event'),result=String(event.result||''),title=auditEventLabels[action]||'系统事件',category=auditCategories[action]||'系统',status=auditResultClass(result)
-  return `<article class="audit-entry"><div class="audit-entry-time"><time datetime="${esc(event.at?new Date(event.at*1000).toISOString():'')}">${esc(event.at?new Date(event.at*1000).toLocaleString():'未知时间')}</time><span>${esc(category)}</span></div><div class="audit-entry-main"><div class="audit-entry-title"><b>${esc(title)}</b><span class="chip ${status}">${esc(auditResultLabel(result))}</span></div><p>${esc(auditEventSummary(event))}</p>${auditEventDetails(event)}</div></article>`
+  return `<article class="audit-entry"><div class="audit-entry-time"><time datetime="${esc(event.at?new Date(event.at*1000).toISOString():'')}">${esc(event.at?new Date(event.at*1000).toLocaleString():'未知时间')}</time><span>${esc(category)}</span></div><div class="audit-entry-main"><div class="audit-entry-title"><b>${esc(title)}</b><span class="chip ${status}">${esc(auditResultLabel(result))}</span>${auditEventDetails(event)}</div><p>${esc(auditEventSummary(event))}</p></div></article>`
+}
+function renderAuditDialog(){
+  const event=state?.events?.[auditDialogEventIndex],body=$('audit-detail-body'),title=$('audit-detail-title')
+  if(!event||!body||!title)return
+  const action=String(event.action||'event'),result=String(event.result||''),eventTitle=auditEventLabels[action]||'系统事件',category=auditCategories[action]||'系统',values=auditEventDetailValues(event)
+  title.textContent=eventTitle
+  body.innerHTML=`<div class="audit-detail-summary"><div><span>发生时间</span><b>${esc(event.at?new Date(event.at*1000).toLocaleString():'未知时间')}</b></div><div><span>事件分类</span><b>${esc(category)}</b></div><div><span>处理结果</span><b class="chip ${auditResultClass(result)}">${esc(auditResultLabel(result))}</b></div></div><p class="audit-detail-lede">${esc(auditEventSummary(event))}</p><div class="audit-detail-values">${values.length?values.map(([label,value])=>`<div><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join(''):'<p class="muted">该事件没有更多可展示的明细。</p>'}</div>`
+}
+function openAuditDialog(index){
+  if(!state?.events?.[Number(index)])return
+  auditDialogReturnFocus=document.activeElement; auditDialogEventIndex=Number(index); renderAuditDialog()
+  const dialog=$('audit-detail-dialog'); dialog?.showModal(); requestAnimationFrame(()=>$('audit-detail-close')?.focus())
+}
+function closeAuditDialog({restore=true}={}){
+  const dialog=$('audit-detail-dialog'); if(dialog?.open)dialog.close()
+  const target=auditDialogReturnFocus; auditDialogReturnFocus=null; auditDialogEventIndex=-1
+  if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})
 }
 function renderTaskBanner(){
   const banner=$('task-banner'), running=probeTask?.status==='running'; if(!banner)return
@@ -285,13 +312,66 @@ function render(){
 }
 
 function subHtml(item){
-  const source=item.url?`${String(item.url).split(':',1)[0]||'https'}://[configured]`:'未配置来源'
+  const source=subscriptionSource(item)
   return `<article class="sub-card" data-i="${state.subscriptions.indexOf(item)}" data-id="${esc(item.id)}">
-    <div class="sub-card-head"><div class="sub-card-identity"><div class="sub-card-title"><input data-k="name" value="${esc(item.name)}" aria-label="订阅名称"><span class="chip ${item.enabled?'ok':'pending'}">${item.enabled?'已启用':'已停用'}</span></div><span class="sub-source" title="订阅地址已脱敏">${esc(source)}</span></div><div class="sub-card-summary"><span><b>${item.node_ids.length}</b> 节点</span><span>更新 ${time(item.updated_at)}</span><span>下次 ${nextRun(item)}</span></div><div class="sub-card-actions"><label class="sub-enabled"><input type="checkbox" data-k="enabled" ${item.enabled?'checked':''}>启用</label><button type="button" data-refresh="${esc(item.id)}">刷新</button><button type="button" data-del="subscriptions" class="danger">删除</button></div></div>
-    <div class="sub-card-meta"><span>流量：${traffic(item)}</span><span>到期：${expiry(item.expire)}</span><label>刷新间隔 <input class="interval" type="number" min="0" max="1440" data-k="interval" value="${item.interval}" aria-label="刷新间隔（分钟）"><em>分钟，0 为手动</em></label></div>
-    ${item.last_error?`<div class="node-error">${esc(item.last_error)}（连续失败 ${item.consecutive_errors} 次）</div>`:''}
-    ${item.last_diff?.at?`<details><summary>最近差异：新增 ${item.last_diff.added?.length||0}、变更 ${item.last_diff.changed?.length||0}、删除 ${item.last_diff.deleted?.length||0}、未变 ${item.last_diff.unchanged?.length||0}</summary><pre>${esc(JSON.stringify(item.last_diff,null,2))}</pre></details>`:''}
-    ${item.errors?.length?`<details><summary>错误历史 ${item.errors.length}</summary>${item.errors.slice().reverse().map(error=>`<div class="node-error">${new Date(error.at*1000).toLocaleString()} · ${esc(error.message)}</div>`).join('')}</details>`:''}</article>`
+    <div class="sub-card-head"><div class="sub-card-identity"><div class="sub-card-title"><b class="sub-card-name">${esc(item.name||'未命名订阅')}</b><span class="chip ${item.enabled?'ok':'pending'}">${item.enabled?'已启用':'已停用'}</span></div><span class="sub-source" title="订阅地址已脱敏">${esc(source)}</span></div><div class="sub-card-summary"><span><b>${item.node_ids?.length||0}</b> 节点</span><span>更新 ${esc(time(item.updated_at))}</span><span>下次 ${esc(nextRun(item))}</span></div><div class="sub-card-actions"><button type="button" data-sub-details="${esc(item.id)}">查看详情</button><button type="button" data-refresh="${esc(item.id)}">刷新</button><button type="button" data-del="subscriptions" class="danger">删除</button></div></div>
+  </article>`
+}
+
+function subscriptionSource(item){
+  return item.url?`${String(item.url).split(':',1)[0]||'https'}://[configured]`:'未配置来源'
+}
+function subscriptionDiffSummary(diff){
+  if(!diff)return '尚未刷新'
+  return `新增 ${diff.added?.length||0} · 变更 ${diff.changed?.length||0} · 删除 ${diff.deleted?.length||0} · 未变 ${diff.unchanged?.length||0}`
+}
+function subscriptionDetailHistory(item){
+  const diff=item.last_diff,errors=Array.isArray(item.errors)?item.errors.slice().reverse():[]
+  return `<section class="subscription-detail-section"><div class="subscription-detail-section-head"><div><small>节点同步</small><h3>最近差异</h3></div><span>${diff?.at?time(diff.at):'尚未刷新'}</span></div><p class="subscription-detail-summary">${esc(subscriptionDiffSummary(diff))}</p>${diff?.at?`<details class="subscription-history-details"><summary>查看节点差异明细</summary><pre>${esc(JSON.stringify(diff,null,2))}</pre></details>`:''}</section>
+    <section class="subscription-detail-section"><div class="subscription-detail-section-head"><div><small>刷新异常</small><h3>错误历史</h3></div><span>${errors.length?`${errors.length} 条`:'无记录'}</span></div>${errors.length?`<div class="subscription-error-list">${errors.map(error=>`<div class="subscription-error-entry"><time>${esc(new Date(error.at*1000).toLocaleString())}</time><span>${esc(error.message)}</span></div>`).join('')}</div>`:'<p class="muted">最近没有刷新错误。</p>'}</section>`
+}
+function renderSubscriptionDialog(){
+  const item=state?.subscriptions?.find(value=>value.id===subscriptionDialogId),body=$('subscription-detail-body'),actions=$('subscription-detail-actions'),title=$('subscription-detail-title')
+  if(!item||!body||!actions||!title)return
+  title.textContent=item.name||'订阅详情'
+  $('subscription-detail-kicker').textContent=subscriptionDialogEditing?'编辑订阅':'订阅来源'
+  if(subscriptionDialogEditing){
+    const draft=subscriptionDialogDraft||{name:item.name||'',enabled:item.enabled!==false,interval:Number(item.interval||0)}
+    body.innerHTML=`<div class="subscription-edit-intro"><b>仅在详情中编辑订阅设置</b><p>订阅地址为导入来源，只读显示；需要更换地址时请重新导入，不会从这里直接修改。</p></div><div class="subscription-edit-form"><label class="field-label" for="subscription-detail-name"><span class="field-title">订阅名称</span><input id="subscription-detail-name" type="text" maxlength="120" value="${esc(draft.name)}" autocomplete="off"><small>名称用于节点来源筛选和代理组成员识别。</small></label><label class="subscription-edit-enabled"><input id="subscription-detail-enabled" type="checkbox" ${draft.enabled?'checked':''}><span><b>启用自动刷新</b><small>关闭后仍保留来源和节点，只停止按间隔刷新。</small></span></label><label class="field-label" for="subscription-detail-interval"><span class="field-title">刷新间隔（分钟）</span><input id="subscription-detail-interval" type="number" min="0" max="1440" step="1" value="${esc(draft.interval)}"><small>0 表示手动刷新。</small></label></div><div class="subscription-detail-readonly"><span>订阅来源</span><code>${esc(subscriptionSource(item))}</code></div>`
+    actions.innerHTML='<button id="subscription-detail-cancel" type="button" class="quiet">取消</button><button id="subscription-detail-save" type="button" class="primary">保存编辑</button>'
+    $('subscription-detail-name')?.focus()
+  }else{
+    body.innerHTML=`<div class="subscription-detail-hero"><div><span>当前状态</span><b class="chip ${item.enabled?'ok':'pending'}">${item.enabled?'已启用':'已停用'}</b></div><div><span>订阅来源</span><code>${esc(subscriptionSource(item))}</code></div></div><div class="subscription-detail-facts"><div><span>节点数量</span><b>${item.node_ids?.length||0} 个</b></div><div><span>更新时间</span><b>${esc(time(item.updated_at))}</b></div><div><span>流量使用</span><b>${esc(traffic(item))}</b></div><div><span>到期时间</span><b>${esc(expiry(item.expire))}</b></div><div><span>刷新策略</span><b>${item.interval?'每 '+esc(item.interval)+' 分钟':'手动刷新'}</b></div><div><span>下次刷新</span><b>${esc(nextRun(item))}</b></div></div>${item.last_error?`<div class="subscription-detail-alert">${esc(item.last_error)}（连续失败 ${item.consecutive_errors||0} 次）</div>`:''}${subscriptionDetailHistory(item)}`
+    actions.innerHTML='<button id="subscription-detail-edit" type="button" class="primary">编辑订阅</button><button id="subscription-detail-dismiss" type="button" class="quiet">关闭</button>'
+  }
+  $('subscription-detail-edit')?.addEventListener('click',editSubscriptionDialog)
+  $('subscription-detail-dismiss')?.addEventListener('click',closeSubscriptionDialog)
+  $('subscription-detail-cancel')?.addEventListener('click',()=>{subscriptionDialogEditing=false;subscriptionDialogDraft=null;renderSubscriptionDialog();requestAnimationFrame(()=>$('subscription-detail-edit')?.focus())})
+  $('subscription-detail-save')?.addEventListener('click',saveSubscriptionDialog)
+}
+function openSubscriptionDialog(id){
+  const item=state?.subscriptions?.find(value=>value.id===id); if(!item)return
+  subscriptionDialogReturnFocus=document.activeElement; subscriptionDialogId=id; subscriptionDialogEditing=false; subscriptionDialogDraft=null; renderSubscriptionDialog()
+  const dialog=$('subscription-detail-dialog'); dialog?.showModal(); requestAnimationFrame(()=>$('subscription-detail-edit')?.focus())
+}
+function closeSubscriptionDialog({restore=true}={}){
+  const dialog=$('subscription-detail-dialog'); if(dialog?.open)dialog.close()
+  const target=subscriptionDialogReturnFocus; subscriptionDialogReturnFocus=null; subscriptionDialogId=''; subscriptionDialogEditing=false; subscriptionDialogDraft=null
+  if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})
+}
+function editSubscriptionDialog(){
+  const item=state?.subscriptions?.find(value=>value.id===subscriptionDialogId); if(!item)return
+  subscriptionDialogEditing=true; subscriptionDialogDraft={name:item.name||'',enabled:item.enabled!==false,interval:Number(item.interval||0)}; renderSubscriptionDialog()
+}
+function saveSubscriptionDialog(){
+  const item=state?.subscriptions?.find(value=>value.id===subscriptionDialogId); if(!item)return
+  const name=String($('subscription-detail-name')?.value||'').trim(),interval=Number($('subscription-detail-interval')?.value),enabled=Boolean($('subscription-detail-enabled')?.checked)
+  if(!name){note('订阅名称不能为空',true);return}
+  if(!Number.isInteger(interval)||interval<0||interval>1440){note('刷新间隔必须是 0 至 1440 分钟的整数',true);return}
+  const duplicate=state.subscriptions.some(value=>value.id!==item.id&&String(value.name||'').trim().toLocaleLowerCase()===name.toLocaleLowerCase())
+  if(duplicate){note('订阅名称已存在，请使用其他名称',true);return}
+  item.name=name; item.enabled=enabled; item.interval=interval
+  closeSubscriptionDialog({restore:false}); render(); note('订阅设置已更新')
 }
 
 function importTraffic(traffic){
@@ -566,6 +646,8 @@ function bind(){
   }))
   document.querySelectorAll('[data-domains]').forEach(input=>input.addEventListener('change',()=>{const item=state.rule_groups[Number(input.closest('[data-i]').dataset.i)];item.domains=input.value.split('\n').map(line=>line.trim().split(/\s+/,2)).filter(parts=>parts.length===2).map(([match,host])=>({match:match==='suffix'?'suffix':'exact',host}))}))
   document.querySelectorAll('[data-node-details]').forEach(button=>button.addEventListener('click',()=>openNodeDialog(button.dataset.nodeDetails)))
+  document.querySelectorAll('[data-sub-details]').forEach(button=>button.addEventListener('click',()=>openSubscriptionDialog(button.dataset.subDetails)))
+  document.querySelectorAll('[data-audit-details]').forEach(button=>button.addEventListener('click',()=>openAuditDialog(button.dataset.auditDetails)))
   document.querySelectorAll('[data-group-accordion]').forEach(details=>details.addEventListener('toggle',()=>{const id=details.dataset.groupAccordion;if(details.open)openGroupIds.add(id);else openGroupIds.delete(id)}))
   document.querySelectorAll('[data-del]').forEach(button=>button.addEventListener('click',event=>{
     event.preventDefault(); event.stopPropagation()
@@ -817,6 +899,13 @@ document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener(
   $('cancel').addEventListener('click',()=>$('diff').close())
   $('save-only').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存；当前内核未应用新配置')}catch(error){note(error.message,true)}})
   $('subscription-import-close').addEventListener('click',closeImportDialog)
+  $('subscription-detail-close')?.addEventListener('click',closeSubscriptionDialog)
+  $('subscription-detail-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeSubscriptionDialog()})
+  $('subscription-detail-dialog')?.addEventListener('click',event=>{if(event.target===$('subscription-detail-dialog'))closeSubscriptionDialog()})
+  $('audit-detail-close')?.addEventListener('click',closeAuditDialog)
+  $('audit-detail-dismiss')?.addEventListener('click',closeAuditDialog)
+  $('audit-detail-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeAuditDialog()})
+  $('audit-detail-dialog')?.addEventListener('click',event=>{if(event.target===$('audit-detail-dialog'))closeAuditDialog()})
   $('proxy-group-close')?.addEventListener('click',closeGroupDialog)
   $('proxy-group-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeGroupDialog()})
   $('proxy-group-dialog')?.addEventListener('click',event=>{if(event.target===$('proxy-group-dialog'))closeGroupDialog()})
