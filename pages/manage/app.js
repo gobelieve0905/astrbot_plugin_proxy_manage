@@ -6,9 +6,9 @@ if (!api || typeof api.ready !== 'function') {
   if(notice){notice.hidden=false;notice.textContent='AstrBot 页面桥接未就绪，请重新打开插件页面';if(typeof notice.showPopover==='function')notice.showPopover();else notice.setAttribute('data-visible','true')}
   return
 }
-const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',platforms:'平台域名模板',control:'内核管理',logs:'连接日志'}
-const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名和目标出口',platforms:'生成域名规则；这不代表平台 SDK 已接入代理',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
-let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDialogReturnTab='', ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set()
+const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',control:'内核管理',logs:'连接日志'}
+const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名、模板和目标出口',control:'管理插件自有内核、制品与运行配置',logs:'查看最近的配置、安装和连接事件'}
+let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set()
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
 let noticeTimer=null
@@ -198,8 +198,6 @@ function render(){
   } else if(tab==='routes'){
     const orderedRules=orderedRuleGroups()
     html=`<section class="panel routes-panel"><div class="bar"><div><h2>规则组</h2><p class="muted panel-lede">拖动规则组调整优先顺序；也可使用上移、下移按钮。目标代理组可直接在卡片中修改。</p></div><button id="add" class="primary" type="button">新增规则组</button></div><div class="rule-list">${orderedRules.map((rule,index)=>`<article class="rule-card" data-rule-id="${esc(rule.id)}"><div class="rule-card-head"><button type="button" class="rule-drag-handle" draggable="true" data-rule-drag-handle="${esc(rule.id)}" aria-label="拖动调整 ${esc(rule.name)} 的优先级" title="拖动调整优先级">⠿ 拖动</button><div class="rule-card-title"><b>${esc(rule.name)}</b><small>优先顺序 ${index+1} · 优先级 ${esc(rule.priority)} · ${rule.domains.length} 条域名</small></div><span class="chip ${rule.enabled?'ok':'pending'}">${rule.enabled?'已启用':'已停用'}</span><div class="rule-card-actions"><button type="button" data-rule-move="up" data-rule-id="${esc(rule.id)}" aria-label="上移 ${esc(rule.name)}" ${index===0?'disabled':''}>上移</button><button type="button" data-rule-move="down" data-rule-id="${esc(rule.id)}" aria-label="下移 ${esc(rule.name)}" ${index===orderedRules.length-1?'disabled':''}>下移</button><button type="button" data-edit-rule="${esc(rule.id)}">编辑</button><button type="button" data-del="rule_groups" class="danger">删除</button></div></div><div class="rule-card-controls"><label class="rule-target-control" for="rule-target-${esc(rule.id)}"><span>目标代理组</span><select id="rule-target-${esc(rule.id)}" data-rule-target="${esc(rule.id)}">${groupOptions(rule.target)}</select></label></div><div class="rule-card-domains">${rule.domains.map(domain=>`<span class="chip"><code>${domain.match==='suffix'?'DOMAIN-SUFFIX':'DOMAIN'}</code> ${esc(domain.host)}</span>`).join('')||'<span class="muted">暂无域名</span>'}</div></article>`).join('')||'<div class="group-empty"><b>还没有规则组</b><span>新增规则组后，可在弹窗中配置规则。</span></div>'}</div></section>`
-  } else if(tab==='platforms'){
-    html=`<section class="panel"><div class="bar"><div><h2>平台域名模板</h2><p class="muted panel-lede">模板是规则组的预填内容，不会自动配置平台 SDK，也不代表平台流量已经接入。选择模板后可继续编辑名称与域名，再保存为规则组。</p></div><button type="button" class="primary" data-add-rule>新增规则组</button></div><div class="template-library">${Object.entries(state.templates||{}).map(([id,template])=>{const domains=templateDomains(template);return `<article class="template-card"><div class="template-card-head"><b>${esc(template.name)}</b><span class="chip">${domains.length} 条域名</span></div><div class="template-domains">${domains.map(item=>`<span class="chip"><code>${item.match==='suffix'?'DOMAIN-SUFFIX':'DOMAIN'}</code> ${esc(item.host)}</span>`).join('')}</div><label class="template-binding" for="platform-${esc(id)}"><span>平台目标代理组</span><select id="platform-${esc(id)}" data-platform="${esc(id)}">${groupOptions((state.platforms[id]||{}).group_id||'direct')}</select></label><div class="template-card-actions"><button type="button" data-template-use="${esc(id)}">用于新增规则组</button></div></article>`}).join('')||'<p class="muted">暂无可用模板。</p>'}</div></section>`
   } else if(tab==='control'){
     const artifact=kernelStatus.artifact||state.kernel?.artifact||{}, process=kernelStatus.process||state.kernel?.process||{}
     const adapters=state.adapters||[]
@@ -342,13 +340,13 @@ function renderRuleDialog(){
 let ruleTemplateId=''
 function openRuleDialog(ruleId='',templateId=''){
   const source=ruleId?state.rule_groups.find(item=>item.id===ruleId):null
-  ruleDialogReturnFocus=document.activeElement;ruleDialogReturnTab=tab; editingRuleId=source?.id||''; ruleTemplateId=templateId||''; ruleDraft=ruleDraftFrom(source||{})
+  ruleDialogReturnFocus=document.activeElement; editingRuleId=source?.id||''; ruleTemplateId=templateId||''; ruleDraft=ruleDraftFrom(source||{})
   if(!source&&ruleTemplateId&&state.templates?.[ruleTemplateId]){const template=state.templates[ruleTemplateId];ruleDraft.name=template.name||ruleDraft.name;ruleDraft.domains=templateDomains(template)}
   renderRuleDialog()
   const dialog=$('rule-group-dialog'); dialog?.showModal(); requestAnimationFrame(()=>$('rule-name')?.focus())
 }
 function closeRuleDialog({restore=true}={}){
-  const dialog=$('rule-group-dialog'); if(dialog?.open)dialog.close(); const target=ruleDialogReturnFocus; ruleDialogReturnFocus=null;ruleDialogReturnTab=''; ruleDraft=null; editingRuleId=''; ruleTemplateId=''; if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})
+  const dialog=$('rule-group-dialog'); if(dialog?.open)dialog.close(); const target=ruleDialogReturnFocus; ruleDialogReturnFocus=null; ruleDraft=null; editingRuleId=''; ruleTemplateId=''; if(restore)requestAnimationFrame(()=>{if(target?.isConnected)target.focus()})
 }
 function saveRuleDialog(){
   const name=String($('rule-name')?.value||'').trim(), enabled=Boolean($('rule-enabled')?.checked), domains=ruleDraft.domains.map(item=>({match:item.match==='suffix'?'suffix':'exact',host:String(item.host||'').trim().replace(/^\.+|\.+$/g,'').toLowerCase()})).filter(item=>item.host)
@@ -358,7 +356,7 @@ function saveRuleDialog(){
   if(invalid)return ruleDialogError(`“${invalid.host}”不是有效的域名格式，请填写主机名，不要包含协议或路径。`)
   const isEditing=Boolean(editingRuleId),values={...ruleDraft,id:ruleDraft.id,name,enabled,domains}; const index=state.rule_groups.findIndex(item=>item.id===editingRuleId)
   if(index<0)state.rule_groups.push(values);else state.rule_groups[index]={...state.rule_groups[index],...values}
-  const savedId=values.id,returnTab=ruleDialogReturnTab;if(returnTab==='platforms')tab='routes';closeRuleDialog({restore:false}); render(); requestAnimationFrame(()=>document.querySelector(`[data-edit-rule="${CSS.escape(savedId)}"]`)?.focus()); note(isEditing?'规则组已更新':'规则组已创建')
+  const savedId=values.id;closeRuleDialog({restore:false}); render(); requestAnimationFrame(()=>document.querySelector(`[data-edit-rule="${CSS.escape(savedId)}"]`)?.focus()); note(isEditing?'规则组已更新':'规则组已创建')
 }
 
 function openConfirmDialog({title='确认操作',message='',confirmLabel='确认操作',danger=false,onConfirm}){
@@ -535,9 +533,6 @@ function bind(){
   $('test-all')?.addEventListener('click',()=>startProbe(state.nodes.map(node=>node.id),'全部节点测速'))
   $('cancel-probe')?.addEventListener('click',async()=>{await api.apiPost('probe-task-cancel',{task_id:probeTask.id});note('正在取消测速任务')})
   ;['node-source','node-protocol','node-region','node-status'].forEach(id=>$(id)?.addEventListener('change',render))
-  document.querySelectorAll('[data-platform]').forEach(select=>select.addEventListener('change',()=>{state.platforms[select.dataset.platform]={name:select.dataset.platform,group_id:select.value,enabled:true}}))
-  document.querySelectorAll('[data-template-use]').forEach(button=>button.addEventListener('click',()=>openRuleDialog('',button.dataset.template)))
-  document.querySelector('[data-add-rule]')?.addEventListener('click',()=>openRuleDialog())
   $('preview')?.addEventListener('click',async()=>{$('result').textContent=JSON.stringify(await api.apiPost('preview',{host:$('host').value}),null,2)})
   $('verify-outbound')?.addEventListener('click',async()=>{try{const result=await api.apiPost('verify-outbound',{url:$('verify-url').value});state.application={...(state.application||{}),verification:result};render();note(result.verified?'出口已确认':'验证未能确认实际出口，请查看三个层级的证据',!result.verified)}catch(error){note(error.message,true)}})
   $('verify-astrbot-egress')?.addEventListener('click',async()=>{try{const result=await api.apiPost('verify-astrbot-egress',{url:$('verify-url').value});state.application={...(state.application||{}),verification:result};await load();note(result.verified?'AstrBot 核心出口已确认':'AstrBot 核心出口未能确认',!result.verified)}catch(error){note(error.message,true)}})
@@ -571,7 +566,6 @@ const changeSectionDefinitions=[
   {type:'groups',label:'代理组'},
   {type:'routes',label:'分流规则'},
   {type:'rule_groups',label:'规则组'},
-  {type:'platforms',label:'平台绑定'},
 ]
 const changeFieldsByType={
   subscriptions:['id','name','url','enabled','interval','node_ids','ignored_node_ids'],
@@ -579,7 +573,6 @@ const changeFieldsByType={
   groups:['id','name','mode','node_ids','selected','enabled','test_url','test_interval','tolerance','failure_policy'],
   routes:['id','host','match','target','priority','enabled'],
   rule_groups:['id','name','domains','priority','target','enabled'],
-  platforms:['id','name','group_id','enabled'],
 }
 const changeFieldLabels={
   id:'标识',name:'名称',url:'订阅链接',enabled:'启用状态',interval:'刷新间隔',node_ids:'节点成员',ignored_node_ids:'已排除节点',
@@ -587,10 +580,7 @@ const changeFieldLabels={
   excluded:'测速与组选优',exclusion_reason:'排除原因',invalid_reference:'引用状态',mode:'选择模式',selected:'初始节点',test_url:'测速目标',
   test_interval:'测速周期',tolerance:'切换容差',failure_policy:'故障策略',host:'匹配域名',match:'匹配方式',target:'目标代理组',priority:'优先级',domains:'域名成员',group_id:'代理组',
 }
-function changeRecords(type,snapshot){
-  if(type==='platforms')return Object.entries(snapshot?.platforms||{}).filter(([,item])=>item&&typeof item==='object').map(([id,item])=>({...item,id}))
-  return Array.isArray(snapshot?.[type])?snapshot[type].filter(item=>item&&item.id).map(item=>item):[]
-}
+function changeRecords(type,snapshot){return Array.isArray(snapshot?.[type])?snapshot[type].filter(item=>item&&item.id).map(item=>item):[]}
 function canonicalChangeValue(value){
   if(Array.isArray(value))return value.map(canonicalChangeValue)
   if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalChangeValue(value[key])]))
@@ -609,7 +599,7 @@ function changeTitle(type,item,snapshot){
   if(type==='groups')return item.name||'未命名代理组'
   if(type==='routes')return item.host||'未命名规则'
   if(type==='rule_groups')return item.name||'未命名规则组'
-  return item.name||item.id||'未命名平台'
+  return item.name||item.id||'未命名配置'
 }
 function changeMeta(type,item,snapshot){
   if(type==='subscriptions')return `${Array.isArray(item.node_ids)?item.node_ids.length:0} 个节点 · ${item.interval?'每 '+item.interval+' 分钟':'手动刷新'}`
