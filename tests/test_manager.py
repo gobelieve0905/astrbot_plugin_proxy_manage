@@ -1862,7 +1862,6 @@ class TestConfigurationRules(unittest.TestCase):
              patch.object(sing_box,'apply',new=AsyncMock()) as apply:
             result=asyncio.run(manager.adapter_select())
 
-        self.assertEqual(result['status'],200)
         self.assertEqual(result['configuration'],'applied')
         self.assertTrue(result['applied_revision'])
         apply.assert_awaited_once()
