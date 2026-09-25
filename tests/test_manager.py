@@ -1832,6 +1832,7 @@ class TestConfigurationRules(unittest.TestCase):
 
     def test_switching_to_sing_box_applies_and_records_current_configuration(self):
         from proxy_manager.cores.registry import all_adapters
+        from proxy_manager import plugin as plugin_module
         manager=self._manager_for_runtime()
         manager.state['core_preferences']={'mihomo':{'enabled':True},'sing-box':{'enabled':True},'xray':{'enabled':False}}
         for node in manager.state['nodes']:
@@ -1853,10 +1854,10 @@ class TestConfigurationRules(unittest.TestCase):
         manager.persist=persist
         artifact_manager=types.SimpleNamespace(status=Mock(return_value={'ready':True}))
         sing_box=all_adapters()['sing-box']
-        with patch.object(self.module,'request',types.SimpleNamespace(
+        with patch.object(plugin_module,'request',types.SimpleNamespace(
                 json=AsyncMock(return_value={'adapter':'sing-box'}))), \
-             patch.object(self.module,'ArtifactManager',return_value=artifact_manager), \
-             patch.object(self.module,'ArtifactInstallTask',return_value=manager.install_task), \
+             patch.object(plugin_module,'ArtifactManager',return_value=artifact_manager), \
+             patch.object(plugin_module,'ArtifactInstallTask',return_value=manager.install_task), \
              patch.object(manager._adapter(),'stop',new=AsyncMock()), \
              patch.object(sing_box,'apply',new=AsyncMock()) as apply:
             result=asyncio.run(manager.adapter_select())
