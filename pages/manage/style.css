@@ -1287,6 +1287,9 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 .change-stat.deleted b { color: var(--danger); }
 .change-stat.changed b { color: var(--warning); }
 .change-preview-note { margin: 15px 0 0; color: var(--muted); font-size: 12px; }
+.change-runtime-summary { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-subtle); font-size: 12px; }
+.change-runtime-summary b { color: var(--text); }
+.change-runtime-summary span { color: var(--muted); text-align: right; }
 .change-section { margin-top: 21px; }
 .change-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .change-section-head h3 { font-size: 14px; }
@@ -1319,6 +1322,8 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   #diff .dialog-head, #diff .dialog-actions { padding: 15px 16px; }
   #diff .change-preview { padding: 16px; }
   .change-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .change-runtime-summary { flex-direction: column; gap: 4px; }
+  .change-runtime-summary span { text-align: left; }
   .change-entry-head { flex-direction: column; gap: 5px; }
   .change-entry-head small { max-width: none; text-align: left; }
   .change-value-row { grid-template-columns: minmax(75px, .5fr) minmax(0, 1fr); gap: 5px 8px; }

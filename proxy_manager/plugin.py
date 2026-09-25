@@ -1303,6 +1303,12 @@ class ProxyManager(Star):
                     process=await self._start_owned_kernel()
                     if not process.get('ready',False):
                         raise RuntimeError(process.get('message','目标内核启动失败'))
+                    config_path=self._write_kernel_config(document)
+                    await adapter.apply(candidate,document,**self._adapter_apply_runtime(config_path))
+                    revision=adapter.revision(document)
+                    self._persist_runtime_application({'status':'applied','adapter':adapter.id,'saved_revision':revision,
+                                                       'applied_revision':revision,'document':document,'updated_at':int(time.time()),
+                                                       'message':'切换内核后已应用当前配置并完成运行核对'})
                     self._sync_owned_proxy_environment()
                 except Exception:
                     try: await adapter.stop(self.supervisor)
@@ -1317,8 +1323,10 @@ class ProxyManager(Star):
                         await self._start_owned_kernel()
                     self._sync_owned_proxy_environment()
                     raise
-            self.event({'action':'adapter_select','adapter':adapter_id,'result':'ok'})
-            return json_response({'adapter':adapter_id,'artifact':self.artifacts.status(),'process':process})
+            self.event({'action':'adapter_select','adapter':adapter_id,'result':'ok','configuration':'applied',
+                        'revision':self.runtime_application.get('applied_revision','')})
+            return json_response({'adapter':adapter_id,'artifact':self.artifacts.status(),'process':process,
+                                  'configuration':'applied','applied_revision':self.runtime_application.get('applied_revision','')})
         except (ValueError,OSError,RuntimeError) as exc:
             return error_response(str(exc),status_code=400)
 

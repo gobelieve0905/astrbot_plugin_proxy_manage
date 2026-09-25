@@ -1830,6 +1830,46 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('clash_api',document['experimental'])
         self.assertTrue(any(item['type']=='anytls' for item in document['outbounds']))
 
+    def test_switching_to_sing_box_applies_and_records_current_configuration(self):
+        from proxy_manager.cores.registry import all_adapters
+        manager=self._manager_for_runtime()
+        manager.state['core_preferences']={'mihomo':{'enabled':True},'sing-box':{'enabled':True},'xray':{'enabled':False}}
+        for node in manager.state['nodes']:
+            node['adapters']=['mihomo','sing-box']
+        manager.data_dir=Path(manager._test_dir.name)
+        manager.install_task=types.SimpleNamespace(stop=AsyncMock())
+        manager.install_tasks={'mihomo':manager.install_task}
+        manager.artifacts=types.SimpleNamespace(status=Mock(return_value={'ready':True}))
+        manager.supervisor=types.SimpleNamespace(status=Mock(return_value={'ready':False}))
+        manager._start_owned_kernel=AsyncMock(return_value={'ready':True,'state':'running'})
+        manager._adapter_apply_runtime=Mock(return_value={'supervisor':manager.supervisor,'binary':Path('/sing-box'),
+                                                          'config':Path(manager._test_dir.name)/'config.json'})
+        manager._write_kernel_config=Mock(return_value=Path(manager._test_dir.name)/'config.json')
+        manager._sync_owned_proxy_environment=Mock()
+
+        async def persist(candidate):
+            manager.state=candidate
+
+        manager.persist=persist
+        artifact_manager=types.SimpleNamespace(status=Mock(return_value={'ready':True}))
+        sing_box=all_adapters()['sing-box']
+        with patch.object(self.module,'request',types.SimpleNamespace(
+                json=AsyncMock(return_value={'adapter':'sing-box'}))), \
+             patch.object(self.module,'ArtifactManager',return_value=artifact_manager), \
+             patch.object(self.module,'ArtifactInstallTask',return_value=manager.install_task), \
+             patch.object(manager._adapter(),'stop',new=AsyncMock()), \
+             patch.object(sing_box,'apply',new=AsyncMock()) as apply:
+            result=asyncio.run(manager.adapter_select())
+
+        self.assertEqual(result['status'],200)
+        self.assertEqual(result['configuration'],'applied')
+        self.assertTrue(result['applied_revision'])
+        apply.assert_awaited_once()
+        self.assertEqual(apply.await_args.args[0]['control']['adapter'],'sing-box')
+        self.assertEqual(apply.await_args.args[1],manager.runtime_application['document'])
+        self.assertEqual(manager.runtime_application['adapter'],'sing-box')
+        self.assertEqual(manager.runtime_application['status'],'applied')
+
 
 if __name__ == "__main__":
     unittest.main()
