@@ -394,6 +394,7 @@ class ArtifactInstallTask:
             return
         except Exception as exc:
             self.state={**self.state,'state':'waiting_upload','phase':'waiting_upload',
+                        'progress':0,'downloaded':0,'total':0,
                         'message':str(exc),'updated_at':int(time.time())}
             return
         try:

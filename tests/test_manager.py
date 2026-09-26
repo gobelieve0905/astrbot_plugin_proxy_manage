@@ -465,6 +465,23 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertEqual(cancelled['phase'],'cancelled')
         asyncio.run(scenario())
 
+    def test_artifact_download_failure_waits_for_upload_without_stale_progress(self):
+        from proxy_manager.runtime.artifacts import ArtifactInstallTask
+        async def scenario():
+            async def download(progress, _cancel_event):
+                progress({'phase':'downloading','downloaded':3*1024*1024,'total':20*1024*1024})
+                raise RuntimeError('所有受信下载源均不可用')
+            manager=types.SimpleNamespace(download=download)
+            task=ArtifactInstallTask(manager,AsyncMock())
+            task.start(); await asyncio.sleep(0); await asyncio.sleep(0)
+            status=task.status()
+            self.assertEqual(status['state'],'waiting_upload')
+            self.assertEqual(status['phase'],'waiting_upload')
+            self.assertEqual(status['progress'],0)
+            self.assertEqual(status['downloaded'],0)
+            self.assertEqual(status['total'],0)
+        asyncio.run(scenario())
+
     def test_internal_runtime_secret_is_stable_and_not_client_configurable(self):
         with tempfile.TemporaryDirectory() as directory:
             manager=self.module.ProxyManager.__new__(self.module.ProxyManager)
