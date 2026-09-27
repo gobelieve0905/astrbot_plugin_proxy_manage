@@ -20,7 +20,8 @@ import httpx
 MAX_ARCHIVE_SIZE=64*1024*1024
 MAX_BINARY_SIZE=128*1024*1024
 DOWNLOAD_ATTEMPTS=2
-DOWNLOAD_TOTAL_TIMEOUT=120
+DOWNLOAD_TOTAL_TIMEOUT=600
+DOWNLOAD_IDLE_TIMEOUT=60
 
 
 def _version_key(value: object) -> tuple[int, ...]:
@@ -298,16 +299,16 @@ class ArtifactManager:
 
     @staticmethod
     def _download_error(exc:Exception) -> str:
-        if isinstance(exc,asyncio.TimeoutError): return '超过 120 秒总时限'
+        if isinstance(exc,asyncio.TimeoutError): return '超过 600 秒总时限'
         if isinstance(exc,httpx.ConnectTimeout): return '连接超时'
-        if isinstance(exc,httpx.ReadTimeout): return '连续 20 秒未收到数据'
+        if isinstance(exc,httpx.ReadTimeout): return '连续 60 秒未收到数据'
         if isinstance(exc,RuntimeError): return str(exc)
         return type(exc).__name__
 
     async def _download_source(self,item,source,progress,cancel_event,source_index,attempt) -> bytes:
         async def fetch() -> bytes:
             chunks=[]; size=0
-            timeout=httpx.Timeout(20,connect=10,write=20,pool=10)
+            timeout=httpx.Timeout(DOWNLOAD_IDLE_TIMEOUT,connect=10,write=DOWNLOAD_IDLE_TIMEOUT,pool=10)
             async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,trust_env=True) as client:
                 async with client.stream('GET',source['url']) as response:
                     response.raise_for_status()
@@ -324,7 +325,7 @@ class ArtifactManager:
                                                'total':length or item.get('size',0),'message':'正在下载固定版本内核'})
             return b''.join(chunks)
         try: return await asyncio.wait_for(fetch(),DOWNLOAD_TOTAL_TIMEOUT)
-        except asyncio.TimeoutError as exc: raise RuntimeError('下载超过 120 秒总时限') from exc
+        except asyncio.TimeoutError as exc: raise RuntimeError('下载超过 600 秒总时限') from exc
 
     def install(self,archive:bytes,source:str='offline') -> dict:
         item=self.selected()

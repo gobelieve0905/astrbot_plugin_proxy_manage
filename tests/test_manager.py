@@ -449,7 +449,32 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertEqual(manager._download_source.await_count,3)
             self.assertEqual([call.args[1]['id'] for call in manager._download_source.await_args_list],
                              ['primary','primary','github'])
-            self.assertEqual(progress[-1]['phase'],'installed')
+        self.assertEqual(progress[-1]['phase'],'installed')
+
+    def test_artifact_download_uses_extended_xray_friendly_timeouts(self):
+        from proxy_manager.runtime import artifacts
+        self.assertEqual(artifacts.DOWNLOAD_TOTAL_TIMEOUT,600)
+        self.assertEqual(artifacts.DOWNLOAD_IDLE_TIMEOUT,60)
+        self.assertIn('600 秒总时限',artifacts.ArtifactManager._download_error(asyncio.TimeoutError()))
+
+    def test_xray_download_idle_timeout_is_passed_to_http_client(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+        async def scenario():
+            response=AsyncMock(); response.headers={'content-length':'4'}
+            async def chunks():
+                yield b'data'
+            response.aiter_bytes=chunks
+            response.raise_for_status=Mock()
+            stream=AsyncMock(); stream.__aenter__.return_value=response
+            client=AsyncMock(); client.stream=Mock(return_value=stream)
+            context=AsyncMock(); context.__aenter__.return_value=client
+            manager=ArtifactManager.__new__(ArtifactManager)
+            with patch('proxy_manager.runtime.artifacts.httpx.AsyncClient',return_value=context) as make_client:
+                await manager._download_source({'sources':[{}],'size':4},{'id':'github','name':'GitHub','url':'https://example.invalid/xray.zip'},
+                                               None,None,0,1)
+            self.assertEqual(make_client.call_args.kwargs['timeout'].read,60)
+            self.assertEqual(make_client.call_args.kwargs['timeout'].connect,10)
+        asyncio.run(scenario())
 
     def test_artifact_install_task_returns_immediately_and_can_cancel(self):
         from proxy_manager.runtime.artifacts import ArtifactInstallTask
