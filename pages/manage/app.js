@@ -309,7 +309,11 @@ function render(){
     const events=state.events.slice().reverse()
     html=`<section class="panel audit-panel"><div class="bar"><div><small>运行与配置变更</small><h2>审计历史</h2><p class="muted panel-lede">记录配置修改、订阅导入/刷新、内核操作、连接验证和插件生命周期事件；不记录完整流量内容。</p></div><span class="audit-count">最近 ${events.length} 条</span></div><div class="audit-list">${events.map(auditEventHtml).join('')||'<p class="muted">暂无审计事件。</p>'}</div></section>`
   }
-  $('content').innerHTML=html; renderTaskBanner(); bind()
+  $('content').innerHTML=html
+  if(tab==='groups')document.querySelectorAll('.runtime-group-note').forEach(note=>{
+    if(note.textContent.includes('只展示成员结果'))note.textContent='核对选优会切换到当前测速中延迟最低的成员；内核后续仍按周期自动选优。'
+  })
+  renderTaskBanner(); bind()
 }
 
 function subHtml(item){

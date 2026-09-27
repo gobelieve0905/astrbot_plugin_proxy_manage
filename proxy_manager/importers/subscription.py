@@ -105,10 +105,45 @@ def summary(nodes:list[dict],discovered:set[str]):
 
 
 def traffic_header(headers:httpx.Headers):
-    values=headers.get_list('subscription-userinfo')
+    values=[]
+    for name in ('subscription-userinfo','subscription-user-info'):
+        values.extend(headers.get_list(name))
     data={}
     for value in values:
-        for key,text in re.findall(r'(upload|download|total|expire)=([^;]+)',value,re.I):
-            try: data[key.lower()]=int(text.strip())
-            except ValueError: pass
+        for key,text in re.findall(r'(upload|download|total|expire)\s*=\s*([0-9]+)',value,re.I):
+            data[key.lower()]=int(text)
+    return data
+
+
+def traffic_metadata(headers:httpx.Headers, text:str=''):
+    """Read standard quota metadata exposed by a subscription response."""
+    data=traffic_header(headers)
+    candidates=[]
+    if text:
+        try:
+            value=json.loads(text)
+            candidates.append(value)
+            if isinstance(value,dict):
+                candidates.extend(value.get(key) for key in ('data','subscription','user_info','userinfo')
+                                  if isinstance(value.get(key),dict))
+        except (ValueError,TypeError):
+            pass
+    for value in candidates:
+        if not isinstance(value,dict):
+            continue
+        normalized={str(key).lower().replace('-','_'):raw for key,raw in value.items()}
+        for key in ('upload','download','total','expire'):
+            raw=normalized.get(key)
+            if isinstance(raw,(int,float)) and raw>=0:
+                data[key]=int(raw)
+            elif isinstance(raw,str) and raw.strip().isdigit():
+                data[key]=int(raw.strip())
+        for raw in normalized.values():
+            if isinstance(raw,str):
+                for key,text_value in re.findall(r'\b(upload|download|total|expire)\s*[=:]\s*([0-9]+)',raw,re.I):
+                    data[key.lower()]=int(text_value)
+    # A few providers return a plain metadata line instead of a response
+    # header; only explicit numeric quota keys are accepted.
+    for key,text_value in re.findall(r'\b(upload|download|total|expire)\s*[=:]\s*([0-9]+)',text[:16384],re.I):
+        data[key.lower()]=int(text_value)
     return data

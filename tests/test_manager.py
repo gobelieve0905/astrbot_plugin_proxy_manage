@@ -681,6 +681,21 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertNotIn("node-secret", json.dumps(preview, ensure_ascii=False))
         self.assertNotIn("connection", preview)
 
+    def test_subscription_traffic_metadata_accepts_header_and_json_body(self):
+        from proxy_manager.importers.subscription import traffic_metadata
+        headers=self.module.httpx.Headers({'Subscription-Userinfo':'upload=10; download=20; total=100; expire=1700000000'})
+        self.assertEqual(traffic_metadata(headers), {'upload':10,'download':20,'total':100,'expire':1700000000})
+        body=json.dumps({'data':{'upload':11,'download':22,'total':200,'expire':1800000000}})
+        self.assertEqual(traffic_metadata(self.module.httpx.Headers(),body),
+                         {'upload':11,'download':22,'total':200,'expire':1800000000})
+
+    def test_group_ids_with_public_prefix_do_not_get_prefixed_twice(self):
+        manager=self._manager_for_runtime()
+        normalized=manager._normalize({'nodes':manager.state['nodes'],'groups':[{'id':'group-abc','name':'A','mode':'select',
+            'node_ids':['hk-1'],'selected':'hk-1'}],'subscriptions':manager.state['subscriptions']})
+        group=next(item for item in normalized['groups'] if item['id']=='group-abc')
+        self.assertEqual(group['kernel_name'],'group-abc')
+
     def test_redacted_snapshot_round_trip_preserves_complete_credentials(self):
         manager = self.module.ProxyManager.__new__(self.module.ProxyManager)
         raw = {
@@ -1198,6 +1213,23 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(manager.group_health['hk']['member_results'][0]['node_id'],'hk-1')
         self.assertEqual(manager.group_health['hk']['selection']['state'],'within_tolerance')
         self.assertEqual(manager.group_health['hk']['node_name'],'HK 1'); manager.persist_group_health.assert_called_once()
+
+    def test_group_probe_switches_url_test_group_to_lowest_latency_member(self):
+        manager=self._manager_for_runtime()
+        manager.state['groups'][1]['node_ids']=['hk-1','sg-1']
+        manager.persist_group_health=Mock(); manager.event=Mock()
+        fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'group_id':'hk','timeout':8}))
+        adapter=manager._adapter()
+        with patch('proxy_manager.plugin.request',fake_request), patch('proxy_manager.plugin.validate_public_url',new=AsyncMock()), \
+             patch.object(adapter,'proxies',AsyncMock(return_value={'proxies':{'group-hk':{'now':'node-hk-1'}}})), \
+             patch.object(adapter,'probe_group',AsyncMock(return_value={'latency_ms':878,'selected_kernel_name':'node-hk-1',
+                 'member_results':[{'kernel_name':'node-hk-1','latency_ms':878},{'kernel_name':'node-sg-1','latency_ms':241}]})), \
+             patch.object(adapter,'select',AsyncMock()) as select:
+            result=asyncio.run(manager.control_group_probe())
+        self.assertEqual(result['node_id'],'sg-1')
+        self.assertEqual(result['selection']['minimum_latency_ms'],241)
+        self.assertEqual(result['selection']['state'],'within_tolerance')
+        select.assert_awaited_once_with(manager.state,manager.state['groups'][1],manager.state['nodes'][1])
 
     def test_group_probe_rejects_unapplied_group_and_private_targets(self):
         manager=self._manager_for_runtime(); fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'group_id':'hk'}))

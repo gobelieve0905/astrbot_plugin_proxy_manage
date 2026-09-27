@@ -27,7 +27,7 @@ from .domain.constants import CONFIGURED, TEMPLATES
 from .domain.identity import stable_node_id
 from .domain.model import compiled_rules, ident, match_rule, normalize_state, validate_state
 from .domain.security import redact_config, redact_diagnostics, restore_config, safe_error, safe_host, safe_url
-from .importers.subscription import parse_subscription, summary, traffic_header
+from .importers.subscription import parse_subscription, summary, traffic_header, traffic_metadata
 from .runtime.transaction import verified_recovery_document
 from .runtime.artifacts import ArtifactInstallTask, ArtifactManager, MAX_ARCHIVE_SIZE
 from .runtime.supervisor import KernelSupervisor
@@ -793,6 +793,10 @@ class ProxyManager(Star):
         return traffic_header(headers)
 
     @staticmethod
+    def _traffic_metadata(headers:httpx.Headers, text:str=''):
+        return traffic_metadata(headers,text)
+
+    @staticmethod
     def _subscription_name_key(value:object) -> str:
         return ' '.join(str(value or '').split()).casefold()
 
@@ -874,16 +878,16 @@ class ProxyManager(Star):
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
-                traffic=self._traffic_header(response.headers)
+                traffic=self._traffic_metadata(response.headers,response.text)
                 summary=self._summary(nodes,discovered); summary['traffic']=traffic; summary['ok']=bool(nodes)
                 if not nodes:
                     summary['error']='未解析出支持的代理节点（发现协议：'+', '.join(sorted(discovered))+'）'
                 items.append({'name':name,'url':url,'interval':interval,
-                              'nodes':nodes,'summary':summary})
+                              'nodes':nodes,'traffic':traffic,'summary':summary})
             preview_id=self._cache_preview(items)
             return json_response({'preview_id':preview_id,'items':[
                 {'name':item['name'],'url':urlparse(item['url']).scheme+'://[configured]',
-                 'interval':item['interval'],'summary':item['summary'],
+                 'interval':item['interval'],'traffic':item.get('traffic',{}),'summary':item['summary'],
                  'nodes':[self._preview_node(node) for node in item['nodes']]} for item in items]})
         except (ValueError,httpx.HTTPError,OSError) as exc:
             return error_response(str(exc) if isinstance(exc,ValueError) else '订阅预览请求失败')
@@ -964,7 +968,7 @@ class ProxyManager(Star):
                         node['kernel_name']='node-'+node['id']
                         node['subscription_id']=subscription_id
                     diff=self._replace_subscription_nodes(subscription,nodes)
-                    now=int(time.time()); traffic=self._traffic_header(response.headers)
+                    now=int(time.time()); traffic=self._traffic_metadata(response.headers,response.text)
                     subscription.update({'updated_at':now,'upload':max(0,int(traffic.get('upload',subscription.get('upload',0)) or 0)),
                                          'download':max(0,int(traffic.get('download',subscription.get('download',0)) or 0)),
                                          'total':max(0,int(traffic.get('total',subscription.get('total',0)) or 0)),
@@ -1035,7 +1039,12 @@ class ProxyManager(Star):
                             node['kernel_name']='node-'+node['id']
                         self._replace_subscription_nodes(subscription,item['nodes'])
                         now=int(time.time()); interval=int(item['interval'])
-                        subscription['updated_at']=now
+                        traffic=item.get('traffic') if isinstance(item.get('traffic'),dict) else {}
+                        subscription.update({'updated_at':now,
+                                             'upload':max(0,int(traffic.get('upload',subscription.get('upload',0)) or 0)),
+                                             'download':max(0,int(traffic.get('download',subscription.get('download',0)) or 0)),
+                                             'total':max(0,int(traffic.get('total',subscription.get('total',0)) or 0)),
+                                             'expire':int(traffic.get('expire',subscription.get('expire',0)) or 0)})
                         subscription['next_refresh_at']=now+interval*60 if interval else 0
                         imported_node_ids.extend(subscription['node_ids'])
                         imported.append(subscription['id'])
@@ -1661,19 +1670,29 @@ class ProxyManager(Star):
                 valid_members=[item for item in member_results if isinstance(item.get('latency_ms'),int)]
                 minimum=min((item['latency_ms'] for item in valid_members),default=None)
                 selected_latency=next((item['latency_ms'] for item in valid_members if item['node_id']==node['id']),None)
+                original_node_id=node['id']
                 selection={}
-                if group.get('mode')=='url-test' and minimum is not None and selected_latency is not None:
+                if group.get('mode')=='url-test' and minimum is not None:
                     tolerance=max(0,int(group.get('tolerance',0) or 0))
+                    winner=next(item for item in valid_members if item['latency_ms']==minimum)
+                    if winner['node_id']!=node['id']:
+                        winner_node=next(candidate for candidate in self.state['nodes'] if candidate['id']==winner['node_id'])
+                        await adapter.select(self.state,group,winner_node)
+                        node=winner_node
+                        selected_latency=minimum
                     within_tolerance=selected_latency<=minimum+tolerance
                     selection={'state':'within_tolerance' if within_tolerance else 'not_lowest',
                                'selected_latency_ms':selected_latency,'minimum_latency_ms':minimum,
                                'tolerance_ms':tolerance,
-                               'message':('当前节点在最低延迟 + 容差范围内，内核可以继续保持当前选择。'
-                                          if within_tolerance else '当前节点不在最低延迟 + 容差范围内，等待内核下一次选优或刷新状态。')}
+                               'message':('已切换到当前测速中延迟最低的节点。'
+                                          if winner['node_id']!=original_node_id else
+                                          ('当前节点已在最低延迟 + 容差范围内。'
+                                           if within_tolerance else '当前节点不在最低延迟 + 容差范围内。'))}
                 elif group.get('mode')=='url-test':
                     selection={'state':'unconfirmed','message':'成员测速结果不完整，暂时无法核对自动选优。'}
                 checked_at=int(time.time())
-                probe={'latency_ms':result.get('latency_ms'),'checked_at':checked_at,'node_id':node['id'],
+                probe={'latency_ms':selected_latency if isinstance(selected_latency,int) else result.get('latency_ms'),
+                       'checked_at':checked_at,'node_id':node['id'],
                        'node_name':node.get('display_name',node.get('name','')),
                        'member_results':member_results,'selection':selection,
                        'target_fingerprint':self._group_test_fingerprint(target),

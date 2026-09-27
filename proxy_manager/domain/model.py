@@ -151,7 +151,8 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
         group_name=' '.join(str(item.get('name',item['id'])).split())
         groups.append({
             'id':ident(item['id']), 'name':group_name[:80],
-            'kernel_name':'DIRECT' if ident(item['id'])=='direct' else 'group-'+ident(item['id']),
+            'kernel_name':'DIRECT' if ident(item['id'])=='direct' else (
+                ident(item['id']) if ident(item['id']).startswith('group-') else 'group-'+ident(item['id'])),
             'mode':item.get('mode') if item.get('mode') in MODES else 'select',
             'node_ids':list(dict.fromkeys(aliases.get(ident(value),ident(value)) for value in item.get('node_ids',[]) if ident(value))),
             'selected':aliases.get(ident(item.get('selected')),ident(item.get('selected'))), 'enabled':bool(item.get('enabled',True)),
