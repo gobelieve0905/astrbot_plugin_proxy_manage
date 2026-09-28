@@ -7,3 +7,15 @@ docs/UI_ISSUE_SUMMARY.md export-ignore
 pyproject.toml export-ignore
 .gitignore export-ignore
 .gitattributes export-ignore
+# 本地备份、缓存和编译产物不属于 AstrBot 运行包
+*.backup export-ignore
+*.body export-ignore
+*.bak export-ignore
+*.bak[0-9] export-ignore
+*.pyc export-ignore
+*.pyo export-ignore
+*.pyd export-ignore
+__pycache__/** export-ignore
+.pytest_cache/** export-ignore
+.ruff_cache/** export-ignore
+.DS_Store export-ignore
