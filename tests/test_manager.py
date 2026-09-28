@@ -170,7 +170,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.3.21',html)
+        self.assertIn('流量控制 · 0.3.22',html)
         self.assertNotIn('data-tab="platforms"',html)
         self.assertNotIn("else if(tab==='platforms')",script)
         self.assertIn('traffic_inventory',script)
@@ -247,7 +247,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('DOMAIN-SUFFIX',script)
         self.assertNotIn('id="rule-domains"',script)
         self.assertNotIn("state.groups.push({id,name:template.name",script)
-        self.assertIn('流量控制 · 0.3.21',html)
+        self.assertIn('流量控制 · 0.3.22',html)
         self.assertIn('.compact-node-subline .chip',styles)
         self.assertIn('.rule-enabled { display: flex; align-items: center;',styles)
         self.assertIn('event.stopPropagation()',script)
@@ -1902,6 +1902,47 @@ class TestConfigurationRules(unittest.TestCase):
             adapter.render(state,[])
         normalized=self._manager_for_runtime()._normalize(state)
         self.assertEqual(normalized['control']['adapter'],'future-core')
+
+    def test_adapters_expose_explicit_verification_levels(self):
+        from proxy_manager.cores.registry import all_adapters
+        expected={'configuration','runtime','connection','egress'}
+        for adapter_id, adapter in all_adapters().items():
+            with self.subTest(adapter=adapter_id):
+                levels=adapter.capabilities()['verification']
+                self.assertEqual(set(levels),expected)
+                self.assertTrue(all(levels[key] for key in expected))
+
+    def test_xray_apply_is_running_unverified_without_runtime_evidence(self):
+        from proxy_manager.cores.xray import XrayAdapter
+        adapter=XrayAdapter()
+        with patch.object(adapter,'restart',new=AsyncMock()) as restart:
+            result=asyncio.run(adapter.apply({}, {}, supervisor=object(), binary=Path('/core'), config=Path('/config')))
+        restart.assert_awaited_once()
+        self.assertEqual(result['status'],'running_unverified')
+        self.assertIn('无法判定',result['message'])
+
+    def test_sing_box_requires_rules_and_connection_evidence(self):
+        from proxy_manager.cores.sing_box import SingBoxAdapter
+        adapter=SingBoxAdapter(); manager=self._manager_for_runtime()
+        for node in manager.state['nodes']:
+            node['adapters']=['sing-box']
+        document=adapter.render(manager.state,manager._compiled_rules())
+        errors=adapter.verify(document,{'mode':'rule'},
+                              {item['tag']:{'all':item.get('outbounds',[]),'now':(item.get('outbounds') or [''])[0]}
+                               for item in document['outbounds']},None,None)
+        self.assertTrue(any('规则核对证据' in error for error in errors))
+        self.assertTrue(any('连接链路核对证据' in error for error in errors))
+
+    def test_runtime_apply_exception_never_leaves_applying_state(self):
+        manager=self._manager_for_runtime(); adapter=manager._adapter()
+        with patch.object(manager,'_kernel_status',AsyncMock(return_value={'state':'saved'})), \
+             patch.object(manager,'_write_kernel_config',return_value=Path('/runtime/config.yaml')), \
+             patch.object(adapter,'apply',new=AsyncMock(side_effect=RuntimeError('candidate failed'))):
+            result=asyncio.run(manager.runtime_apply())
+        self.assertEqual(result['status'],500)
+        self.assertEqual(manager.runtime_application['status'],'restore_failed')
+        self.assertNotEqual(manager.runtime_application['status'],'applying')
+        self.assertEqual(json.loads(manager.runtime_path.read_text())['status'],'restore_failed')
 
     def test_sing_box_official_manifest_and_native_json_shape(self):
         from proxy_manager.cores.sing_box import SingBoxAdapter

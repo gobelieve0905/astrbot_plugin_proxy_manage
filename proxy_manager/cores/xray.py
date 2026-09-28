@@ -32,7 +32,11 @@ class XrayAdapter(CoreAdapter):
             'inspect': False,
             'control': 'process-only',
             'platforms': ['linux', 'darwin', 'windows'],
+            'verification': self.verification_levels(),
         }
+
+    def verification_levels(self) -> dict:
+        return {'configuration':'full','runtime':'process','connection':'unavailable','egress':'unavailable'}
 
     def artifact(self) -> dict:
         return json.loads(Path(__file__).with_name('xray_artifacts.json').read_text(encoding='utf-8'))
@@ -247,11 +251,12 @@ class XrayAdapter(CoreAdapter):
         result.append(('MATCH', '', str(document.get('routing', {}).get('rules', [{}])[-1].get('outboundTag', ''))))
         return result
 
-    def verify(self, document: dict, runtime: object, proxies: object, rules: object) -> list[str]:
+    def verify(self, document: dict, runtime: object, proxies: object, rules: object,
+               connections: object = None) -> list[str]:
         # Xray has no equivalent HTTP runtime inspection endpoint.  Structural
         # validation is still performed before launch; runtime evidence is
         # deliberately reported as unavailable rather than fabricated.
-        return []
+        return ['Xray 没有可用的运行配置、连接链路或出口核对证据']
 
     def fail_closed_document(self, control: dict, entry: dict) -> dict:
         document = copy.deepcopy(self.render({'nodes': [], 'groups': [{'id': 'direct', 'kernel_name': 'DIRECT'}],
@@ -270,11 +275,12 @@ class XrayAdapter(CoreAdapter):
                 'applied_revision': application.get('applied_revision', ''), 'control': 'process-only'}
         if application.get('status') == 'restore_failed':
             return {**base, 'state': 'restore_failed', 'ready': False, 'message': 'Xray 恢复失败'}
-        return {**base, 'state': 'running_limited', 'message': 'Xray 已运行；该内核不提供统一 HTTP 控制面，代理组切换需重新应用配置'}
+        return {**base, 'state': 'running_unverified', 'ready': False,
+                'message': 'Xray 运行中但无法判定：该内核不提供统一运行配置、连接链路和出口核对证据'}
 
     async def fetch_runtime(self, state: dict) -> dict:
-        return {'state': 'running_limited', 'ready': True, 'adapter': self.id,
-                'message': 'Xray 使用进程级健康检查；暂无 HTTP 控制接口'}
+        return {'state': 'running_unverified', 'ready': False, 'adapter': self.id,
+                'message': 'Xray 运行中但无法判定：暂无运行配置、连接链路和出口核对证据'}
 
     async def healthy(self, state: dict) -> bool:
         return True
@@ -283,6 +289,9 @@ class XrayAdapter(CoreAdapter):
         if supervisor is None or binary is None or config is None:
             raise ValueError('Xray 应用配置需要受监督重启上下文')
         await self.restart(supervisor, binary, config)
+        return {'status':'running_unverified',
+                'verification':self.verification_levels(),
+                'message':'Xray 运行中但无法判定：该内核不提供完整运行证据'}
 
     async def select(self, state: dict, group: dict, node: dict):
         raise ValueError('Xray 不支持运行时代理组切换，请重新应用配置')

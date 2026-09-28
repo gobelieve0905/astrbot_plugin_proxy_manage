@@ -19,7 +19,11 @@ class SingBoxAdapter(CoreAdapter):
     def capabilities(self) -> dict:
         return {'id':self.id,'protocols':{'anytls','http','https','socks','socks5','socks5h'},
                 'groups':{'select','url-test'},'rules':{'DOMAIN','DOMAIN-SUFFIX'},'probe':True,'group_probe':True,
-                'hot_reload':True,'inspect':True,'platforms':['linux','darwin','windows']}
+                'hot_reload':True,'inspect':True,'platforms':['linux','darwin','windows'],
+                'verification':self.verification_levels()}
+
+    def verification_levels(self) -> dict:
+        return {'configuration':'full','runtime':'full','connection':'full','egress':'request'}
 
     def artifact(self) -> dict:
         return json.loads(Path(__file__).with_name('sing_box_artifacts.json').read_text(encoding='utf-8'))
@@ -118,7 +122,25 @@ class SingBoxAdapter(CoreAdapter):
         result.append(('MATCH','',document.get('route',{}).get('final','')))
         return result
 
-    def verify(self, document: dict, runtime: object, proxies: object, rules: object) -> list[str]:
+    @staticmethod
+    def _runtime_rule(value: object) -> tuple[str,str,str] | None:
+        if not isinstance(value,dict):
+            return None
+        if value.get('domain'):
+            kind,payload='DOMAIN',value['domain'][0]
+        elif value.get('domain_suffix'):
+            kind,payload='DOMAIN-SUFFIX',value['domain_suffix'][0]
+        elif str(value.get('type','')).upper() in {'DOMAIN','DOMAIN-SUFFIX'}:
+            kind=str(value.get('type')).upper(); payload=str(value.get('payload',''))
+        else:
+            kind,payload='',''
+        target=value.get('outbound') or value.get('proxy') or value.get('outboundTag') or ''
+        if not kind and not target:
+            return None
+        return kind,str(payload),str(target)
+
+    def verify(self, document: dict, runtime: object, proxies: object, rules: object,
+               connections: object = None) -> list[str]:
         errors=[]
         if not isinstance(proxies,dict): return ['无法读取 sing-box 运行出站']
         for item in document.get('outbounds',[]):
@@ -130,7 +152,16 @@ class SingBoxAdapter(CoreAdapter):
                 if members!=item.get('outbounds'): errors.append('sing-box 代理组成员不一致 '+item['tag'])
                 if actual.get('now') not in item.get('outbounds',[]): errors.append('sing-box 代理组选择状态无效 '+item['tag'])
         expected=self.expected_rules(document)
-        if rules is not None and rules!=expected: errors.append('sing-box 运行规则内容或顺序不一致')
+        if not isinstance(rules,list):
+            errors.append('无法读取 sing-box 运行规则核对证据')
+        else:
+            actual_rules=[item for value in rules if (item:=self._runtime_rule(value)) is not None]
+            if actual_rules!=expected:
+                errors.append('sing-box 运行规则内容或顺序不一致')
+        if not isinstance(connections,list):
+            errors.append('无法读取 sing-box 连接链路核对证据')
+        elif any(not isinstance(item,dict) for item in connections):
+            errors.append('sing-box 连接链路核对证据格式无效')
         return errors
 
     def fail_closed_document(self, control: dict, entry: dict) -> dict:
@@ -144,14 +175,20 @@ class SingBoxAdapter(CoreAdapter):
         if not control.get('enabled') or not control.get('url'): raise ValueError('尚未配置 sing-box 控制接口')
         return control,({'Authorization':'Bearer '+control['secret']} if control.get('secret') else {})
 
-    def inspect(self, state: dict, application: dict, runtime: object=None, proxies: object=None, rules: object=None, version: str='') -> dict:
+    def inspect(self, state: dict, application: dict, runtime: object=None, proxies: object=None,
+                rules: object=None, version: str='', connections: object=None) -> dict:
         expected=self.render(state); saved=self.revision(expected); applied=application.get('applied_revision','')
         base={'ready':True,'version':version,'adapter':self.id,'deployment':'dedicated','scope':'full',
               'saved_revision':saved,'applied_revision':applied}
         if application.get('status')=='restore_failed': return {**base,'state':'restore_failed','ready':False,'message':'sing-box 恢复失败'}
+        if application.get('status')=='running_unverified':
+            return {**base,'state':'running_unverified','ready':False,
+                    'message':application.get('message') or 'sing-box 已运行，但规则或连接链路证据不足'}
         if not applied: return {**base,'state':'saved','message':'sing-box 配置尚未应用'}
         if saved!=applied: return {**base,'state':'pending_apply','message':'sing-box 配置等待应用'}
-        errors=self.verify(expected,runtime,proxies,rules)
+        errors=self.verify(expected,runtime,proxies,rules,connections)
+        if any('核对证据' in item for item in errors):
+            return {**base,'state':'running_unverified','ready':False,'message':errors[0]}
         if errors: return {**base,'state':'runtime_inconsistent','message':errors[0]}
         return {**base,'state':'applied','message':'sing-box 运行配置与已应用修订一致','proxy_entry':self.public_entry(state['proxy_entry'])}
 
@@ -163,14 +200,40 @@ class SingBoxAdapter(CoreAdapter):
             if not match or tuple(map(int,match.groups()))<(1,12,0):
                 return {'state':'version_unsupported','ready':False,'adapter':self.id,'message':'需要 sing-box 1.12.0 或更高版本','version':raw}
             response=await client.get('/proxies'); response.raise_for_status(); proxies=response.json().get('proxies',{})
-        return {'version':raw,'runtime':{'mode':'rule'},'proxies':proxies,'rules':None}
+
+            async def optional(path, key):
+                try:
+                    result=await client.get(path); result.raise_for_status()
+                except StopAsyncIteration:
+                    return None
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code in {404,405,501}:
+                        return None
+                    raise
+                payload=result.json()
+                if isinstance(payload,dict):
+                    value=payload.get(key)
+                    return value if isinstance(value,list) else payload.get('items',value)
+                return payload if isinstance(payload,list) else None
+
+            runtime_rules=await optional('/rules','rules')
+            connections=await optional('/connections','connections')
+        return {'version':raw,'runtime':{'mode':'rule'},'proxies':proxies,
+                'rules':runtime_rules,'connections':connections}
 
     async def apply(self, state: dict, document: dict, *, supervisor=None, binary=None, config=None):
         if supervisor is None or binary is None or config is None:
             raise ValueError('sing-box 应用配置需要受监督重启上下文')
         await self.restart(supervisor,binary,config)
-        fetched=await self.fetch_runtime(state); errors=self.verify(document,fetched['runtime'],fetched['proxies'],fetched['rules'])
-        if errors: raise ValueError('；'.join(errors))
+        fetched=await self.fetch_runtime(state)
+        errors=self.verify(document,fetched['runtime'],fetched['proxies'],fetched.get('rules'),fetched.get('connections'))
+        if errors and not any('核对证据' in item for item in errors):
+            raise ValueError('；'.join(errors))
+        if errors:
+            return {'status':'running_unverified',
+                    'verification':{'configuration':'full','runtime':'partial','connection':'partial','egress':'request'},
+                    'message':'sing-box 已运行，但规则或连接链路核对证据不可用：'+errors[0]}
+        return self.application_result({'configuration':'full','runtime':'full','connection':'full','egress':'request'})
 
     async def select(self, state: dict, group: dict, node: dict):
         control,headers=self.control(state); name=group.get('kernel_name','group-'+group['id'])

@@ -15,6 +15,9 @@ def verified_recovery_document(application: object, adapter=None) -> dict|None:
     adapter=adapter or current_adapter()
     if not isinstance(application,dict) or application.get('status') not in {'applied','pending_apply'}:
         return None
+    levels=adapter.verification_levels()
+    if levels.get('runtime') != 'full' or levels.get('connection') != 'full':
+        return None
     recorded=str(application.get('adapter') or 'mihomo')
     if recorded!=adapter.id: return None
     document=application.get('document')
@@ -51,27 +54,35 @@ async def apply_runtime(state: dict, previous: dict, persist, event, adapter=Non
              'applied_revision':previous.get('applied_revision',''),
              'document':previous.get('document'),'message':'正在应用候选配置'})
     try:
-        await adapter.apply(state, document, **runtime)
+        apply_result=await adapter.apply(state, document, **runtime)
     except Exception as apply_error:
-        restored=False; restore_message=''
+        restored=False; restore_message=''; restore_result={}
         try:
-            await adapter.apply(state, recovery, **runtime)
+            restore_result=adapter.application_result(await adapter.apply(state, recovery, **runtime))
             restored=True
         except Exception as restore_error:
             restore_message=str(restore_error)
-        status='pending_apply' if restored and recovery_kind=='previous_verified' else ('fail_closed' if restored else 'restore_failed')
+        status='running_unverified' if restored and restore_result.get('status')=='running_unverified' else (
+            'pending_apply' if restored and recovery_kind=='previous_verified' else ('fail_closed' if restored else 'restore_failed'))
         message=(
-            '候选配置应用或核对失败，已恢复上一份已验证配置并重新核对'
+            '候选配置应用或核对失败，已恢复上一份配置但运行证据不足'
+            if restored and restore_result.get('status')=='running_unverified' else
+            ('候选配置应用或核对失败，已恢复上一份已验证配置并重新核对'
             if restored and recovery_kind=='previous_verified' else
-            ('候选配置失败，未找到已验证配置；已写入并核对 MATCH,REJECT 失败关闭配置' if restored else '候选配置失败，且运行配置恢复核对失败')
+            ('候选配置失败，未找到已验证配置；已写入并核对 MATCH,REJECT 失败关闭配置' if restored else '候选配置失败，且运行配置恢复核对失败'))
         )
         persist({'status':status,'adapter':adapter.id,'saved_revision':revision,
-                 'applied_revision':previous.get('applied_revision','') if recovery_kind=='previous_verified' else '',
-                 'document':recovery if restored else previous.get('document'),
+                 'applied_revision':previous.get('applied_revision','') if recovery_kind=='previous_verified' and status!='running_unverified' else '',
+                 'document':recovery if restored else None,
+                 'verification':restore_result.get('verification',{}),
                  'message':message})
         event({'action':'runtime_apply','result':status,'message':str(apply_error),'restore':restore_message})
         return {'ok':False,'status':status,'message':message}
-    persist({'status':'applied','adapter':adapter.id,'saved_revision':revision,'applied_revision':revision,
-             'document':document,'message':'候选配置已应用并完整核对'})
-    event({'action':'runtime_apply','result':'ok','revision':revision,'adapter':adapter.id})
-    return {'ok':True,'applied':True,'status':'applied','saved_revision':revision,'applied_revision':revision}
+    outcome=adapter.application_result(apply_result)
+    status=str(outcome.get('status') or 'applied')
+    message=outcome.get('message') or '候选配置已应用并完整核对'
+    persist({'status':status,'adapter':adapter.id,'saved_revision':revision,'applied_revision':revision,
+             'document':document,'verification':outcome.get('verification',{}),'message':message})
+    event({'action':'runtime_apply','result':status,'revision':revision,'adapter':adapter.id})
+    return {'ok':status=='applied','applied':status=='applied','status':status,
+            'saved_revision':revision,'applied_revision':revision,'message':message}

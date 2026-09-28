@@ -285,7 +285,7 @@ class ProxyManager(Star):
                 return value if isinstance(value,dict) else {}
             except (OSError,ValueError): return {}
         current=load(self.runtime_path)
-        if current.get('status') in {'fail_closed','restore_failed','saved'}:
+        if current.get('status') in {'fail_closed','restore_failed','saved','running_unverified'}:
             return current
         if self._verified_recovery_document(current):
             return current
@@ -459,9 +459,13 @@ class ProxyManager(Star):
             try: saved_revision=self._adapter().revision(self._runtime_document())
             except (ValueError,TypeError): saved_revision=''
             applied_revision=self.runtime_application.get('applied_revision','')
-            status='applied' if saved_revision and saved_revision==applied_revision else ('pending_apply' if applied_revision else 'saved')
+            current_status=self.runtime_application.get('status')
+            status=current_status if current_status=='running_unverified' and saved_revision==applied_revision else (
+                'applied' if saved_revision and saved_revision==applied_revision else ('pending_apply' if applied_revision else 'saved'))
             application={**self.runtime_application,'status':status,'saved_revision':saved_revision,'updated_at':int(time.time()),
-                         'message':'配置已应用' if status=='applied' else ('配置已变更，等待应用' if status=='pending_apply' else '配置已保存，尚未应用')}
+                         'message':('配置已应用并完成运行核对' if status=='applied' else
+                                    ('内核已运行但无法判定，等待完整证据' if status=='running_unverified' else
+                                     ('配置已变更，等待应用' if status=='pending_apply' else '配置已保存，尚未应用')))}
             try: self._persist_runtime_application(application)
             except OSError: logger.warning('运行配置修订状态写入失败')
 
@@ -697,7 +701,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.21'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.22'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -874,7 +878,7 @@ class ProxyManager(Star):
                 url=str(entry.get('url','')).strip(); name=entry['name']
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.21'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.22'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -952,7 +956,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.21'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.22'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1078,7 +1082,9 @@ class ProxyManager(Star):
         try:
             fetched=await adapter.fetch_runtime(self.state)
             if fetched.get('state'): return fetched
-            return adapter.inspect(self.state, getattr(self,'runtime_application',{}), fetched.get('runtime'), fetched.get('proxies'), fetched.get('rules'), fetched.get('version',''))
+            return adapter.inspect(self.state, getattr(self,'runtime_application',{}), fetched.get('runtime'),
+                                   fetched.get('proxies'), fetched.get('rules'), fetched.get('version',''),
+                                   fetched.get('connections'))
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in {401,403}:
                 return {'state':'auth_failed','ready':False,'adapter':adapter.id,'message':'内核控制接口认证失败'}
@@ -1313,11 +1319,14 @@ class ProxyManager(Star):
                     if not process.get('ready',False):
                         raise RuntimeError(process.get('message','目标内核启动失败'))
                     config_path=self._write_kernel_config(document)
-                    await adapter.apply(candidate,document,**self._adapter_apply_runtime(config_path))
+                    apply_result=await adapter.apply(candidate,document,**self._adapter_apply_runtime(config_path))
                     revision=adapter.revision(document)
-                    self._persist_runtime_application({'status':'applied','adapter':adapter.id,'saved_revision':revision,
-                                                       'applied_revision':revision,'document':document,'updated_at':int(time.time()),
-                                                       'message':'切换内核后已应用当前配置并完成运行核对'})
+                    outcome=adapter.application_result(apply_result)
+                    application_status=str(outcome.get('status') or 'applied')
+                    self._persist_runtime_application({'status':application_status,'adapter':adapter.id,'saved_revision':revision,
+                                                       'applied_revision':revision,'document':document,'verification':outcome.get('verification',{}),
+                                                       'updated_at':int(time.time()),
+                                                       'message':outcome.get('message') or '切换内核后已应用当前配置并完成运行核对'})
                     self._sync_owned_proxy_environment()
                 except Exception:
                     try: await adapter.stop(self.supervisor)
@@ -1332,12 +1341,13 @@ class ProxyManager(Star):
                         await self._start_owned_kernel()
                     self._sync_owned_proxy_environment()
                     raise
-            self.event({'action':'adapter_select','adapter':adapter_id,'result':'ok','configuration':'applied',
+            configuration=self.runtime_application.get('status','applied')
+            self.event({'action':'adapter_select','adapter':adapter_id,'result':'ok','configuration':configuration,
                         'revision':self.runtime_application.get('applied_revision','')})
             return json_response({'adapter':adapter_id,'artifact':self.artifacts.status(),'process':process,
-                                  'configuration':'applied','applied_revision':self.runtime_application.get('applied_revision','')})
-        except (ValueError,OSError,RuntimeError) as exc:
-            return error_response(str(exc),status_code=400)
+                                  'configuration':configuration,'applied_revision':self.runtime_application.get('applied_revision','')})
+        except Exception as exc:
+            return error_response(str(exc) if isinstance(exc,ValueError) else '内核切换失败，请检查内核日志',status_code=400)
 
     def _runtime_document(self) -> dict:
         adapter=self._adapter()
@@ -1405,35 +1415,58 @@ class ProxyManager(Star):
                                                    'document':previous.get('document'),'updated_at':int(time.time()),'message':'正在应用候选配置'})
                 try:
                     config_path=self._write_kernel_config(document)
-                    await adapter.apply(self.state,document,**self._adapter_apply_runtime(config_path))
-                except (ValueError,httpx.HTTPError,OSError) as apply_error:
+                    apply_result=await adapter.apply(self.state,document,**self._adapter_apply_runtime(config_path))
+                except Exception as apply_error:
                     restored=False; restore_message=''
+                    restore_result={}
                     try:
                         config_path=self._write_kernel_config(recovery)
-                        await adapter.apply(self.state,recovery,**self._adapter_apply_runtime(config_path))
+                        restore_result=adapter.application_result(
+                            await adapter.apply(self.state,recovery,**self._adapter_apply_runtime(config_path)))
                         restored=True
-                    except (ValueError,httpx.HTTPError,OSError) as restore_error:
+                    except Exception as restore_error:
                         restore_message=safe_error(restore_error)
-                    status='pending_apply' if restored and recovery_kind=='previous_verified' else ('fail_closed' if restored else 'restore_failed')
+                    restored_status=str(restore_result.get('status') or '') if isinstance(restore_result,dict) else ''
+                    if restored and restored_status=='running_unverified':
+                        status='running_unverified'
+                    else:
+                        status='pending_apply' if restored and recovery_kind=='previous_verified' else ('fail_closed' if restored else 'restore_failed')
                     message=(
-                        '候选配置应用或核对失败，已恢复上一份已验证配置并重新核对'
+                        '候选配置应用或核对失败，已恢复上一份配置但运行证据不足'
+                        if restored and restored_status=='running_unverified' else
+                        ('候选配置应用或核对失败，已恢复上一份已验证配置并重新核对'
                         if restored and recovery_kind=='previous_verified' else
-                        ('候选配置失败，未找到已验证配置；已写入并核对 MATCH,REJECT 失败关闭配置' if restored else '候选配置失败，且运行配置恢复核对失败')
+                        ('候选配置失败，未找到已验证配置；已写入并核对 MATCH,REJECT 失败关闭配置' if restored else '候选配置失败，且运行配置恢复核对失败'))
                     )
                     self._persist_runtime_application({'status':status,'adapter':adapter.id,'saved_revision':revision,
-                                                       'applied_revision':previous.get('applied_revision','') if recovery_kind=='previous_verified' else '',
-                                                       'document':recovery if restored else previous.get('document'),
+                                                       'applied_revision':previous.get('applied_revision','') if recovery_kind=='previous_verified' and status!='running_unverified' else '',
+                                                       'document':recovery if restored else None,
+                                                       'verification':restore_result.get('verification',{}) if isinstance(restore_result,dict) else {},
                                                        'updated_at':int(time.time()),'message':message})
                     self.event({'action':'runtime_apply','result':status,'message':safe_error(apply_error),'restore':safe_error(restore_message)})
                     return error_response(message,status_code=500)
-                application={'status':'applied','adapter':adapter.id,'saved_revision':revision,'applied_revision':revision,
-                             'document':document,'updated_at':int(time.time()),'message':'候选配置已应用并完整核对'}
+                outcome=adapter.application_result(apply_result)
+                application_status=str(outcome.get('status') or 'applied')
+                application={'status':application_status,'adapter':adapter.id,'saved_revision':revision,'applied_revision':revision,
+                             'document':document,'verification':outcome.get('verification',{}),'updated_at':int(time.time()),
+                             'message':outcome.get('message') or '候选配置已应用并完整核对'}
                 self._persist_runtime_application(application)
-                self.event({'action':'runtime_apply','result':'ok','revision':revision,'adapter':adapter.id})
-                return json_response({'applied':True,'status':'applied','saved_revision':revision,'applied_revision':revision,'adapter':adapter.id})
-            except (ValueError,httpx.HTTPError,OSError) as exc:
+                self.event({'action':'runtime_apply','result':application_status,'revision':revision,'adapter':adapter.id})
+                return json_response({'applied':application_status=='applied','status':application_status,
+                                      'saved_revision':revision,'applied_revision':revision,'adapter':adapter.id,
+                                      'message':application['message']})
+            except Exception as exc:
+                current=getattr(self,'runtime_application',{})
+                if isinstance(current,dict) and current.get('status')=='applying':
+                    try:
+                        self._persist_runtime_application({**current,'status':'restore_failed','applied_revision':'',
+                                                           'document':None,'updated_at':int(time.time()),
+                                                           'message':'候选配置应用异常，事务状态已标记为恢复失败：'+safe_error(exc)})
+                    except Exception:
+                        logger.exception('运行配置异常状态写入失败')
                 self.event({'action':'runtime_apply','result':'failed','message':safe_error(exc)})
-                return error_response(str(exc) if isinstance(exc,ValueError) else '内核配置应用失败，请检查控制接口和内核日志')
+                return error_response(str(exc) if isinstance(exc,ValueError) else '内核配置应用失败，请检查控制接口和内核日志',
+                                      status_code=400 if isinstance(exc,ValueError) else 500)
 
     def _set_health(self,node:dict,status:str,latency:int|None=None,error:str=''):
         executor=node.get('executor') or ('direct-http' if node.get('protocol') in {'http','https','socks','socks5','socks5h'} else self._adapter().id)
@@ -1773,7 +1806,7 @@ class ProxyManager(Star):
         http_url,socks_url=self._entry_urls(); status=self.astrbot_proxy.mark_started(http_url,socks_url)
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.21 已加载')
+        logger.info('代理管理中心 0.3.22 已加载')
 
     async def terminate(self):
         if self.auto_task:

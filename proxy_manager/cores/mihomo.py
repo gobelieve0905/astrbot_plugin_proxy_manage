@@ -25,7 +25,11 @@ class MihomoAdapter(CoreAdapter):
             'rules':set(RULE_TYPE_SET),
             'probe':True,'group_probe':True,'hot_reload':True,'inspect':True,
             'platforms':['linux','darwin','windows'],
+            'verification':self.verification_levels(),
         }
+
+    def verification_levels(self) -> dict:
+        return {'configuration':'full','runtime':'full','connection':'full','egress':'request'}
 
     def artifact(self) -> dict:
         return json.loads((Path(__file__).with_name('mihomo_artifacts.json')).read_text(encoding='utf-8'))
@@ -167,7 +171,8 @@ class MihomoAdapter(CoreAdapter):
             return None
         return kind,payload,target
 
-    def verify(self, document: dict, runtime: object, proxies: object, rules: object) -> list[str]:
+    def verify(self, document: dict, runtime: object, proxies: object, rules: object,
+               connections: object = None) -> list[str]:
         errors=[]
         if not isinstance(runtime,dict) or runtime.get('mode')!='rule': errors.append('运行模式不是 rule')
         if not isinstance(proxies,dict): return errors+['无法读取运行代理']
@@ -205,7 +210,8 @@ class MihomoAdapter(CoreAdapter):
         if not control['enabled'] or not control['url']: raise ValueError('尚未配置内核控制接口地址和密钥')
         return control,({'Authorization':'Bearer '+control['secret']} if control['secret'] else {})
 
-    def inspect(self, state: dict, application: dict, runtime: object=None, proxies: object=None, rules: object=None, version: str='') -> dict:
+    def inspect(self, state: dict, application: dict, runtime: object=None, proxies: object=None,
+                rules: object=None, version: str='', connections: object=None) -> dict:
         control=state['control']
         if not control['enabled'] or not control['url']:
             return {'state':'not_configured','ready':False,'message':'尚未配置内核控制接口地址和密钥',
@@ -289,6 +295,7 @@ class MihomoAdapter(CoreAdapter):
                 else:
                     break
         if errors: raise ValueError('；'.join(errors))
+        return self.application_result({'configuration':'full','runtime':'full','connection':'full','egress':'request'})
 
     async def select(self, state: dict, group: dict, node: dict):
         control,headers=self.control(state)

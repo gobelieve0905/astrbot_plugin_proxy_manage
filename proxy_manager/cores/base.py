@@ -30,9 +30,11 @@ class CoreAdapter(ABC):
     async def fetch_runtime(self, state: dict) -> dict: ...
     @abstractmethod
     def inspect(self, state: dict, application: dict, runtime: object=None,
-                proxies: object=None, rules: object=None, version: str='') -> dict: ...
+                proxies: object=None, rules: object=None, version: str='',
+                connections: object=None) -> dict: ...
     @abstractmethod
-    def verify(self, document: dict, runtime: object, proxies: object, rules: object) -> list[str]: ...
+    def verify(self, document: dict, runtime: object, proxies: object, rules: object,
+               connections: object = None) -> list[str]: ...
     @abstractmethod
     def expected_rules(self, document: dict) -> list: ...
     @abstractmethod
@@ -80,6 +82,31 @@ class CoreAdapter(ABC):
     def redact(self, document: dict) -> dict:
         from ..domain.security import redact_config
         return redact_config(copy.deepcopy(document))
+
+    def verification_levels(self) -> dict:
+        """Describe what evidence this adapter can actually produce.
+
+        The values are deliberately small and stable so callers can render the
+        same capability matrix for every adapter without knowing core details.
+        """
+        return {
+            'configuration': 'full',
+            'runtime': 'unavailable',
+            'connection': 'unavailable',
+            'egress': 'unavailable',
+        }
+
+    def application_result(self, verification: dict | None = None) -> dict:
+        levels = self.verification_levels()
+        source = verification if isinstance(verification, dict) else {}
+        verification = source.get('verification') if isinstance(source.get('verification'), dict) else source
+        if levels.get('runtime') == 'full' and levels.get('connection') == 'full':
+            return {**source, 'status': 'applied', 'verification': verification}
+        return {**source,
+            'status': 'running_unverified',
+            'verification': verification,
+            'message': '内核已运行，但当前适配器无法提供完整运行证据',
+        }
 
     @staticmethod
     def public_entry(entry: dict) -> dict:
