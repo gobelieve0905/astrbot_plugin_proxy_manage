@@ -8,7 +8,7 @@ if (!api || typeof api.ready !== 'function') {
 }
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',control:'内核管理',logs:'审计历史'}
 const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名、模板和目标出口',control:'管理插件自有内核、制品与运行配置',logs:'查看配置修改、订阅、内核和连接验证事件'}
-  let state, original, tab='overview', controlResult=null, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set(), ruleEditorMode='rows', subscriptionDialogReturnFocus=null, subscriptionDialogId='', subscriptionDialogEditing=false, subscriptionDialogDraft=null, auditDialogReturnFocus=null, auditDialogEventIndex=-1
+  let state, original, tab='overview', controlResult=null, groupStatusFetchedAt=0, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set(), ruleEditorMode='rows', subscriptionDialogReturnFocus=null, subscriptionDialogId='', subscriptionDialogEditing=false, subscriptionDialogDraft=null, auditDialogReturnFocus=null, auditDialogEventIndex=-1
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
 let noticeTimer=null
@@ -289,7 +289,7 @@ function render(){
   } else if(tab==='groups'){
     const runtimeGroups=new Map((controlResult?.groups||[]).map(group=>[group.id,group]))
     const groups=editableGroups()
-    html=`<section class="panel groups-panel"><div class="bar"><div><h2>代理组</h2><p class="muted panel-lede">每个代理组的配置和内核状态收在同一项中，展开后管理节点与运行操作。</p></div><div class="actions"><button id="group-runtime-refresh">刷新状态</button><button id="add" class="primary">新增代理组</button></div></div>
+    html=`<section class="panel groups-panel"><div class="bar"><div><h2>代理组</h2><p class="muted panel-lede">每个代理组的配置和内核状态收在同一项中，展开后管理节点与运行操作；打开页面时静默读取，点击“刷新状态”才主动重新读取。</p></div><div class="actions"><button id="group-runtime-refresh">刷新状态</button><button id="add" class="primary">新增代理组</button></div></div>
       <p class="muted group-config-note">保存页面配置后，还需在“内核管理”点击“应用代理配置”才会写入当前内核。直连是内核内部默认目标，不作为可编辑代理组展示。</p>
       ${groups.map(({group,index})=>{const members=groupMembers(group),selected=group.mode==='select'&&state.nodes.find(node=>node.id===group.selected),runtime=runtimeGroups.get(group.id),summary=runtimeGroupSummary(runtime),opened=openGroupIds.has(group.id),probe=runtime?.last_probe,probing=groupProbeRunning.has(group.id),error=groupProbeErrors[group.id],canProbe=Boolean(controlResult?.group_probe_supported&&runtime?.runtime_available);return `<details class="group-accordion" data-group-accordion="${esc(group.id)}" data-group-id="${esc(group.id)}" ${opened?'open':''}><summary><span class="group-summary-copy"><b>${esc(group.name)}</b><small>${esc(groupModeLabels[group.mode]||group.mode)} · ${members.length} 个成员 · 当前：${esc(summary.current)}</small></span><span class="chip ${summary.className}">${summary.label}</span><span class="group-summary-toggle" aria-hidden="true"></span></summary><div class="group-accordion-body"><div class="group-accordion-toolbar"><div class="group-card-meta"><span>成员：${members.length}</span>${selected?`<span>初始：${esc(nodeLabel(selected))}</span>`:''}${group.mode!=='select'?`<span>策略：${esc(groupStrategy(group.mode).title)}</span><span>测速：每 ${esc(group.test_interval||300)} 秒</span>`:''}</div><div class="group-card-actions"><button type="button" data-edit-group="${esc(group.id)}">编辑配置</button><button type="button" data-del="groups" class="danger">删除</button></div></div><div class="group-card-members">${members.map(node=>`<span class="chip" title="${esc(nodeDetails(node))}">${esc(nodeLabel(node))}</span>`).join('')||'<span class="muted">尚未选择节点</span>'}</div><section class="group-runtime-inline" aria-label="${esc(group.name)}运行状态"><div class="runtime-group-head"><div><b>运行状态</b><small>${esc(runtime?.type||groupModeLabels[group.mode]||'运行组')}</small></div><button type="button" data-group-probe="${esc(group.id)}" ${canProbe&&!probing?'':'disabled'}>${probing?'测速中…':'核对选优'}</button></div><div class="runtime-group-facts"><div><span>当前连接节点</span><b>${esc(runtime?.selected_node_id?runtimeNodeLabel({id:runtime.selected_node_id}):runtime?.selected_display_name||'无')}</b></div><div><span>最近选优核对</span><b>${probe?`${esc(probe.latency_ms)} ms`:'-- ms'}</b><small>${probe?`${esc(probe.node_name||'测速节点')} · ${time(probe.checked_at)}${probe.stale?' · 配置已变更':''}`:'尚未核对'}</small></div></div>${group.mode==='url-test'?'<small class="runtime-group-note">内核按周期自动选优；“核对选优”只展示成员结果，不会手动固定节点。</small>':''}${probe?runtimeGroupProbeEvidence(probe):''}${error?`<p class="runtime-group-error" role="alert">${esc(error)}</p>`:''}${runtime?.runtime_available?`<label class="runtime-group-select"><span>切换当前节点</span><select data-select="${esc(group.id)}" aria-label="切换${esc(group.name)}的当前节点">${runtime.members.map(node=>`<option value="${esc(node.id)}" ${node.id===runtime.selected_node_id?'selected':''} ${node.available?'':'disabled'}>${esc(runtimeNodeLabel(node))}${node.available?'':'（不可用）'}</option>`).join('')}</select></label>`:''}${!canProbe?`<small class="runtime-group-note">${controlResult?.adapter==='xray'?'当前内核不支持代理组控制面测速。':controlResult?.group_probe_message||(!runtime?.runtime_available?'代理组尚未应用到当前内核。':'当前内核不支持代理组测速。')}</small>`:''}</section></div></details>`}).join('')||'<div class="group-empty"><b>还没有代理组</b><span>新增代理组后，可在同一项中查看配置和运行状态。</span></div>'}</section>`
   } else if(tab==='routes'){
@@ -701,7 +701,7 @@ function bind(){
   $('astrbot-proxy-enable')?.addEventListener('click',async()=>{try{const result=await api.apiPost('astrbot-proxy-enable',{});await load();note(result.message)}catch(error){note(error.message,true)}})
   $('astrbot-proxy-restore')?.addEventListener('click',async()=>{try{const result=await api.apiPost('astrbot-proxy-restore',{});await load();note(result.message)}catch(error){note(error.message,true)}})
   $('control-status')?.addEventListener('click',checkControl)
-  $('group-runtime-refresh')?.addEventListener('click',refreshGroupStatus)
+  $('group-runtime-refresh')?.addEventListener('click',()=>refreshGroupStatus({force:true}))
   document.querySelectorAll('[data-group-probe]').forEach(button=>button.addEventListener('click',()=>runGroupProbe(button.dataset.groupProbe)))
   $('refresh-kernels')?.addEventListener('click',async()=>{await load();if(tab==='control')note('内核资源状态已刷新')})
   $('check-all-kernels')?.addEventListener('click',checkAllKernelUpdates)
@@ -823,7 +823,7 @@ async function applyConfiguration(){
     await api.apiPost('runtime-apply',{})
     stage='刷新状态'
     await load()
-    if(tab==='groups')controlResult=await api.apiGet('control-status')
+    if(tab==='groups'){controlResult=await api.apiGet('control-status');groupStatusFetchedAt=Date.now()}
     render(); note('配置已保存、应用并完成运行状态核对')
   }catch(error){
     try{await load()}catch{}
@@ -853,13 +853,16 @@ async function refreshSubscription(id){
   try{ note('正在刷新订阅...'); const result=await api.apiPost('subscription-refresh',{id});state=result.snapshot;original=structuredClone(state);render();const d=result.result.diff;note(`订阅刷新成功：新增 ${d.added.length}、变更 ${d.changed.length}、删除 ${d.deleted.length}、未变 ${d.unchanged.length}`) }catch(error){note(error.message,true)}
 }
 async function checkControl(){
-  try{ kernelStatus=await api.apiGet('kernel-status');controlResult=kernelStatus.ready?await api.apiGet('control-status'):null;render();note(kernelStatus.message,!kernelStatus.ready) }catch(error){note(error.message,true)}
+  try{ kernelStatus=await api.apiGet('kernel-status');controlResult=kernelStatus.ready?await api.apiGet('control-status'):null;groupStatusFetchedAt=controlResult?Date.now():0;render();note(kernelStatus.message,!kernelStatus.ready) }catch(error){note(error.message,true)}
 }
-async function refreshGroupStatus(){try{controlResult=await api.apiGet('control-status');render();note('代理组运行状态已刷新')}catch(error){controlResult=null;render();note(error.message,true)}}
+async function refreshGroupStatus({silent=false,force=false}={}){
+  if(!force&&controlResult&&Date.now()-groupStatusFetchedAt<10000){render();return}
+  try{controlResult=await api.apiGet('control-status');groupStatusFetchedAt=Date.now();render();if(!silent)note('代理组运行状态已刷新')}catch(error){controlResult=null;groupStatusFetchedAt=0;render();if(!silent)note(error.message,true)}
+}
 async function runGroupProbe(groupId){
   if(groupProbeRunning.has(groupId))return
   groupProbeRunning.add(groupId);delete groupProbeErrors[groupId];render()
-  try{await api.apiPost('control-group-probe',{group_id:groupId,timeout:8});controlResult=await api.apiGet('control-status');note('代理组测速完成')}
+  try{await api.apiPost('control-group-probe',{group_id:groupId,timeout:8});controlResult=await api.apiGet('control-status');groupStatusFetchedAt=Date.now();note('代理组测速完成')}
   catch(error){groupProbeErrors[groupId]=error.message;note(error.message,true)}
   finally{groupProbeRunning.delete(groupId);render()}
 }
@@ -880,11 +883,11 @@ async function pollProbe(){
   if(!probeTask)return
   try{const task=await api.apiPost('probe-task-status',{task_id:probeTask.id});probeTask=task;for(const result of task.results)if(result.health)state.health[result.node_id]=result.health;render();if(task.status==='running')setTimeout(pollProbe,500);else note(`${probeLabel}完成：${task.summary.ok} 可用，${task.summary.error+task.summary.timeout} 失败，${task.summary.skipped} 未执行，${task.summary.cancelled} 已取消`)}catch(error){note(error.message,true)}
 }
-async function load(){ try{ state=await api.apiGet('state');selectedProbeNodeIds=new Set([...selectedProbeNodeIds].filter(id=>state.nodes.some(node=>node.id===id)));kernelStatus=await api.apiGet('kernel-status');original=structuredClone(state);controlResult=null;importPreview=null;if($('subscription-import-dialog')?.open)$('subscription-import-dialog').close();render();for(const item of (state.adapters||[]))if(item.install?.state==='running')pollKernelInstall(item.id) }catch(error){note(error.message,true)} }
+async function load(){ try{ state=await api.apiGet('state');selectedProbeNodeIds=new Set([...selectedProbeNodeIds].filter(id=>state.nodes.some(node=>node.id===id)));kernelStatus=await api.apiGet('kernel-status');original=structuredClone(state);controlResult=null;groupStatusFetchedAt=0;importPreview=null;if($('subscription-import-dialog')?.open)$('subscription-import-dialog').close();render();for(const item of (state.adapters||[]))if(item.install?.state==='running')pollKernelInstall(item.id) }catch(error){note(error.message,true)} }
 
-document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render();if(tab==='groups')refreshGroupStatus()}))
+document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render();if(tab==='groups')refreshGroupStatus({silent:true})}))
   $('reload').addEventListener('click',load)
-  $('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('rollback',{});original=structuredClone(state);controlResult=null;importPreview=null;render();note('已恢复上一版配置')}catch(error){note(error.message,true)}})
+  $('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('rollback',{});original=structuredClone(state);controlResult=null;groupStatusFetchedAt=0;importPreview=null;render();note('已恢复上一版配置')}catch(error){note(error.message,true)}})
   $('save').addEventListener('click',()=>{
     const dialog=$('diff'),content=$('diff-content')
     try{
