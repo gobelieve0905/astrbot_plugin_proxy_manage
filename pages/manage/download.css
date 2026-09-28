@@ -1,7 +1,7 @@
 .runtime-control { display: grid; grid-template-columns: minmax(210px, 1fr) minmax(0, 2fr); align-items: end; gap: 14px; margin-top: 18px; }
 .runtime-control > label { display: grid; gap: 6px; color: var(--muted-strong); font-size: 12px; font-weight: 700; }
-.runtime-actions { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; width: 100%; }
-.runtime-actions button { flex: 1 1 120px; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; line-height: 1.3; }
+.runtime-actions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; min-width: 0; width: 100%; }
+.runtime-actions button { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
 .runtime-facts, .kernel-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
 .runtime-facts > div, .kernel-facts > div { min-width: 0; display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-subtle); }
 .runtime-facts span, .kernel-facts span { color: var(--muted); font-size: 11px; font-weight: 650; }
