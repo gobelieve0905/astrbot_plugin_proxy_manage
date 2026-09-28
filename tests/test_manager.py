@@ -179,6 +179,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertNotIn('data-kernel-enable',script)
         self.assertNotIn('data-kernel-select',script)
         self.assertIn('white-space: normal',styles)
+        self.assertIn('flex-wrap: wrap',styles)
         self.assertIn('data-kernel-file',script)
         self.assertIn('data-kernel-upload',script)
         self.assertLess(script.index('<h2>运行控制</h2>'),script.index('<h2>内核资源管理</h2>'))
