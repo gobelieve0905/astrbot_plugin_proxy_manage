@@ -48,9 +48,9 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | `AB-HTTP-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
 | `PROVIDER-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
-| `FEISHU-HTTP-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
-| `FEISHU-WS-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
-| `FEISHU-MEDIA-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
+| `FEISHU-HTTP-{D,N,A,R,F}` | D：统一入口已观测；N/A/R/F：待执行 | D：`MATCH`；其余待执行 | D：`DIRECT`；其余待执行 | D：无飞书响应出口 IP | `UNKNOWN` | 见下方 2026-09-29 记录 |
+| `FEISHU-WS-{D,N,A,R,F}` | D：`127.0.0.1:17890` | D：`Match` | D：`DIRECT` | 无出口 IP 回显 | `UNKNOWN` | 见下方 2026-09-29 记录 |
+| `FEISHU-MEDIA-{D,N,A,R,F}` | 未执行 | 未执行 | 未执行 | 未执行 | `UNKNOWN` | 尚无安全媒体测试请求 |
 | `TG-POLL-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
 | `TG-MEDIA-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
 | `PLUGIN-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
@@ -80,3 +80,20 @@
 - 失败关闭、插件热重载、AstrBot 重启后重新检查配置修订和流量状态；出现配置漂移、恢复失败或直连回落即不通过。
 
 当前提交只建立矩阵和记录规范；服务器未完成 50 个真实用例前，不在页面、README 或 CHANGELOG 中宣称矩阵已通过.
+
+## 2026-09-29 飞书全链路核验记录
+
+执行环境：服务器 AstrBot 容器，AstrBot `4.28.2`，插件 `0.4.0`。时间均为 `Asia/Shanghai`。本次没有发送业务消息。
+
+| 用例 | 入口 | 规则 | 节点链路 | 出口证据 | 结果 | 证据引用 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `FEISHU-HTTP-D` | 插件稳定入口 `http://127.0.0.1:17890`；通用 HTTPS 探测 `https://open.feishu.cn` 成功 | `MATCH` | `DIRECT` | HTTP `200`，但响应没有出口 IP，无法与出口地址关联 | `UNKNOWN` | 插件 verify-outbound 记录；同窗口 Mihomo `/connections` |
+| `FEISHU-WS-D` | Lark 适配器实际连接 `127.0.0.1:17890` | `Match` | `DIRECT` | Mihomo 连接记录显示远端 `183.60.232.39:443`，但没有代理出口 IP 回显；无节点链路 | `UNKNOWN` | Mihomo connection id `60915cfa-8e3e-4a15-9a92-87ead08e7d14`，`e75d5845-bf53-4a60-8bd4-c9b1b3644d33`；host `msg-frontier.feishu.cn`；开始时间 `11:34:35`、`11:34:47` |
+| `FEISHU-MEDIA-D` | 未执行 | 未执行 | 未执行 | 无证据 | `UNKNOWN` | 没有安全测试文件或媒体健康请求 |
+
+### 本次结论
+
+- 飞书 WebSocket 已确认进入插件管理的 Mihomo 入口，并产生真实 `msg-frontier.feishu.cn:443` 连接；当前策略是 `MATCH -> DIRECT`，因此没有代理节点链路。
+- 飞书 HTTP 只确认了统一入口和规则命中，缺少同次请求的出口 IP；不能据此宣称 HTTP 全链路通过。
+- 飞书媒体上传/下载没有执行，保持 `UNKNOWN`。
+- 指定节点、自动组、拒绝和失败关闭策略尚未对飞书三类传输执行，不能宣称用户已经能对这些流量逐项精准控制。
