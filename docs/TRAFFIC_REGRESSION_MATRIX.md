@@ -92,6 +92,15 @@
 | `FEISHU-MEDIA-D`（下载） | `127.0.0.1:17890`；Lark 收到 `[ComponentType.File]` | `Match` | `DIRECT` | 文件名 `ad-name-aggregated.xlsx` 进入附件输入，说明下载内容已交给 AstrBot 处理 | `PASS`（接管） | 服务器日志 `14:40:29`；Mihomo 连接 `16632bd3-c9f6-439f-834c-34ba1762c02d`、`8c09eafb-01ab-4037-9c90-c98714b1bec2`、`6407f6f7-88f9-4c78-9c65-458b3a923015`，目标 `open.feishu.cn:443` |
 | `FEISHU-MEDIA-D`（上传） | `127.0.0.1:17890`；Lark `CreateFile` + `CreateMessage` | `Match` | `DIRECT` | API 返回成功，消息 ID `om_x100b64825cddb8a8b30447540a05506`；测试文件已发送到指定 open_id | `PASS`（接管） | 实时监听连接 `c7ac9da6-f7c5-48b1-ac8a-a549b225f964`、`3cb40421-7f1d-4379-82af-fb1fc32a62ef`、`3668a679-3e09-42aa-b928-25917ee6e7fc`；目标 `open.feishu.cn:443`；时间 `14:56:32` |
 
+### 飞书规则组代理节点核验（自动组）
+
+服务器当前规则将 `open.feishu.cn` 匹配到 `Domain`，将 `*.feishu.cn` 匹配到 `DomainSuffix`，目标组为 `group-1790439179977`（`url-test` 自动组）。在插件重载并重新建立连接后，用户发送消息并收到机器人回复；实时 Mihomo 记录如下：
+
+| 用例 | 目标 | 入口 | 规则 | 实际节点链路 | 结果 | 证据引用 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `FEISHU-HTTP-A` | `open.feishu.cn:443` | `127.0.0.1:17890` | `Domain` | `node-sub-035507450c67-7abab1eeef148c01 -> group-1790439179977` | `PASS` | 连接 `0973a082-3b4f-4554-b390-5ed26a219951`、`b1f4a285-2f4b-4d1a-98e7-1a7c30321ffb`；时间 `15:07:46` |
+| `FEISHU-WS-A` | `msg-frontier.feishu.cn:443` | `127.0.0.1:17890` | `DomainSuffix` | `node-sub-035507450c67-7abab1eeef148c01 -> group-1790439179977` | `PASS` | 连接 `269bed0c-7eeb-4c98-b49f-1acc7bb46fa9`、`638f69bd-2deb-4e6e-af6f-78c582457a49`；时间 `15:07:28`、`15:07:29`；日志 `15:07:15` 收到消息、`15:07:21` 开始回复、`15:07:47` 流式卡片输出 |
+
 ### 本次结论
 
 - 飞书 WebSocket 已确认进入插件管理的 Mihomo 入口，并产生真实 `msg-frontier.feishu.cn:443` 连接；当前策略是 `MATCH -> DIRECT`，因此没有代理节点链路。
