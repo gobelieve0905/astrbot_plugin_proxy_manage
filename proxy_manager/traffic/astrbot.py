@@ -112,8 +112,10 @@ class AstrBotProxyTransaction:
             ('https_proxy', entry),
             ('all_proxy', socks),
         )
+        present_optional = [key for key, _ in optional if config.get(key)]
         return (
             str(config.get('http_proxy') or '').rstrip('/') == entry.rstrip('/')
+            and (not present_optional or len(present_optional) == len(optional))
             and all(
                 not config.get(key)
                 or str(config.get(key)).rstrip('/') == expected.rstrip('/')
