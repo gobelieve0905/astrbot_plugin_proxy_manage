@@ -244,6 +244,15 @@ class CompatibilityManager:
             configs = getattr(platform_manager, "platforms_config", [])
             for config in configs:
                 if config.get("type") in {"lark", "telegram"}:
+                    instance_info = getattr(platform_manager, "_inst_map", {}).get(config.get("id"))
+                    instance = instance_info.get("inst") if isinstance(instance_info, dict) else None
+                    current_lease = getattr(instance, "_proxy_manager_lease", None)
+                    desired_lease = self.lease.for_component("platform:" + config["type"])
+                    if current_lease and (
+                        current_lease.http_proxy == desired_lease.http_proxy
+                        and current_lease.socks_proxy == desired_lease.socks_proxy
+                    ):
+                        continue
                     await platform_manager.reload(config)
         provider_manager = getattr(self.context, "provider_manager", None)
         if provider_manager is not None and getattr(provider_manager, "provider_insts", None):

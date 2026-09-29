@@ -163,6 +163,65 @@ class TestConfigurationRules(unittest.TestCase):
         finally:
             sys.modules.pop(module_name, None)
 
+    def test_telegram_shutdown_bounds_remote_command_cleanup(self):
+        from proxy_manager.compat.telegram import build_proxy_adapter
+        from proxy_manager.compat.lease import ComponentLease
+
+        module_name = "compat_test_telegram_shutdown"
+        fake = types.ModuleType(module_name)
+        fake.ApplicationBuilder = object
+        fake.filters = types.SimpleNamespace(ALL=object())
+        fake.TelegramMessageHandler = lambda **kwargs: kwargs
+        fake.logger = types.SimpleNamespace(debug=lambda *_: None)
+
+        class Base:
+            __module__ = module_name
+
+            async def _shutdown_application(self, *, delete_commands):
+                self.base_shutdown_delete_commands = delete_commands
+
+        class Client:
+            async def delete_my_commands(self):
+                await asyncio.Event().wait()
+
+        fake.ApplicationBuilder = lambda: None
+        sys.modules[module_name] = fake
+        try:
+            adapter_class = build_proxy_adapter(
+                Base,
+                ComponentLease(component_id="telegram", http_proxy="http://127.0.0.1:17890"),
+            )
+            adapter = adapter_class.__new__(adapter_class)
+            adapter.enable_command_register = True
+            adapter.client = Client()
+            with patch("proxy_manager.compat.telegram.TERMINATION_COMMAND_TIMEOUT", 0.01):
+                asyncio.run(adapter._shutdown_application(delete_commands=True))
+            self.assertFalse(adapter.base_shutdown_delete_commands)
+        finally:
+            sys.modules.pop(module_name, None)
+
+    def test_compatibility_does_not_restart_platform_with_matching_proxy_lease(self):
+        from proxy_manager.compat.lease import ComponentLease
+        from proxy_manager.compat.registry import CompatibilityManager
+
+        lease = ComponentLease(component_id="astrbot", http_proxy="http://127.0.0.1:17890")
+
+        class ManagedTelegram:
+            _proxy_manager_lease = lease.for_component("platform:telegram")
+
+        instance = ManagedTelegram()
+        platform_manager = types.SimpleNamespace(
+            platform_insts=[instance],
+            platforms_config=[{"id": "telegram", "type": "telegram", "enable": True}],
+            _inst_map={"telegram": {"inst": instance}},
+            reload=AsyncMock(),
+        )
+        manager = CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager), lease)
+
+        asyncio.run(manager._reload_live_components())
+
+        platform_manager.reload.assert_not_awaited()
+
     def test_entry_imports_inside_astrbot_namespace_package(self):
         root=Path(__file__).resolve().parents[1]
         package_name='proxy_manager_package_test'

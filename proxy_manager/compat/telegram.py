@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Type
+
+TERMINATION_COMMAND_TIMEOUT = 3.0
 
 
 def build_proxy_adapter(base: Type, lease):
@@ -35,6 +38,17 @@ def build_proxy_adapter(base: Type, lease):
             self.application.add_handler(message_handler)
             self.client = self.application.bot
             module.logger.debug(f"Telegram base url: {self.client.base_url}")
+
+        async def _shutdown_application(self, *, delete_commands: bool) -> None:
+            if delete_commands and self.enable_command_register:
+                try:
+                    await asyncio.wait_for(
+                        self.client.delete_my_commands(),
+                        timeout=TERMINATION_COMMAND_TIMEOUT,
+                    )
+                except Exception:
+                    module.logger.debug("Telegram command cleanup was skipped during shutdown")
+            await super()._shutdown_application(delete_commands=False)
 
     ProxyTelegramPlatformAdapter.__name__ = "ProxyManagedTelegramPlatformAdapter"
     ProxyTelegramPlatformAdapter.__qualname__ = "ProxyManagedTelegramPlatformAdapter"
