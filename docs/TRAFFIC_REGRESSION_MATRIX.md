@@ -50,7 +50,7 @@
 | `PROVIDER-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
 | `FEISHU-HTTP-{D,N,A,R,F}` | D：统一入口已观测；N/A/R/F：待执行 | D：`MATCH`；其余待执行 | D：`DIRECT`；其余待执行 | D：无飞书响应出口 IP | `UNKNOWN` | 见下方 2026-09-29 记录 |
 | `FEISHU-WS-{D,N,A,R,F}` | D：`127.0.0.1:17890` | D：`Match` | D：`DIRECT` | 无出口 IP 回显 | `UNKNOWN` | 见下方 2026-09-29 记录 |
-| `FEISHU-MEDIA-{D,N,A,R,F}` | 未执行 | 未执行 | 未执行 | 未执行 | `UNKNOWN` | 尚无安全媒体测试请求 |
+| `FEISHU-MEDIA-{D,N,A,R,F}` | D：入站文件下载已观测；N/A/R/F：待执行 | D：`MATCH`；其余待执行 | D：`DIRECT`；其余待执行 | D：文件事件已进入附件处理；上传未执行 | `UNKNOWN` | 见下方 2026-09-29 记录 |
 | `TG-POLL-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
 | `TG-MEDIA-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
 | `PLUGIN-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
@@ -89,7 +89,8 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | `FEISHU-HTTP-D` | 插件稳定入口 `http://127.0.0.1:17890`；通用 HTTPS 探测 `https://open.feishu.cn` 成功 | `MATCH` | `DIRECT` | HTTP `200`，但响应没有出口 IP，无法与出口地址关联 | `UNKNOWN` | 插件 verify-outbound 记录；同窗口 Mihomo `/connections` |
 | `FEISHU-WS-D` | Lark 适配器实际连接 `127.0.0.1:17890` | `Match` | `DIRECT` | Mihomo 连接记录显示远端 `183.60.232.39:443`，但没有代理出口 IP 回显；无节点链路 | `UNKNOWN` | Mihomo connection id `60915cfa-8e3e-4a15-9a92-87ead08e7d14`，`e75d5845-bf53-4a60-8bd4-c9b1b3644d33`；host `msg-frontier.feishu.cn`；开始时间 `11:34:35`、`11:34:47` |
-| `FEISHU-MEDIA-D` | 未执行 | 未执行 | 未执行 | 无证据 | `UNKNOWN` | 没有安全测试文件或媒体健康请求 |
+| `FEISHU-MEDIA-D`（下载） | `127.0.0.1:17890`；Lark 收到 `[ComponentType.File]` | `Match` | `DIRECT` | 文件名 `ad-name-aggregated.xlsx` 进入附件输入，说明下载内容已交给 AstrBot 处理 | `PASS`（接管） | 服务器日志 `14:40:29`；Mihomo 连接 `16632bd3-c9f6-439f-834c-34ba1762c02d`、`8c09eafb-01ab-4037-9c90-c98714b1bec2`、`6407f6f7-88f9-4c78-9c65-458b3a923015`，目标 `open.feishu.cn:443` |
+| `FEISHU-MEDIA-D`（上传） | 未执行 | 未执行 | 未执行 | 未执行 | `UNKNOWN` | 本次机器人回复为文字/流式卡片，没有发送图片或文件 |
 
 ### 本次结论
 
