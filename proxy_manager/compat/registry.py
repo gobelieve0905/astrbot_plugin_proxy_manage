@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import importlib
 import importlib.metadata
@@ -10,6 +11,8 @@ from .lark import build_proxy_adapter as build_lark_adapter
 from .lark import install_sdk_patch as install_lark_sdk_patch
 from .lease import ComponentLease
 from .telegram import build_proxy_adapter as build_telegram_adapter
+
+LIVE_COMPONENT_RELOAD_TIMEOUT = 8.0
 
 SUPPORTED_ASTRBOT = "4.28.2"
 SUPPORTED_ASTRBOT_VERSIONS = frozenset({"4.28.1", "4.28.2"})
@@ -253,13 +256,34 @@ class CompatibilityManager:
                         and current_lease.socks_proxy == desired_lease.socks_proxy
                     ):
                         continue
-                    await platform_manager.reload(config)
+                    try:
+                        await asyncio.wait_for(
+                            platform_manager.reload(config),
+                            timeout=LIVE_COMPONENT_RELOAD_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        self.report.platforms[config["type"]] = {
+                            "state": "installed",
+                            "protocols": ["http", "https", "polling", "media"]
+                            if config["type"] == "telegram"
+                            else ["http", "https", "websocket", "media"],
+                            "message": "代理兼容层已安装；平台重载因远端不可达超时，需平台自行重连或重启 AstrBot",
+                        }
         provider_manager = getattr(self.context, "provider_manager", None)
         if provider_manager is not None and getattr(provider_manager, "provider_insts", None):
             configs = getattr(provider_manager, "providers_config", [])
             for config in configs:
                 if config.get("type") in SUPPORTED_PROVIDER_TYPES:
-                    await provider_manager.reload(config)
+                    try:
+                        await asyncio.wait_for(
+                            provider_manager.reload(config),
+                            timeout=LIVE_COMPONENT_RELOAD_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        self.report.providers[config["type"]] = {
+                            "state": "installed",
+                            "message": "Provider 兼容层已安装；实例重载因远端不可达超时，需重启后生效",
+                        }
 
     def restore(self) -> None:
         try:
