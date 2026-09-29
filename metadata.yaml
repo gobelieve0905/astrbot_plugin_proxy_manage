@@ -5,3 +5,5 @@ version: 0.4.0
 author: gobelieve
 repo: https://github.com/gobelieve0905/astrbot_plugin_proxy_manage
 astrbot_version: '>=4.28.0,<5'
+support_platforms:
+  - lark
