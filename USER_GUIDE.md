@@ -1,6 +1,6 @@
 # 代理管理中心使用指南
 
-> 本指南记录 0.3.23 的当前操作方式。内核资源不会自动下载，需在资源管理中选择并启用；订阅只能通过“导入订阅”或“批量导入”创建；“审计历史”记录配置、订阅、内核、验证和接入事件，不等同于逐请求流量日志。产品边界和未完成能力以[产品定义与架构约束](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/PRODUCT_DEFINITION.md)为准。
+> 本指南记录 0.4.0 的当前操作方式。内核资源不会自动下载，需在资源管理中选择并启用；订阅只能通过“导入订阅”或“批量导入”创建；“审计历史”记录配置、订阅、内核、验证和接入事件，不等同于逐请求流量日志。产品边界和未完成能力以[产品定义与架构约束](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/PRODUCT_DEFINITION.md)为准。
 
 桌面端使用左侧导航，移动端使用顶部横向导航。页面顶部的“恢复上一版”和“预览并保存”作用于规范化配置；“内核管理”第一栏用于运行控制，第二栏使用可收放横栏管理各内核资源，不会与普通配置保存混在同一操作组。
 
@@ -34,7 +34,7 @@
 
 | 场景 | 接入方式 | 支持状态 |
 | --- | --- | --- |
-| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | 持久化 `http_proxy`/`no_proxy`；插件启动后在 AstrBot 进程设置 HTTP、HTTPS 和 SOCKS 入口 | 0.3.23 已接入，需重启后做请求级验证 |
+| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | 持久化 `http_proxy`/`no_proxy`；插件启动后在 AstrBot 进程设置 HTTP、HTTPS 和 SOCKS 入口 | 0.4.0 已接入，需重启后做请求级验证 |
 | 使用 AstrBot 公共 HTTP 客户端且继承核心代理配置的插件 | 使用核心 `http_proxy` | 尚未逐项接入和验证 |
 | 支持独立代理字段的平台适配器 | 在适配器配置中填写统一 HTTP/SOCKS 入口 | 条件支持，应按适配器文档验证 |
 | 支持代理或自定义 HTTP 客户端的模型提供商 | 在对应客户端配置代理 | 条件支持，应执行无业务凭据的受控请求验证 |
@@ -69,7 +69,7 @@
 
 概览中的动态流量清单使用四类状态：“已接管”必须有请求级证据；“明确直连”表示请求进入内核后由规则选择 `DIRECT`；“未接入”表示组件没有使用插件入口；“无法判定”表示只观察到配置或入口，证据不足。规则组新增弹窗内置飞书/Lark、Telegram、Meta 和 GitHub 域名模板，只预填内核规则，不会自动修改平台 SDK。
 
-0.3.23 的 50 项真实流量回归矩阵见 [TRAFFIC_REGRESSION_MATRIX.md](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/TRAFFIC_REGRESSION_MATRIX.md)。矩阵要求对全局 HTTP、Provider、飞书 HTTP/WebSocket/媒体、Telegram 轮询/媒体、第三方插件声明、stdio MCP 和私网 MCP 分别验证 `DIRECT`、指定节点、自动组、拒绝和失败关闭；只要入口、规则、节点链路或出口证据缺一项，就保持“无法判定”。
+0.4.0 的 50 项真实流量回归矩阵见 [TRAFFIC_REGRESSION_MATRIX.md](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/TRAFFIC_REGRESSION_MATRIX.md)。矩阵要求对全局 HTTP、Provider、飞书 HTTP/WebSocket/媒体、Telegram 轮询/媒体、第三方插件声明、stdio MCP 和私网 MCP 分别验证 `DIRECT`、指定节点、自动组、拒绝和失败关闭；只要入口、规则、节点链路或出口证据缺一项，就保持“无法判定”。
 
 在“全局代理接入”点击接入后，页面会标记 AstrBot 需重启。插件停用、热重载或 AstrBot 关闭时，已写入的全局代理保持不变，自管内核会停止，因此新的外部请求应失败而不是直连。卸载前必须先点击“恢复旧配置”并重启 AstrBot；直接删除插件不会自动改写 AstrBot 配置。
 

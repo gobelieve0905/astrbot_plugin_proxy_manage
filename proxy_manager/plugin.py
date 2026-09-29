@@ -701,7 +701,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.3.23'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.4.0'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -878,7 +878,7 @@ class ProxyManager(Star):
                 url=str(entry.get('url','')).strip(); name=entry['name']
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.23'})
+                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.0'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -956,7 +956,7 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.3.23'})
+            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.0'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1788,6 +1788,11 @@ class ProxyManager(Star):
             self._sync_owned_proxy_environment()
         except (ValueError,OSError) as exc:
             logger.warning('AstrBot 默认统一出口配置失败：'+safe_error(exc))
+        # Start the managed kernel before reloading official platform clients.
+        # Otherwise Lark/Telegram can receive the lease before 17890 listens.
+        try: await self._start_owned_kernel()
+        except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
+            logger.warning('代理管理中心自管内核未启动：'+safe_error(exc))
         try:
             lease=ComponentLease.from_entry(
                 'astrbot', self.state.get('proxy_entry'),
@@ -1800,13 +1805,10 @@ class ProxyManager(Star):
                 logger.warning('AstrBot 官方兼容层未完全安装：'+compatibility.message)
         except (ImportError,AttributeError,TypeError,ValueError,RuntimeError) as exc:
             logger.warning('AstrBot 官方兼容层初始化失败：'+safe_error(exc))
-        try: await self._start_owned_kernel()
-        except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
-            logger.warning('代理管理中心自管内核未启动：'+safe_error(exc))
         http_url,socks_url=self._entry_urls(); status=self.astrbot_proxy.mark_started(http_url,socks_url)
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.3.23 已加载')
+        logger.info('代理管理中心 0.4.0 已加载')
 
     async def terminate(self):
         if self.auto_task:
