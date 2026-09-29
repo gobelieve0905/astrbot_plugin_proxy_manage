@@ -1076,7 +1076,14 @@ class ProxyManager(Star):
                         'process':self.supervisor.status()}
             process=self.supervisor.status()
             if not process.get('ready'):
-                return {'state':process['state'],'ready':False,'adapter':adapter.id,'message':process['message'],'artifact':artifact,'process':process}
+                runtime_status = self.runtime_application.get('status') if isinstance(self.runtime_application, dict) else ''
+                hint = '请点击“启动”；启动成功后再点击“应用代理配置”。'
+                if runtime_status == 'applying':
+                    hint = '上次应用配置未完成，先点击“启动”；若仍失败请点击“恢复上一版”后再启动。'
+                return {'state':process['state'],'ready':False,'adapter':adapter.id,
+                        'message':'内核进程未运行：'+process['message'],'recovery_hint':hint,
+                        'artifact':artifact,'process':process,
+                        'runtime_application_status':runtime_status}
         if not control['enabled'] or not control['url']:
             return adapter.inspect(self.state, getattr(self,'runtime_application',{}))
         try:
