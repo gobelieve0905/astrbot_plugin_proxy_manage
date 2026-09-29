@@ -84,7 +84,7 @@ def _transport_aexecute(transport, proxy: str):
 
 
 def install_sdk_patch(lease):
-    """Patch the exact Lark SDK paths used by AstrBot 4.28.1.
+    """Patch the exact Lark SDK paths used by AstrBot 4.28.1 and 4.28.2.
 
     The returned callback restores every module-level hook. No AstrBot source
     file is modified and no global ``requests`` or ``httpx`` module is changed.

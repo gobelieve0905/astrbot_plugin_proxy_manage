@@ -11,7 +11,8 @@ from .lark import install_sdk_patch as install_lark_sdk_patch
 from .lease import ComponentLease
 from .telegram import build_proxy_adapter as build_telegram_adapter
 
-SUPPORTED_ASTRBOT = "4.28.1"
+SUPPORTED_ASTRBOT = "4.28.2"
+SUPPORTED_ASTRBOT_VERSIONS = frozenset({"4.28.1", "4.28.2"})
 SUPPORTED_SDK_VERSIONS = {
     "lark-oapi": "1.7.3",
     "python-telegram-bot": "22.8",
@@ -74,7 +75,7 @@ def inspect_runtime() -> CompatibilityReport:
         sdk_versions={name: _package_version(name) for name in SUPPORTED_SDK_VERSIONS},
     )
     mismatches = []
-    if report.astrbot != SUPPORTED_ASTRBOT:
+    if report.astrbot not in SUPPORTED_ASTRBOT_VERSIONS:
         mismatches.append(f"AstrBot {report.astrbot}")
     for name, expected in SUPPORTED_SDK_VERSIONS.items():
         actual = report.sdk_versions.get(name, "unknown")
@@ -228,7 +229,7 @@ class CompatibilityManager:
             self._install_platforms()
             self._install_providers()
             self.report.state = "installed"
-            self.report.message = "AstrBot 4.28.1 官方平台与支持 Provider 兼容层已安装"
+            self.report.message = "AstrBot 4.28.1/4.28.2 官方平台与支持 Provider 兼容层已安装"
             self._installed = True
             await self._reload_live_components()
         except Exception as exc:

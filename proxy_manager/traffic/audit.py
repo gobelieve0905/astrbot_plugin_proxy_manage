@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import ipaddress
 from pathlib import Path
@@ -8,7 +9,13 @@ from urllib.parse import urlsplit
 from .integration import declaration, plugin_declarations
 
 
-AUDIT_VERSION='AstrBot 4.28.1'
+def runtime_label() -> str:
+    try:
+        module = importlib.import_module('astrbot')
+        version = str(getattr(module, '__version__', '') or '未知版本')
+    except ImportError:
+        version = '未知版本'
+    return 'AstrBot ' + version
 
 
 class AstrBotTrafficAudit:
@@ -99,7 +106,7 @@ class AstrBotTrafficAudit:
         plugin_count=len(plugins) if isinstance(plugins,(dict,list)) else 0
         runner=config.get('agent_runner') if isinstance(config.get('agent_runner'),dict) else {}
         plugins=config.get('plugin_set')
-        return {'version':AUDIT_VERSION,'readable':self.config_path.is_file(),'providers':providers,
+        return {'version':runtime_label(),'readable':self.config_path.is_file(),'providers':providers,
                 'platforms':platforms,'plugin_count':plugin_count,
                 'mcps':self._mcps(entry,private),
                 'plugin_integrations':plugin_declarations(self.root,plugins),

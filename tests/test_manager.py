@@ -90,6 +90,18 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(report.state, "unsupported")
         self.assertIn("AstrBot 4.29.0", report.message)
 
+    def test_compatibility_fingerprint_accepts_astrbot_4282(self):
+        from proxy_manager.compat import registry
+
+        with patch.object(registry, "_astrbot_version", return_value="4.28.2"), patch.object(
+            registry,
+            "_package_version",
+            side_effect=lambda name: registry.SUPPORTED_SDK_VERSIONS[name],
+        ):
+            report = registry.inspect_runtime()
+        self.assertNotEqual(report.state, "unsupported")
+        self.assertEqual(report.astrbot, "4.28.2")
+
     def test_telegram_compatibility_sets_bot_and_polling_proxies(self):
         from proxy_manager.compat.telegram import build_proxy_adapter
         from proxy_manager.compat.lease import ComponentLease
