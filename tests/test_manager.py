@@ -1749,6 +1749,18 @@ class TestConfigurationRules(unittest.TestCase):
             with patch.object(transaction,'enable',side_effect=AssertionError('already managed configuration must not be rewritten')):
                 transaction.ensure(entry,socks)
 
+    def test_astrbot_4282_config_without_optional_proxy_keys_is_managed(self):
+        from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); config=root/'cmd_config.json'; data=root/'plugin'; data.mkdir()
+            entry='http://127.0.0.1:17890'; socks='socks5://127.0.0.1:17890'
+            config.write_text(json.dumps({'http_proxy':entry,'no_proxy':list(INTERNAL_NO_PROXY)}),encoding='utf-8')
+            transaction=AstrBotProxyTransaction(data,config)
+            with patch.dict(os.environ,{'http_proxy':entry,'https_proxy':entry},clear=True):
+                status=transaction.status(entry,socks)
+            self.assertTrue(status['configured'])
+            self.assertTrue(status['effective'])
+
     def test_astrbot_core_verification_uses_process_proxy_and_fails_closed(self):
         manager=self._manager_for_runtime(); entry=manager.state['proxy_entry']['http_url']
         manager.astrbot_proxy=types.SimpleNamespace(status=lambda *_args:{'effective':True})

@@ -1,5 +1,9 @@
 # 更新日志
 
+## Unreleased - 2026-09-29
+
+- **AstrBot 4.28.2 全局代理状态**：兼容核心仅持久化 `http_proxy` 配置键的规范化行为；可选的 `https_proxy`/`all_proxy` 缺失不再被误判为配置漂移，同时继续校验冲突值。
+
 ## 0.3.23 - 2026-09-28
 
 - **真实流量回归矩阵**：建立 50 项服务器验收矩阵，覆盖 AstrBot 全局 HTTP、Provider、飞书 HTTP/WebSocket/媒体、Telegram 轮询/媒体、第三方插件声明、stdio MCP 和私网 MCP。

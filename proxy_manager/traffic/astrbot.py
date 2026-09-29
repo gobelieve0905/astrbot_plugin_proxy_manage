@@ -104,10 +104,23 @@ class AstrBotProxyTransaction:
 
     def _managed(self, config: dict, entry: str, socks_entry: str='') -> bool:
         socks=socks_entry.rstrip('/') or entry.rstrip('/')
-        return (str(config.get('http_proxy') or '').rstrip('/') == entry.rstrip('/') and
-                str(config.get('https_proxy') or '').rstrip('/') == entry.rstrip('/') and
-                str(config.get('all_proxy') or '').rstrip('/') == socks and
-                tuple(config.get('no_proxy') or []) == self._expected_no_proxy())
+        # AstrBot 4.28.2 normalizes the persisted config to its supported
+        # ``http_proxy`` key and removes ``https_proxy``/``all_proxy``. Treat
+        # the latter as optional while still rejecting conflicting values
+        # left by an older runtime.
+        optional = (
+            ('https_proxy', entry),
+            ('all_proxy', socks),
+        )
+        return (
+            str(config.get('http_proxy') or '').rstrip('/') == entry.rstrip('/')
+            and all(
+                not config.get(key)
+                or str(config.get(key)).rstrip('/') == expected.rstrip('/')
+                for key, expected in optional
+            )
+            and tuple(config.get('no_proxy') or []) == self._expected_no_proxy()
+        )
 
     def status(self, entry: str, socks_entry: str='', environ: dict | None = None) -> dict:
         environ = environ if environ is not None else os.environ
@@ -119,7 +132,13 @@ class AstrBotProxyTransaction:
             config = {}; configured = False
         expected = entry.rstrip('/')
         socks=socks_entry.rstrip('/') or expected
-        effective = configured and all(str(environ.get(key, '')).rstrip('/') == expected for key in ('http_proxy', 'https_proxy')) and str(environ.get('all_proxy', '')).rstrip('/') == socks
+        effective = configured and all(
+            str(environ.get(key, '')).rstrip('/') == expected
+            for key in ('http_proxy', 'https_proxy')
+        ) and (
+            not environ.get('all_proxy')
+            or str(environ.get('all_proxy')).rstrip('/') == socks
+        )
         status = record.get('status', 'not_connected')
         if status == 'active' and not effective:
             status = 'restart_required' if configured else 'drifted'
