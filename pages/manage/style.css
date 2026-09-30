@@ -1511,3 +1511,17 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   .groups-panel > .bar { display: flex; }
   .groups-panel > .bar > .actions { flex-wrap: wrap; white-space: normal; }
 }
+
+/* 代理组说明保持紧凑，悬停时通过 title 查看完整内容。 */
+.groups-panel > .group-config-note {
+  max-width: min(72ch, calc(100% - 250px));
+  margin: 8px 0 0;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 700px) {
+  .groups-panel > .group-config-note { max-width: 100%; white-space: normal; }
+}
