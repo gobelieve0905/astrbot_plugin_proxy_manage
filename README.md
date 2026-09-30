@@ -20,7 +20,7 @@
 - 订阅导入与刷新：支持单条或批量导入、节点差异、流量/到期信息、失效引用和订阅级忽略记录。
 - 节点、代理组和分流规则管理：支持筛选、测速、`select`、`url-test`、`fallback`、规则优先级和配置预览。
 - AstrBot 出站接入：维护全局代理入口、已验证的官方兼容层和公开的第三方插件/MCP 接入声明。
-- 机器人平台兼容层：当前仅验证 AstrBot 4.28.1/4.28.2 下的飞书/Lark 与 Telegram；其他平台 SDK 没有完成官方兼容层和真实流量验证，不作兼容承诺。
+- 机器人平台兼容层：已适配 AstrBot 4.28.1/4.28.2 下的飞书/Lark 与 Telegram；两者的兼容层范围和真实传输验证状态见下表，其他平台 SDK 不作兼容承诺。
 - 运行核对与安全边界：区分已接管、明确直连、未接入和无法判定；配置失败时使用失败关闭和可信回滚，不静默回落直连。
 - 真实流量回归矩阵：覆盖 AstrBot 全局 HTTP、Provider、飞书/Telegram 的 HTTP、WebSocket、媒体和轮询，以及第三方插件、stdio MCP、私网 MCP；每个用例记录入口、规则、节点链路和出口证据。
 
@@ -35,7 +35,73 @@
 
 真实流量回归矩阵及服务器执行记录格式见 [TRAFFIC_REGRESSION_MATRIX.md](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/TRAFFIC_REGRESSION_MATRIX.md)。矩阵未完成服务器验收前，相关入口保持“无法判定”。
 
-AstrBot 4.28.2 内置 44 类 Provider 中，当前有 30 类已完成无业务凭据的客户端请求核验：请求取得稳定代理入口、规则、连接链路和出口或明确拒绝，证明 Provider 流量受代理管理中心控制。该核验不证明真实模型、语音或排序业务 API 成功；指定节点、自动组、拒绝和失败关闭也尚未逐类验收。完整记录见 [Provider 请求记录](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PROVIDER_REQUESTS_2026-09-30.md)。
+AstrBot 4.28.2 内置 44 类 Provider 的逐项适配范围如下。这里的“已验证”只表示无业务凭据请求已进入代理管理中心的稳定入口，并取得规则、连接链路和出口或明确拒绝证据；不表示真实模型、语音或排序业务 API 成功。指定节点、自动组、拒绝和失败关闭也尚未逐类验收。完整请求记录见 [Provider 请求记录](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PROVIDER_REQUESTS_2026-09-30.md)。
+
+## Provider 适配范围
+
+### 已验证受代理管理中心控制（30 类）
+
+| Provider | 传输验证结果 |
+| --- | --- |
+| `anthropic_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `azure_tts` | 已验证：稳定入口、规则、连接链路和出口 |
+| `bailian_rerank` | 已验证：稳定入口、规则、连接链路和出口 |
+| `elevenlabs_tts_api` | 已验证：稳定入口、规则、连接链路和出口 |
+| `fishaudio_tts_api` | 已验证：稳定入口、规则、连接链路和明确拒绝 |
+| `gemini_embedding` | 已验证：稳定入口、规则、连接链路和出口 |
+| `googlegenai_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `gemini_tts` | 已验证：稳定入口、规则、连接链路和出口 |
+| `groq_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `kimi_code_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `longcat_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `mimo_stt_api` | 已验证：稳定入口、规则、连接链路和出口 |
+| `mimo_tts_api` | 已验证：稳定入口、规则、连接链路和出口 |
+| `minimax_token_plan` | 已验证：稳定入口、规则、连接链路和出口 |
+| `mirarouter_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `nvidia_embedding` | 已验证：稳定入口、规则、连接链路和明确拒绝 |
+| `aihubmix_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `ollama_embedding` | 已验证：稳定入口、规则、连接链路和明确拒绝 |
+| `openai_embedding` | 已验证：稳定入口、规则、连接链路和出口 |
+| `openai_responses` | 已验证：稳定入口、规则、连接链路和出口 |
+| `openai_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `openai_tts_api` | 已验证：稳定入口、规则、连接链路和出口 |
+| `openrouter_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `ssycloud_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `tei_rerank` | 已验证：稳定入口、规则、连接链路和出口 |
+| `vllm_rerank` | 已验证：稳定入口、规则、连接链路和出口 |
+| `xai_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `xiaomi_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `xiaomi_token_plan` | 已验证：稳定入口、规则、连接链路和出口 |
+| `zhipu_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+
+### 未验证，保持原 Provider（14 类）
+
+| Provider | 当前状态 |
+| --- | --- |
+| `dashscope_embedding` | 未确认独立代理路径，不自动改写 |
+| `dashscope_tts` | 未确认独立代理路径，不自动改写 |
+| `edge_tts` | 未确认独立代理路径，不自动改写 |
+| `genie_tts` | 未确认独立代理路径，不自动改写 |
+| `gsv_tts_selfhost` | 未确认独立代理路径，不自动改写 |
+| `gsvi_tts_api` | 未确认独立代理路径，不自动改写 |
+| `minimax_tts_api` | 未确认独立代理路径，不自动改写 |
+| `nvidia_rerank` | 未确认独立代理路径，不自动改写 |
+| `sensevoice_stt_selfhost` | 未确认独立代理路径，不自动改写 |
+| `volcengine_tts` | 未确认独立代理路径，不自动改写 |
+| `openai_whisper_api` | 未确认独立代理路径，不自动改写 |
+| `openai_whisper_selfhost` | 未确认独立代理路径，不自动改写 |
+| `xinference_rerank` | 未确认独立代理路径，不自动改写 |
+| `xinference_stt` | 未确认独立代理路径，不自动改写 |
+
+未知 Provider 不在以上 44 类中，保持“未验证”，不会被全局 monkey patch。
+
+## 机器人平台适配范围
+
+| 平台 | 兼容层与版本 | 已适配范围 | 真实传输验证状态 |
+| --- | --- | --- | --- |
+| 飞书 / Lark | AstrBot 4.28.1/4.28.2；`lark-oapi` 1.7.3 | HTTP API、WebSocket、媒体上传/下载 | WebSocket 已确认进入稳定入口并产生内核连接，媒体上传/下载有接管记录；HTTP 的同次出口证据不足，五种策略尚未全部验收 |
+| Telegram | AstrBot 4.28.1/4.28.2；`python-telegram-bot` 22.8 | Bot API 轮询、媒体上传/下载 | 已有官方兼容层；轮询、媒体及指定节点/自动组/拒绝/失败关闭尚未完成逐项真实验证 |
+| 其他平台 SDK | 未提供官方兼容层 | 不承诺自动接入 | 未验证 |
 
 ## 支持范围与限制
 
@@ -45,8 +111,8 @@ AstrBot 4.28.2 内置 44 类 Provider 中，当前有 30 类已完成无业务�
 | 保留但未验证 | SS、VMess、VLESS、Trojan、Hysteria2、TUIC 及其他内核专用协议 |
 | 内核 | 插件自管 Mihomo 1.19.31、sing-box 1.14.1、Xray 26.3.27；另含固定版本 1.19.30、1.13.2、26.6.27 |
 | 制品来源 | 固定官方 URL、SHA-256 校验和离线上传；不使用 `latest` 或未经验证的镜像 |
-| 机器人平台 SDK | 已验证飞书/Lark（`lark-oapi` 1.7.3）和 Telegram（`python-telegram-bot` 22.8）；其他平台 SDK 尚未验证 |
-| 模型 Provider | AstrBot 4.28.2 内置 44 类全部进入显式注册表；30 类已完成无业务凭据传输核验，证明流量受稳定入口控制但不代表业务 API 成功；14 类（`dashscope_embedding`、`dashscope_tts`、`edge_tts`、`genie_tts`、`gsv_tts_selfhost`、`gsvi_tts_api`、`minimax_tts_api`、`nvidia_rerank`、`sensevoice_stt_selfhost`、`volcengine_tts`、`openai_whisper_api`、`openai_whisper_selfhost`、`xinference_rerank`、`xinference_stt`）及未知类型保持“未验证”，不会全局 monkey patch |
+| 机器人平台 SDK | 已适配飞书/Lark（`lark-oapi` 1.7.3）和 Telegram（`python-telegram-bot` 22.8）；各传输验证状态见上表，其他平台 SDK 不作兼容承诺 |
+| 模型 Provider | 44 类全部进入显式注册表；30 类已验证流量受稳定入口控制，14 类及未知类型保持“未验证”，逐项名单见上表 |
 | 不自动接入 | 裸 socket、显式 `trust_env=false`、未声明的第三方插件和未受信的独立容器 |
 
 未知或暂未验证的协议会保留原始信息并明确标记，不会静默写入运行配置。Xray 的代理组控制能力有限，页面会按实际能力提示。没有内核时仍可整理订阅、节点、代理组和规则，但原生协议测速、配置应用和出口验证会显示缺少的运行条件。
