@@ -35,6 +35,8 @@
 
 真实流量回归矩阵及服务器执行记录格式见 [TRAFFIC_REGRESSION_MATRIX.md](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/TRAFFIC_REGRESSION_MATRIX.md)。矩阵未完成服务器验收前，相关入口保持“无法判定”。
 
+四类 Provider 的无凭据客户端入口核验记录见 [Provider 请求记录](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PROVIDER_REQUESTS_2026-09-30.md)；该记录不等于模型 API 或五种路由策略全部通过。
+
 ## 支持范围与限制
 
 | 类别 | 当前支持 |

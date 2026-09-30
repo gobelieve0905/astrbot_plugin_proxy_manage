@@ -159,6 +159,34 @@ class TestConfigurationRules(unittest.TestCase):
                 self.assertEqual(instance.client.post('https://example.invalid')['proxy'], entry)
                 self.assertEqual(instance.client.post('https://example.invalid', proxy='http://override')['proxy'], entry)
 
+    def test_provider_install_preserves_unverified_and_unknown_types(self):
+        from proxy_manager.compat.lease import ComponentLease
+        from proxy_manager.compat.registry import CompatibilityManager
+        from proxy_manager.compat.provider_registry import PROVIDER_ADAPTER_MAP
+
+        class Base:
+            pass
+
+        metadata = {name: types.SimpleNamespace(cls_type=Base) for name in PROVIDER_ADAPTER_MAP}
+        metadata['future_provider'] = types.SimpleNamespace(cls_type=Base)
+        register = types.ModuleType('astrbot.core.provider.register')
+        register.provider_cls_map = metadata
+        manager = CompatibilityManager(None, ComponentLease('test', 'http://127.0.0.1:17890'))
+        with patch.dict(sys.modules, {'astrbot.core.provider.register': register}), patch(
+            'proxy_manager.compat.registry.importlib.import_module', return_value=None
+        ):
+            manager._install_providers()
+            for name, spec in PROVIDER_ADAPTER_MAP.items():
+                if spec.proxy_mode == 'unverified':
+                    self.assertIs(metadata[name].cls_type, Base)
+                    self.assertEqual(manager.report.providers[name]['state'], 'unknown')
+                else:
+                    self.assertIsNot(metadata[name].cls_type, Base)
+            self.assertIs(metadata['future_provider'].cls_type, Base)
+            self.assertNotIn('future_provider', manager.report.providers)
+            manager.restore()
+            self.assertTrue(all(item.cls_type is Base for item in metadata.values()))
+
     def test_telegram_compatibility_sets_bot_and_polling_proxies(self):
         from proxy_manager.compat.telegram import build_proxy_adapter
         from proxy_manager.compat.lease import ComponentLease
