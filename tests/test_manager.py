@@ -102,6 +102,11 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertNotEqual(report.state, "unsupported")
         self.assertEqual(report.astrbot, "4.28.2")
 
+    def test_compatibility_layer_declares_only_verified_platforms(self):
+        from proxy_manager.compat.registry import SUPPORTED_PLATFORM_TYPES
+
+        self.assertEqual(SUPPORTED_PLATFORM_TYPES, ("lark", "telegram"))
+
     def test_telegram_compatibility_sets_bot_and_polling_proxies(self):
         from proxy_manager.compat.telegram import build_proxy_adapter
         from proxy_manager.compat.lease import ComponentLease

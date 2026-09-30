@@ -2,10 +2,11 @@
 
 from .lease import ComponentLease
 from .registry import (
-    CompatibilityManager,
-    CompatibilityReport,
     SUPPORTED_ASTRBOT,
     SUPPORTED_ASTRBOT_VERSIONS,
+    SUPPORTED_PLATFORM_TYPES,
+    CompatibilityManager,
+    CompatibilityReport,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "CompatibilityReport",
     "SUPPORTED_ASTRBOT",
     "SUPPORTED_ASTRBOT_VERSIONS",
+    "SUPPORTED_PLATFORM_TYPES",
 ]

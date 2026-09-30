@@ -190,15 +190,8 @@ class TrafficRegistry:
         platforms = audit.get('platforms', [])
         compatibility = audit.get('compatibility', {})
         compatibility = compatibility if isinstance(compatibility, dict) else {}
-        supported_types = {
-            key for key, value in (compatibility.get('platforms') or {}).items()
-            if isinstance(value, dict) and value.get('state') == 'installed'
-        }
-        unsupported = [value for value in platforms if value.get('enabled') and value.get('type') not in supported_types]
         message = (
-            '官方兼容层已接入飞书/Telegram；仍有 ' + str(len(unsupported)) + ' 个平台未适配，HTTP、WebSocket 和媒体需请求级验证'
-            if compatibility.get('state') == 'installed' and unsupported else
-            '官方兼容层已接入支持的平台；HTTP、WebSocket 和媒体仍需请求级验证'
+            '官方兼容层已接入已验证平台；HTTP、WebSocket 和媒体仍需请求级验证'
             if compatibility.get('state') == 'installed' else
             '发现 ' + str(len(platforms)) + ' 个平台；全局代理可能覆盖部分 HTTP，HTTP、WebSocket 和媒体仍需逐项请求级验证'
             if platforms else '未发现可审计的平台配置'

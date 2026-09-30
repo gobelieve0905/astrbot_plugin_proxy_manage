@@ -21,6 +21,7 @@ SUPPORTED_SDK_VERSIONS = {
     "python-telegram-bot": "22.8",
     "websockets": "15.0.1",
 }
+SUPPORTED_PLATFORM_TYPES = ("lark", "telegram")
 SUPPORTED_PROVIDER_TYPES = {
     "openai_chat_completion",
     "openai_responses",
@@ -111,7 +112,7 @@ class CompatibilityManager:
         telegram_module = importlib.import_module(
             "astrbot.core.platform.sources.telegram.tg_adapter"
         )
-        for platform_type in ("lark", "telegram"):
+        for platform_type in SUPPORTED_PLATFORM_TYPES:
             current = platform_cls_map.get(platform_type)
             self._original_platforms[platform_type] = getattr(
                 current, "_proxy_manager_base", current
@@ -232,7 +233,7 @@ class CompatibilityManager:
             self._install_platforms()
             self._install_providers()
             self.report.state = "installed"
-            self.report.message = "AstrBot 4.28.1/4.28.2 官方平台与支持 Provider 兼容层已安装"
+            self.report.message = "AstrBot 4.28.1/4.28.2 的飞书/Lark、Telegram 与支持 Provider 兼容层已安装"
             self._installed = True
             await self._reload_live_components()
         except Exception as exc:
@@ -246,7 +247,7 @@ class CompatibilityManager:
         if platform_manager is not None and getattr(platform_manager, "platform_insts", None):
             configs = getattr(platform_manager, "platforms_config", [])
             for config in configs:
-                if config.get("type") in {"lark", "telegram"}:
+                if config.get("type") in SUPPORTED_PLATFORM_TYPES:
                     instance_info = getattr(platform_manager, "_inst_map", {}).get(config.get("id"))
                     instance = instance_info.get("inst") if isinstance(instance_info, dict) else None
                     current_lease = getattr(instance, "_proxy_manager_lease", None)
