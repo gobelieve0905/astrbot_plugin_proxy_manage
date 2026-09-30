@@ -1673,6 +1673,27 @@ class TestConfigurationRules(unittest.TestCase):
             platform=next(value for value in values if value['id']=='platform-sdk')
             self.assertEqual(provider['status'],'unknown'); self.assertEqual(platform['status'],'not_connected')
 
+    def test_traffic_audit_separates_model_records_from_provider_configs(self):
+        from proxy_manager.traffic.audit import AstrBotTrafficAudit
+        from proxy_manager.traffic.inventory import traffic_inventory
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); data=root/'data'; data.mkdir()
+            (data/'cmd_config.json').write_text(json.dumps({
+                'provider_sources':[{'id':'source','type':'openai_chat_completion','provider_type':'openai_chat_completion'}],
+                'provider':[{'id':'embedding','type':'openai_embedding','provider_type':'openai_embedding'},
+                            {'id':'model','provider_source_id':'source','model':'example'}],
+            }),encoding='utf-8')
+            audit=AstrBotTrafficAudit(root).snapshot('http://127.0.0.1:17890')
+            self.assertEqual([item['kind'] for item in audit['providers']],['provider','provider','model'])
+            values=traffic_inventory({'proxy_entry':{'http_url':'http://127.0.0.1:17890'}},{},
+                                     astrbot={'configured':True,'effective':True},
+                                     audit={**audit,'compatibility':{'state':'installed','providers':{
+                                         'openai_chat_completion':{'state':'installed'},
+                                         'openai_embedding':{'state':'installed'}}}})
+            provider=next(item for item in values if item['id']=='provider-proxy')
+            self.assertEqual(provider['model_count'],1)
+            self.assertNotIn('未适配',provider['message'])
+
     def test_mcp_audit_classifies_transports_without_leaking_credentials(self):
         from proxy_manager.traffic.audit import AstrBotTrafficAudit
         from proxy_manager.traffic.inventory import traffic_inventory

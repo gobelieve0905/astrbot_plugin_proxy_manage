@@ -152,7 +152,9 @@ class TrafficRegistry:
 
     @staticmethod
     def _provider_status(item: dict, audit: dict, astrbot: dict, policy: str) -> None:
-        providers = audit.get('providers', [])
+        entries = audit.get('providers', [])
+        providers = [value for value in entries if value.get('kind', 'provider') == 'provider']
+        model_entries = [value for value in entries if value.get('kind') == 'model']
         compatibility = audit.get('compatibility', {})
         compatibility = compatibility if isinstance(compatibility, dict) else {}
         supported_types = {
@@ -179,6 +181,7 @@ class TrafficRegistry:
         else:
             item.update({'status': 'not_connected', 'message': '未发现已启用 Provider 的稳定入口专用 proxy 配置'})
         item['discovered'] = providers
+        item['model_count'] = len(model_entries)
         item['integration'] = {
             'state': 'managed' if compatibility.get('state') == 'installed' else policy,
             'mode': 'runtime-entry',

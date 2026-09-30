@@ -44,6 +44,7 @@
 | 内核 | 插件自管 Mihomo 1.19.31、sing-box 1.14.1、Xray 26.3.27；另含固定版本 1.19.30、1.13.2、26.6.27 |
 | 制品来源 | 固定官方 URL、SHA-256 校验和离线上传；不使用 `latest` 或未经验证的镜像 |
 | 机器人平台 SDK | 已验证飞书/Lark（`lark-oapi` 1.7.3）和 Telegram（`python-telegram-bot` 22.8）；其他平台 SDK 尚未验证 |
+| 模型 Provider | 已安装官方兼容层：`openai_chat_completion`、`openai_responses`、`openai_embedding`、`vllm_rerank`；实际请求仍需无业务凭据验证 |
 | 不自动接入 | 裸 socket、显式 `trust_env=false`、未声明的第三方插件和未受信的独立容器 |
 
 未知或暂未验证的协议会保留原始信息并明确标记，不会静默写入运行配置。Xray 的代理组控制能力有限，页面会按实际能力提示。没有内核时仍可整理订阅、节点、代理组和规则，但原生协议测速、配置应用和出口验证会显示缺少的运行条件。

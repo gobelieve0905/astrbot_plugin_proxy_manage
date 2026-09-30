@@ -93,9 +93,10 @@ class AstrBotTrafficAudit:
         providers=[]
         for source in ('provider_sources','provider','provider_tts_settings','provider_stt_settings','provider_embedding_settings'):
             for index,item in enumerate(self._items(config.get(source))):
+                kind='model' if source=='provider' and item.get('provider_source_id') and not item.get('provider_type') else 'provider'
                 providers.append({'id':source+'-'+str(index),'name':self._name(item,source+' '+str(index+1)),
                                   'type':str(item.get('type') or item.get('provider_type') or item.get('provider') or 'unknown')[:80],
-                                  'enabled':bool(item.get('enable',True)),'proxy':self._proxy_state(item,entry)})
+                                  'kind':kind,'enabled':bool(item.get('enable',True)),'proxy':self._proxy_state(item,entry)})
         platforms=[]
         for index,item in enumerate(self._items(config.get('platform'))):
             platforms.append({'id':str(item.get('id') or 'platform-'+str(index+1))[:80],
