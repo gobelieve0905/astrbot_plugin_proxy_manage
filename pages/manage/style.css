@@ -1537,3 +1537,8 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 @media (max-width: 700px) {
   .groups-panel > .bar .panel-lede { white-space: normal; }
 }
+
+.group-help-dialog { width: min(560px, calc(100vw - 32px)); }
+.group-help-body { display: grid; gap: 12px; padding: 22px 24px; color: var(--muted-strong); line-height: 1.65; }
+.group-help-body p { margin: 0; }
+@media (max-width: 700px) { .group-help-body { padding: 18px; } }

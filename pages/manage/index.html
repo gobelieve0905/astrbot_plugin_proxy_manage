@@ -35,6 +35,7 @@
     <div id="task-banner" popover="manual" role="status" aria-live="polite" aria-atomic="true" hidden></div>
     <section id="content"></section>
   </main>
+  <dialog id="group-help-dialog" class="group-help-dialog" aria-labelledby="group-help-title"><div class="dialog-head"><div><small>代理组说明</small><h2 id="group-help-title">使用说明</h2></div><button id="group-help-close" type="button" class="quiet" aria-label="关闭代理组说明">关闭</button></div><div class="group-help-body"><p>每个代理组的配置和内核状态收在同一项中，展开后管理节点与运行操作。</p><p>打开页面时只读取已缓存状态；点击“刷新状态”才会主动重新读取内核状态。</p><p>保存页面配置后，还需在“内核管理”点击“应用代理配置”才会写入当前内核。直连是内核内部默认目标，不作为可编辑代理组展示。</p></div><div class="dialog-actions"><button id="group-help-dismiss" type="button" class="primary">知道了</button></div></dialog>
   <dialog id="diff" aria-labelledby="diff-title"><div class="dialog-head"><div><small>配置事务</small><h2 id="diff-title">确认配置变更</h2></div><button id="cancel" type="button" class="quiet" aria-label="取消配置变更">取消</button></div><div id="diff-content" class="change-preview" aria-live="polite"></div><div class="dialog-actions"><button id="save-only" type="button" class="quiet">仅保存</button><button id="confirm" type="button" class="primary">保存并应用</button></div></dialog>
   <dialog id="subscription-import-dialog" class="import-dialog" aria-labelledby="subscription-import-title">
     <div class="dialog-head"><div><small id="subscription-import-kicker">订阅来源</small><h2 id="subscription-import-title">导入订阅</h2></div><button id="subscription-import-close" type="button" class="quiet" aria-label="关闭订阅导入弹窗">关闭</button></div>
