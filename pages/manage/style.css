@@ -1494,3 +1494,11 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   .audit-detail-summary { grid-template-columns: 1fr; }
   .audit-detail-trigger { margin-left: 0; }
 }
+
+/* 代理组状态恢复为原来的一行摘要；展开后仍保留完整管理内容。 */
+.group-summary-copy { display: flex; align-items: baseline; flex-wrap: nowrap; gap: 12px; }
+.group-summary-copy b, .group-summary-copy small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 700px) {
+  .group-summary-copy { display: grid; gap: 4px; }
+  .group-summary-copy b, .group-summary-copy small { white-space: normal; }
+}
