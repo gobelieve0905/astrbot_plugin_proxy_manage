@@ -886,6 +886,7 @@ async function load(){ try{ state=await api.apiGet('state');selectedProbeNodeIds
 
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{tab=button.dataset.tab;render();if(tab==='groups')refreshGroupStatus({silent:true})}))
   $('group-help')?.addEventListener('click',()=>{const dialog=$('group-help-dialog');if(dialog&&!dialog.open){dialog.showModal();requestAnimationFrame(()=>$('group-help-dismiss')?.focus())}})
+  document.addEventListener('click',event=>{if(!event.target.closest('#group-help'))return;const dialog=$('group-help-dialog');if(dialog&&!dialog.open){dialog.showModal();requestAnimationFrame(()=>$('group-help-dismiss')?.focus())}})
   $('group-help-close')?.addEventListener('click',()=>$('group-help-dialog')?.close())
   $('group-help-dismiss')?.addEventListener('click',()=>$('group-help-dialog')?.close())
   $('group-help-dialog')?.addEventListener('cancel',event=>{event.preventDefault();$('group-help-dialog')?.close()})
