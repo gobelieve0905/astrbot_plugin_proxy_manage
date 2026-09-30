@@ -1525,3 +1525,15 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 @media (max-width: 700px) {
   .groups-panel > .group-config-note { max-width: 100%; white-space: normal; }
 }
+
+/* 标题栏说明只占一行，避免把右侧按钮区域垂直撑高。 */
+.groups-panel > .bar .panel-lede {
+  max-width: min(72ch, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.groups-panel > .bar > .actions { align-self: start; height: max-content; }
+@media (max-width: 700px) {
+  .groups-panel > .bar .panel-lede { white-space: normal; }
+}
