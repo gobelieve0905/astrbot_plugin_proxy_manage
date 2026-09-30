@@ -250,7 +250,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertNotIn('data-tab="platforms"',html)
         self.assertNotIn("else if(tab==='platforms')",script)
         self.assertIn('traffic_inventory',script)
-        self.assertIn(".filter(item=>item.id!=='platform-sdk')",script)
+        self.assertIn(".filter(item=>!['platform-sdk','provider-proxy'].includes(item.id))",script)
         self.assertNotIn('运行时指纹与注册表',script)
         self.assertNotIn('MCP 私有出口',script)
         self.assertNotIn('<h2>首次使用</h2>',script)
