@@ -35,7 +35,7 @@
 
 真实流量回归矩阵及服务器执行记录格式见 [TRAFFIC_REGRESSION_MATRIX.md](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/TRAFFIC_REGRESSION_MATRIX.md)。矩阵未完成服务器验收前，相关入口保持“无法判定”。
 
-30 类可接入 Provider 的无凭据客户端入口核验记录见 [Provider 请求记录](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PROVIDER_REQUESTS_2026-09-30.md)；该记录证明流量进入代理管理中心，不等于模型 API 或五种路由策略全部通过。
+AstrBot 4.28.2 内置 44 类 Provider 中，当前有 30 类已完成无业务凭据的客户端请求核验：请求取得稳定代理入口、规则、连接链路和出口或明确拒绝，证明 Provider 流量受代理管理中心控制。该核验不证明真实模型、语音或排序业务 API 成功；指定节点、自动组、拒绝和失败关闭也尚未逐类验收。完整记录见 [Provider 请求记录](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PROVIDER_REQUESTS_2026-09-30.md)。
 
 ## 支持范围与限制
 
@@ -46,7 +46,7 @@
 | 内核 | 插件自管 Mihomo 1.19.31、sing-box 1.14.1、Xray 26.3.27；另含固定版本 1.19.30、1.13.2、26.6.27 |
 | 制品来源 | 固定官方 URL、SHA-256 校验和离线上传；不使用 `latest` 或未经验证的镜像 |
 | 机器人平台 SDK | 已验证飞书/Lark（`lark-oapi` 1.7.3）和 Telegram（`python-telegram-bot` 22.8）；其他平台 SDK 尚未验证 |
-| 模型 Provider | AstrBot 4.28.2 内置 Provider 全部进入显式注册表；源码确认支持独立代理的类型按客户端注入稳定入口，其他类型保持原类并标记“未验证”，不会全局 monkey patch；每类实际请求仍需无业务凭据验证 |
+| 模型 Provider | AstrBot 4.28.2 内置 44 类全部进入显式注册表；30 类已完成无业务凭据传输核验，证明流量受稳定入口控制但不代表业务 API 成功；14 类（`dashscope_embedding`、`dashscope_tts`、`edge_tts`、`genie_tts`、`gsv_tts_selfhost`、`gsvi_tts_api`、`minimax_tts_api`、`nvidia_rerank`、`sensevoice_stt_selfhost`、`volcengine_tts`、`openai_whisper_api`、`openai_whisper_selfhost`、`xinference_rerank`、`xinference_stt`）及未知类型保持“未验证”，不会全局 monkey patch |
 | 不自动接入 | 裸 socket、显式 `trust_env=false`、未声明的第三方插件和未受信的独立容器 |
 
 未知或暂未验证的协议会保留原始信息并明确标记，不会静默写入运行配置。Xray 的代理组控制能力有限，页面会按实际能力提示。没有内核时仍可整理订阅、节点、代理组和规则，但原生协议测速、配置应用和出口验证会显示缺少的运行条件。

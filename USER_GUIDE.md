@@ -37,7 +37,7 @@
 | AstrBot 核心及遵循全局 HTTP 代理的下载请求 | 持久化 `http_proxy`/`no_proxy`；插件启动后在 AstrBot 进程设置 HTTP、HTTPS 和 SOCKS 入口 | 0.4.1 已接入，需重启后做请求级验证 |
 | 使用 AstrBot 公共 HTTP 客户端且继承核心代理配置的插件 | 使用核心 `http_proxy` | 尚未逐项接入和验证 |
 | 支持独立代理字段的平台适配器 | 在适配器配置中填写统一 HTTP/SOCKS 入口 | 条件支持，应按适配器文档验证 |
-| 模型 Provider | 统一 Provider 注册表按类型适配；确认支持独立代理的客户端注入稳定入口 | AstrBot 4.28.2 内置类型均已登记；未确认代理路径的类型保持“未验证”，不自动改写；仍需执行无业务凭据的受控请求验证 |
+| 模型 Provider | 统一 Provider 注册表按类型适配；已确认路径的客户端注入稳定 HTTP 入口 | AstrBot 4.28.2 内置 44 类中，30 类已完成无业务凭据传输核验，证明流量受代理管理中心控制但不代表业务 API 成功；14 类及未知类型保持“未验证”，不自动改写。指定节点、自动组、拒绝和失败关闭仍未逐类验收 |
 | 自建 SDK、原生 socket、显式 `trust_env=false` 的第三方插件 | 由该插件显式配置代理 | 不会自动接入 |
 | 飞书、Telegram 等已运行平台连接 | 先在测试实例验证 HTTP、WebSocket、媒体或轮询，并按矩阵记录四段证据 | 不自动修改，避免中断现有连接 |
 
@@ -80,6 +80,7 @@
 | 节点 URI | AnyTLS、HTTP、HTTPS、SOCKS5/SOCKS5H | SS、VMess、VLESS、Trojan、Hysteria2、TUIC 及其他内核专用协议 | 未知协议明确标记原因 |
 | 订阅格式 | 常见 URI 列表、适用的 Clash YAML | 供应商私有字段 | 任意脚本或可执行订阅 |
 | AstrBot 兼容层 | 4.28.1、4.28.2；已验证飞书/Lark（`lark-oapi` 1.7.3）和 Telegram（`python-telegram-bot` 22.8），并需匹配 Provider 版本指纹 | 其他平台 SDK 及后续版本尚未验证 | 未匹配的运行时不会安装官方兼容层 |
+| Provider 传输 | 30 类已完成无业务凭据请求核验，记录稳定入口、规则、连接链路和出口或明确拒绝 | 14 类：`dashscope_embedding`、`dashscope_tts`、`edge_tts`、`genie_tts`、`gsv_tts_selfhost`、`gsvi_tts_api`、`minimax_tts_api`、`nvidia_rerank`、`sensevoice_stt_selfhost`、`volcengine_tts`、`openai_whisper_api`、`openai_whisper_selfhost`、`xinference_rerank`、`xinference_stt`；未知类型 | 不自动 monkey patch；验证不代表真实模型、语音或排序业务 API 成功 |
 | 内核 | 插件自管 Mihomo 1.19.31、sing-box 1.14.1、Xray 26.3.27；另含固定版本 1.19.30、1.13.2、26.6.27 | 后续适配器 | 外部共享或无法核对的内核 |
 | 部署 | 插件私有目录、回环监听、随机密钥 | 离线制品安装 | 公网控制端口或用户指定外部服务 |
 | 制品 | 官方固定 URL 与 SHA-256、离线上传同摘要 | 后续版本升级清单 | `latest`、第三方未校验镜像 |
