@@ -35,63 +35,63 @@
 
 真实流量回归矩阵及服务器执行记录格式见 [TRAFFIC_REGRESSION_MATRIX.md](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/TRAFFIC_REGRESSION_MATRIX.md)。矩阵未完成服务器验收前，相关入口保持“无法判定”。
 
-AstrBot 4.28.2 内置 44 类 Provider 的逐项适配范围如下。这里的“已验证”只表示无业务凭据请求已进入代理管理中心的稳定入口，并取得规则、连接链路和出口或明确拒绝证据；不表示真实模型、语音或排序业务 API 成功。指定节点、自动组、拒绝和失败关闭也尚未逐类验收。完整请求记录见 [Provider 请求记录](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PROVIDER_REQUESTS_2026-09-30.md)。
+AstrBot 4.28.2 内置 44 类 Provider 的逐项适配范围如下。表中的“显示名称”就是 AstrBot“新建模型提供商”窗口中的名称；同一显示名称可能随 AstrBot 版本变化，判断适配状态以旁边的内部 `provider_type` 为准。这里的“已验证”只表示无业务凭据请求已进入代理管理中心的稳定入口，并取得规则、连接链路和出口或明确拒绝证据；不表示真实模型、语音或排序业务 API 成功。指定节点、自动组、拒绝和失败关闭也尚未逐类验收。完整请求记录见 [Provider 请求记录](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/PROVIDER_REQUESTS_2026-09-30.md)。
 
 ## Provider 适配范围
 
 ### 已验证受代理管理中心控制（30 类）
 
-| Provider | 传输验证结果 |
-| --- | --- |
-| `anthropic_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `azure_tts` | 已验证：稳定入口、规则、连接链路和出口 |
-| `bailian_rerank` | 已验证：稳定入口、规则、连接链路和出口 |
-| `elevenlabs_tts_api` | 已验证：稳定入口、规则、连接链路和出口 |
-| `fishaudio_tts_api` | 已验证：稳定入口、规则、连接链路和明确拒绝 |
-| `gemini_embedding` | 已验证：稳定入口、规则、连接链路和出口 |
-| `googlegenai_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `gemini_tts` | 已验证：稳定入口、规则、连接链路和出口 |
-| `groq_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `kimi_code_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `longcat_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `mimo_stt_api` | 已验证：稳定入口、规则、连接链路和出口 |
-| `mimo_tts_api` | 已验证：稳定入口、规则、连接链路和出口 |
-| `minimax_token_plan` | 已验证：稳定入口、规则、连接链路和出口 |
-| `mirarouter_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `nvidia_embedding` | 已验证：稳定入口、规则、连接链路和明确拒绝 |
-| `aihubmix_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `ollama_embedding` | 已验证：稳定入口、规则、连接链路和明确拒绝 |
-| `openai_embedding` | 已验证：稳定入口、规则、连接链路和出口 |
-| `openai_responses` | 已验证：稳定入口、规则、连接链路和出口 |
-| `openai_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `openai_tts_api` | 已验证：稳定入口、规则、连接链路和出口 |
-| `openrouter_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `ssycloud_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `tei_rerank` | 已验证：稳定入口、规则、连接链路和出口 |
-| `vllm_rerank` | 已验证：稳定入口、规则、连接链路和出口 |
-| `xai_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `xiaomi_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
-| `xiaomi_token_plan` | 已验证：稳定入口、规则、连接链路和出口 |
-| `zhipu_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| AstrBot 显示名称 | 内部 `provider_type` | 传输验证结果 |
+| --- | --- | --- |
+| `Anthropic`（界面显示 `Anthropic Compatible`） | `anthropic_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| `Azure TTS` | `azure_tts` | 已验证：稳定入口、规则、连接链路和出口 |
+| 阿里云百炼重排序 | `bailian_rerank` | 已验证：稳定入口、规则、连接链路和出口 |
+| ElevenLabs TTS(API) | `elevenlabs_tts_api` | 已验证：稳定入口、规则、连接链路和出口 |
+| FishAudio TTS(API) | `fishaudio_tts_api` | 已验证：稳定入口、规则、连接链路和明确拒绝 |
+| Gemini Embedding | `gemini_embedding` | 已验证：稳定入口、规则、连接链路和出口 |
+| `Google Gemini`（界面显示 `Gemini Compatible`） | `googlegenai_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| Gemini TTS | `gemini_tts` | 已验证：稳定入口、规则、连接链路和出口 |
+| Groq | `groq_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| Kimi Coding Plan | `kimi_code_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| LongCat | `longcat_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| MiMo STT(API) | `mimo_stt_api` | 已验证：稳定入口、规则、连接链路和出口 |
+| MiMo TTS(API) | `mimo_tts_api` | 已验证：稳定入口、规则、连接链路和出口 |
+| MiniMax Token Plan | `minimax_token_plan` | 已验证：稳定入口、规则、连接链路和出口 |
+| MiraRouter | `mirarouter_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| NVIDIA Embedding | `nvidia_embedding` | 已验证：稳定入口、规则、连接链路和明确拒绝 |
+| AIHubMix | `aihubmix_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| Ollama Embedding | `ollama_embedding` | 已验证：稳定入口、规则、连接链路和明确拒绝 |
+| OpenAI Embedding | `openai_embedding` | 已验证：稳定入口、规则、连接链路和出口 |
+| OpenAI Responses、DeepSeek Responses、xAI（截图中的兼容模板） | `openai_responses` | 已验证：稳定入口、规则、连接链路和出口 |
+| OpenAI Compatible、Kimi（内部模板名 `Moonshot`）、MiniMax、DeepSeek、NVIDIA、Azure OpenAI、Ollama、LM Studio、Gemini OpenAI API、302.AI、SiliconFlow、PPIO、TokenPony、Compshare、ModelScope、FastGPT | `openai_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| OpenAI TTS(API) | `openai_tts_api` | 已验证：稳定入口、规则、连接链路和出口 |
+| OpenRouter | `openrouter_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| SSYCloud(胜算云) | `ssycloud_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| TEI Rerank | `tei_rerank` | 已验证：稳定入口、规则、连接链路和出口 |
+| vLLM Rerank | `vllm_rerank` | 已验证：稳定入口、规则、连接链路和出口 |
+| xAI（专用 Provider 类型，当前选择器未单独显示） | `xai_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| Xiaomi | `xiaomi_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
+| Xiaomi Token Plan | `xiaomi_token_plan` | 已验证：稳定入口、规则、连接链路和出口 |
+| Zhipu | `zhipu_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
 
 ### 未验证，保持原 Provider（14 类）
 
-| Provider | 当前状态 |
-| --- | --- |
-| `dashscope_embedding` | 未确认独立代理路径，不自动改写 |
-| `dashscope_tts` | 未确认独立代理路径，不自动改写 |
-| `edge_tts` | 未确认独立代理路径，不自动改写 |
-| `genie_tts` | 未确认独立代理路径，不自动改写 |
-| `gsv_tts_selfhost` | 未确认独立代理路径，不自动改写 |
-| `gsvi_tts_api` | 未确认独立代理路径，不自动改写 |
-| `minimax_tts_api` | 未确认独立代理路径，不自动改写 |
-| `nvidia_rerank` | 未确认独立代理路径，不自动改写 |
-| `sensevoice_stt_selfhost` | 未确认独立代理路径，不自动改写 |
-| `volcengine_tts` | 未确认独立代理路径，不自动改写 |
-| `openai_whisper_api` | 未确认独立代理路径，不自动改写 |
-| `openai_whisper_selfhost` | 未确认独立代理路径，不自动改写 |
-| `xinference_rerank` | 未确认独立代理路径，不自动改写 |
-| `xinference_stt` | 未确认独立代理路径，不自动改写 |
+| AstrBot 显示名称 | 内部 `provider_type` | 当前状态 |
+| --- | --- | --- |
+| DashScope Embedding | `dashscope_embedding` | 未确认独立代理路径，不自动改写 |
+| 阿里云百炼 TTS(API) | `dashscope_tts` | 未确认独立代理路径，不自动改写 |
+| Edge TTS | `edge_tts` | 未确认独立代理路径，不自动改写 |
+| Genie TTS | `genie_tts` | 未确认独立代理路径，不自动改写 |
+| GSV TTS(Local) | `gsv_tts_selfhost` | 未确认独立代理路径，不自动改写 |
+| GSVI TTS(API) | `gsvi_tts_api` | 未确认独立代理路径，不自动改写 |
+| MiniMax TTS(API) | `minimax_tts_api` | 未确认独立代理路径，不自动改写 |
+| NVIDIA Rerank | `nvidia_rerank` | 未确认独立代理路径，不自动改写 |
+| SenseVoice(Local) | `sensevoice_stt_selfhost` | 未确认独立代理路径，不自动改写 |
+| 火山引擎_TTS(API) | `volcengine_tts` | 未确认独立代理路径，不自动改写 |
+| Whisper(API) | `openai_whisper_api` | 未确认独立代理路径，不自动改写 |
+| Whisper(Local) | `openai_whisper_selfhost` | 未确认独立代理路径，不自动改写 |
+| Xinference Rerank | `xinference_rerank` | 未确认独立代理路径，不自动改写 |
+| Xinference STT | `xinference_stt` | 未确认独立代理路径，不自动改写 |
 
 未知 Provider 不在以上 44 类中，保持“未验证”，不会被全局 monkey patch。
 

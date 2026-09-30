@@ -3,6 +3,7 @@
 ## 0.4.1 - 2026-09-30
 
 - **适配范围清单（2026-09-30）**：README 逐项列出 30 类已验证受控传输和 14 类未验证 Provider，并分别列明飞书/Lark、Telegram 的官方兼容层及真实传输验证边界；使用指南同步提供平台表和明细入口。
+- **Provider 名称对照（2026-09-30）**：适配范围表增加 AstrBot“新建模型提供商”中的显示名称与内部 `provider_type` 对照，覆盖 OpenAI Compatible、DeepSeek、SiliconFlow、Ollama、Kimi 等复用同一 Provider 类型的模板。
 - **统一流量注册表**：建立 `TrafficRegistry`，统一维护流量接入定义、状态计算和旧调用兼容入口。
 - **平台 SDK 审计**：后台保留机器人平台 SDK 的兼容和审计数据，概览页不展示该卡片。
 - **官方平台兼容范围**：仅对飞书/Lark 与 Telegram 安装官方兼容层；飞书已有部分传输接管证据，Telegram 的轮询和媒体请求仍需逐项验证；其他平台 SDK 不作兼容承诺。

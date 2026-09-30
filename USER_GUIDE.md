@@ -88,7 +88,7 @@
 | 节点 URI | AnyTLS、HTTP、HTTPS、SOCKS5/SOCKS5H | SS、VMess、VLESS、Trojan、Hysteria2、TUIC 及其他内核专用协议 | 未知协议明确标记原因 |
 | 订阅格式 | 常见 URI 列表、适用的 Clash YAML | 供应商私有字段 | 任意脚本或可执行订阅 |
 | AstrBot 兼容层 | 4.28.1、4.28.2；飞书/Lark 与 Telegram 的官方兼容层已适配，传输结果见上表 | 其他平台 SDK 及后续版本尚未验证 | 未匹配的运行时不会安装官方兼容层 |
-| Provider 传输 | [30 类逐项名单](README.md#provider-适配范围)：无业务凭据请求取得稳定入口、规则、连接链路和出口或明确拒绝 | [14 类逐项名单](README.md#provider-适配范围)及未知类型 | 不自动 monkey patch；验证不代表真实业务 API 成功 |
+| Provider 传输 | [30 类逐项名单](README.md#provider-适配范围)：按 AstrBot 界面显示名称与内部 `provider_type` 对照，已验证请求取得稳定入口、规则、连接链路和出口或明确拒绝 | [14 类逐项名单](README.md#provider-适配范围)及未知类型 | 不自动 monkey patch；验证不代表真实业务 API 成功 |
 | 内核 | 插件自管 Mihomo 1.19.31、sing-box 1.14.1、Xray 26.3.27；另含固定版本 1.19.30、1.13.2、26.6.27 | 后续适配器 | 外部共享或无法核对的内核 |
 | 部署 | 插件私有目录、回环监听、随机密钥 | 离线制品安装 | 公网控制端口或用户指定外部服务 |
 | 制品 | 官方固定 URL 与 SHA-256、离线上传同摘要 | 后续版本升级清单 | `latest`、第三方未校验镜像 |
