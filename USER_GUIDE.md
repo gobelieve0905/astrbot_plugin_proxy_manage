@@ -37,7 +37,7 @@
 | AstrBot 核心及遵循全局 HTTP 代理的下载请求 | 持久化 `http_proxy`/`no_proxy`；插件启动后在 AstrBot 进程设置 HTTP、HTTPS 和 SOCKS 入口 | 0.4.1 已接入，需重启后做请求级验证 |
 | 使用 AstrBot 公共 HTTP 客户端且继承核心代理配置的插件 | 使用核心 `http_proxy` | 尚未逐项接入和验证 |
 | 支持独立代理字段的平台适配器 | 在适配器配置中填写统一 HTTP/SOCKS 入口 | 条件支持，应按适配器文档验证 |
-| 支持代理或自定义 HTTP 客户端的模型提供商 | 官方兼容层为支持的 Provider 注入稳定入口 | 仅已安装 `openai_chat_completion`、`openai_responses`、`openai_embedding`、`vllm_rerank`；其他 Provider 尚未验证，不作兼容承诺；仍需执行无业务凭据的受控请求验证 |
+| 模型 Provider | 统一 Provider 注册表按类型适配；确认支持独立代理的客户端注入稳定入口 | AstrBot 4.28.2 内置类型均已登记；未确认代理路径的类型保持“未验证”，不自动改写；仍需执行无业务凭据的受控请求验证 |
 | 自建 SDK、原生 socket、显式 `trust_env=false` 的第三方插件 | 由该插件显式配置代理 | 不会自动接入 |
 | 飞书、Telegram 等已运行平台连接 | 先在测试实例验证 HTTP、WebSocket、媒体或轮询，并按矩阵记录四段证据 | 不自动修改，避免中断现有连接 |
 

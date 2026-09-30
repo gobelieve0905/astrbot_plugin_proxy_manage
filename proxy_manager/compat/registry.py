@@ -11,6 +11,7 @@ from .lark import build_proxy_adapter as build_lark_adapter
 from .lark import install_sdk_patch as install_lark_sdk_patch
 from .lease import ComponentLease
 from .telegram import build_proxy_adapter as build_telegram_adapter
+from .provider_registry import PROVIDER_ADAPTER_MAP, PROVIDER_ADAPTERS, request_sample
 
 LIVE_COMPONENT_RELOAD_TIMEOUT = 8.0
 
@@ -22,18 +23,10 @@ SUPPORTED_SDK_VERSIONS = {
     "websockets": "15.0.1",
 }
 SUPPORTED_PLATFORM_TYPES = ("lark", "telegram")
-SUPPORTED_PROVIDER_TYPES = {
-    "openai_chat_completion",
-    "openai_responses",
-    "openai_embedding",
-    "vllm_rerank",
-}
-PROVIDER_MODULES = {
-    "openai_chat_completion": "astrbot.core.provider.sources.openai_source",
-    "openai_responses": "astrbot.core.provider.sources.openai_responses_source",
-    "openai_embedding": "astrbot.core.provider.sources.openai_embedding_source",
-    "vllm_rerank": "astrbot.core.provider.sources.vllm_rerank_source",
-}
+SUPPORTED_PROVIDER_TYPES = frozenset(
+    name for name, spec in PROVIDER_ADAPTER_MAP.items() if spec.proxy_mode != "unverified"
+)
+PROVIDER_MODULES = {item.provider_type: item.module_name for item in PROVIDER_ADAPTERS}
 
 
 @dataclass
@@ -153,16 +146,22 @@ class CompatibilityManager:
 
     def _provider_wrapper(self, provider_type: str, base):
         lease = self.lease.for_component("provider:" + provider_type)
+        spec = PROVIDER_ADAPTER_MAP[provider_type]
 
-        if provider_type == "vllm_rerank":
+        if spec.proxy_mode == "session":
             class ProxySession:
                 def __init__(self, session):
                     self._session = session
 
                 def post(self, *args, **kwargs):
                     if lease.http_proxy:
-                        kwargs.setdefault("proxy", lease.http_proxy)
+                        kwargs["proxy"] = lease.http_proxy
                     return self._session.post(*args, **kwargs)
+
+                def get(self, *args, **kwargs):
+                    if lease.http_proxy:
+                        kwargs["proxy"] = lease.http_proxy
+                    return self._session.get(*args, **kwargs)
 
                 async def close(self):
                     await self._session.close()
@@ -170,7 +169,7 @@ class CompatibilityManager:
                 def __getattr__(self, name):
                     return getattr(self._session, name)
 
-            class ProxyManagedRerankProvider(base):
+            class ProxyManagedSessionProvider(base):
                 _proxy_manager_base = base
 
                 def __init__(self, provider_config, provider_settings):
@@ -180,9 +179,9 @@ class CompatibilityManager:
                     super().__init__(config, provider_settings)
                     self.client = ProxySession(self.client)
 
-            ProxyManagedRerankProvider.__name__ = "ProxyManagedProvider_vllm_rerank"
-            ProxyManagedRerankProvider.__qualname__ = ProxyManagedRerankProvider.__name__
-            return ProxyManagedRerankProvider
+            ProxyManagedSessionProvider.__name__ = "ProxyManagedProvider_" + provider_type
+            ProxyManagedSessionProvider.__qualname__ = ProxyManagedSessionProvider.__name__
+            return ProxyManagedSessionProvider
 
         class ProxyManagedProvider(base):
             _proxy_manager_base = base
@@ -201,6 +200,16 @@ class CompatibilityManager:
         from astrbot.core.provider.register import provider_cls_map
 
         for provider_type, module_name in PROVIDER_MODULES.items():
+            spec = PROVIDER_ADAPTER_MAP[provider_type]
+            if spec.proxy_mode == "unverified":
+                self.report.providers[provider_type] = {
+                    "state": "unknown",
+                    "proxy_mode": spec.proxy_mode,
+                    "verification": spec.verification,
+                    "sample": request_sample(provider_type),
+                    "message": "Provider 已登记但源码未确认独立代理路径；保持原类，不自动改写",
+                }
+                continue
             try:
                 importlib.import_module(module_name)
             except (ImportError, ModuleNotFoundError) as exc:
@@ -221,7 +230,10 @@ class CompatibilityManager:
             metadata.cls_type = self._provider_wrapper(provider_type, base)
             self.report.providers[provider_type] = {
                 "state": "installed",
-                "message": "Provider 配置副本已注入插件稳定 HTTP 入口",
+                "proxy_mode": spec.proxy_mode,
+                "verification": spec.verification,
+                "sample": request_sample(provider_type),
+                "message": "Provider 配置副本已注入插件稳定 HTTP 入口；请求级证据仍按类型记录",
             }
 
     async def install(self) -> CompatibilityReport:
@@ -274,7 +286,7 @@ class CompatibilityManager:
         if provider_manager is not None and getattr(provider_manager, "provider_insts", None):
             configs = getattr(provider_manager, "providers_config", [])
             for config in configs:
-                if config.get("type") in SUPPORTED_PROVIDER_TYPES:
+                if self.report.providers.get(config.get("type"), {}).get("state") == "installed":
                     try:
                         await asyncio.wait_for(
                             provider_manager.reload(config),

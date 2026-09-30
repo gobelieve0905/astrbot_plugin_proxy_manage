@@ -107,6 +107,58 @@ class TestConfigurationRules(unittest.TestCase):
 
         self.assertEqual(SUPPORTED_PLATFORM_TYPES, ("lark", "telegram"))
 
+    def test_provider_registry_is_explicit_and_each_type_has_request_sample(self):
+        from proxy_manager.compat.provider_registry import PROVIDER_ADAPTERS, PROVIDER_ADAPTER_MAP, request_sample
+
+        self.assertEqual(len(PROVIDER_ADAPTERS), 44)
+        self.assertEqual(len(PROVIDER_ADAPTER_MAP), len(PROVIDER_ADAPTERS))
+        for spec in PROVIDER_ADAPTER_MAP.values():
+            self.assertTrue(spec.module_name.startswith('astrbot.core.provider.sources.'))
+            sample = request_sample(spec.provider_type)
+            self.assertEqual(sample['result'], 'UNKNOWN')
+            self.assertEqual(set(('entry', 'rule', 'chain', 'exit')) - sample.keys(), set())
+            self.assertNotIn('secret', str(sample))
+        self.assertEqual(request_sample('future_provider')['result'], 'UNKNOWN')
+        self.assertEqual(request_sample('future_provider')['entry'], 'unverified')
+
+    def test_provider_wrappers_use_copied_config_and_per_request_proxy(self):
+        from proxy_manager.compat.lease import ComponentLease
+        from proxy_manager.compat.registry import CompatibilityManager
+        from proxy_manager.compat.provider_registry import PROVIDER_ADAPTER_MAP
+
+        entry = 'http://127.0.0.1:17890'
+        manager = CompatibilityManager(None, ComponentLease('test', entry))
+
+        class ConfigBase:
+            def __init__(self, config, settings):
+                self.config = config
+                self.settings = settings
+
+        class Session:
+            def post(self, *args, **kwargs):
+                return kwargs
+
+            async def close(self):
+                pass
+
+        class SessionBase(ConfigBase):
+            def __init__(self, config, settings):
+                super().__init__(config, settings)
+                self.client = Session()
+
+        for provider_type, spec in PROVIDER_ADAPTER_MAP.items():
+            if spec.proxy_mode == 'unverified':
+                continue
+            config = {'key': ['placeholder'], 'nested': {'original': True}}
+            base = SessionBase if spec.proxy_mode == 'session' else ConfigBase
+            wrapped = manager._provider_wrapper(provider_type, base)
+            instance = wrapped(config, {})
+            self.assertEqual(config, {'key': ['placeholder'], 'nested': {'original': True}})
+            self.assertEqual(instance.config['proxy'], entry)
+            if spec.proxy_mode == 'session':
+                self.assertEqual(instance.client.post('https://example.invalid')['proxy'], entry)
+                self.assertEqual(instance.client.post('https://example.invalid', proxy='http://override')['proxy'], entry)
+
     def test_telegram_compatibility_sets_bot_and_polling_proxies(self):
         from proxy_manager.compat.telegram import build_proxy_adapter
         from proxy_manager.compat.lease import ComponentLease
