@@ -37,34 +37,40 @@
   --header-height: 92px;
 }
 
-.components-panel { min-width: 0; container: components / inline-size; --component-columns: minmax(0, 1.4fr) 112px minmax(0, 1fr) minmax(0, 1.2fr); }
+.components-panel { min-width: 0; container: components / inline-size; --component-columns: minmax(0, 1.4fr) 112px minmax(0, 1fr) minmax(0, 1.2fr); --component-control-height: 44px; }
 .component-toolbar { align-items: center; margin-bottom: 24px; }
 .component-toolbar .muted { display: block; margin-top: 6px; font-size: 13px; }
-.component-section { margin-top: 28px; background: var(--panel); border-block: 1px solid var(--line); }
-.component-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; background: var(--panel-subtle); border-bottom: 1px solid var(--line); }
-.component-section-head h3 { margin: 0; font-size: 16px; }
+.component-section { margin-top: 24px; }
+.component-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; margin-bottom: 8px; }
+.component-section-head h3 { margin: 0; font-size: 15px; }
 .component-section-head > span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .component-columns, .component-row { display: grid; grid-template-columns: var(--component-columns); gap: 20px; padding-inline: 20px; }
-.component-columns { padding-block: 12px; color: var(--muted-strong); font-size: 12px; border-bottom: 1px solid var(--line); }
-.component-row { align-items: start; padding-block: 20px; border-bottom: 1px solid var(--line); }
-.component-row:last-child { border-bottom: 0; }
+.component-columns { padding-block: 6px 10px; color: var(--muted); font-size: 12px; }
+.component-list { display: grid; gap: 8px; }
+.component-row { align-items: start; padding-block: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .component-row:hover { background: var(--panel-subtle); }
-.component-identity, .component-state { min-width: 0; display: grid; gap: 6px; }
-.component-identity b { display: flex; align-items: center; min-height: 40px; font-size: 14px; line-height: 1.5; }
+.component-identity, .component-state { min-width: 0; display: grid; gap: 4px; }
+.component-identity b { display: flex; align-items: center; min-height: var(--component-control-height); font-size: 14px; line-height: 1.5; }
 .component-identity b, .component-identity code, .component-state small { overflow-wrap: anywhere; }
 .component-identity small, .component-state small, .component-target > span { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .component-identity code { font-size: 11px; color: var(--muted); }
 .component-target { display: grid; gap: 8px; min-width: 0; }
 .component-target > span { display: none; }
-.component-target select { width: 100%; min-width: 0; }
-.component-toggle { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 13px; }
-.component-toggle input { width: 16px; height: 16px; margin: 0; flex: none; }
+.component-target select { width: 100%; min-width: 0; height: var(--component-control-height); border-radius: 8px; }
+.component-toggle { display: flex; align-items: center; gap: 8px; min-height: var(--component-control-height); font-size: 13px; cursor: pointer; }
+.component-toggle input[type="checkbox"] { appearance: none; position: relative; width: 36px; height: 22px; min-height: 22px; margin: 0; padding: 0; flex: 0 0 36px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--line-strong); box-shadow: none; }
+.component-toggle input[type="checkbox"]::before { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--panel); }
+.component-toggle input[type="checkbox"]:checked { border-color: var(--accent); background: var(--accent); }
+.component-toggle input[type="checkbox"]:checked::before { transform: translateX(14px); }
+.component-toggle input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.component-toggle input[type="checkbox"]:disabled { opacity: .45; cursor: not-allowed; }
+.component-toggle:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
 .component-state > button { justify-self: start; }
-.component-status { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 13px; line-height: 1.5; }
+.component-status { display: flex; align-items: center; gap: 8px; min-height: var(--component-control-height); font-size: 13px; line-height: 1.5; }
 .component-status::before { content: ''; width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--muted); }
 .component-status.pending::before { background: var(--warning); }
 .component-status.ok::before { background: var(--success); }
-.component-empty { display: flex; align-items: center; min-height: 100px; padding: 24px 20px; color: var(--muted); font-size: 13px; }
+.component-empty { display: flex; align-items: center; min-height: var(--component-control-height); padding: 12px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 @container components (max-width: 760px) {
   .component-columns { display: none; }
   .component-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 12px; }
@@ -77,7 +83,6 @@
 @container components (max-width: 480px) {
   .component-row { grid-template-columns: minmax(0, 1fr); padding: 16px; }
   .component-row > * { grid-column: 1; grid-row: auto; }
-  .component-section-head { padding: 14px 16px; }
   .component-target select { font-size: 16px; }
   .component-toolbar { flex-wrap: wrap; }
 }
