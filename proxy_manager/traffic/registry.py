@@ -217,7 +217,7 @@ class TrafficRegistry:
         compatible = [value for value in declarations if (value.get('declaration') or {}).get('state') == 'compatible']
         environment = [value for value in compatible if value['declaration'].get('mode') == 'astrbot-environment']
         if environment:
-            integration = 'managed' if astrbot.get('configured') else 'pending'
+            integration = 'configured' if astrbot.get('effective') else 'pending'
             message = '发现 ' + str(len(environment)) + ' 个插件声明遵守 AstrBot 代理环境；尚无请求级证据'
         elif compatible:
             integration = 'declared'
@@ -226,7 +226,7 @@ class TrafficRegistry:
             integration = 'needs_protocol'
             message = '发现 ' + str(count) + ' 个插件配置项；尚无有效统一接入协议声明'
         item.update({
-            'status': 'unknown' if environment and astrbot.get('configured') else 'not_connected',
+            'status': 'unknown' if environment and astrbot.get('effective') else 'not_connected',
             'message': message,
             'discovered': declarations,
             'integration': {
@@ -240,15 +240,17 @@ class TrafficRegistry:
     def _mcp_status(item: dict, audit: dict) -> None:
         mcps = audit.get('mcps', [])
         configured = [value for value in mcps if value.get('proxy') == 'configured']
+        observed = [value for value in mcps if value.get('proxy') in {'configured', 'other_proxy'}]
         compatible = [value for value in mcps if (value.get('declaration') or {}).get('state') == 'compatible']
-        supported_configured = [value for value in configured if (value.get('declaration') or {}).get('state') == 'compatible']
+        supported_configured = [value for value in configured if value.get('protocol_connected')]
         item.update({
-            'status': 'unknown' if configured else 'not_connected',
+            'status': 'unknown' if observed else 'not_connected',
             'message': '发现 ' + str(len(configured)) + ' 个 MCP 已配置入口，但尚无请求级出口证据' if configured else
-                       ('发现 ' + str(len(mcps)) + ' 个 MCP，尚未配置或无法安全接入其外部出口' if mcps else '未发现 MCP 配置'),
+                       ('发现 MCP 使用其他或不完整代理入口，尚无请求级出口证据' if observed else
+                        ('发现 ' + str(len(mcps)) + ' 个 MCP，尚未配置或无法安全接入其外部出口' if mcps else '未发现 MCP 配置')),
             'discovered': mcps,
             'integration': {
-                'state': 'managed' if supported_configured else ('declared' if compatible else 'needs_protocol'),
+                'state': 'configured' if supported_configured else ('declared' if compatible else 'needs_protocol'),
                 'mode': 'protocol',
                 'message': 'MCP 通过 astrbot.proxy-manager/v1 声明 stdio 或私网入口兼容性',
             },

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import importlib
-import json
 import ipaddress
+import json
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .integration import declaration, plugin_declarations
 
@@ -62,6 +62,26 @@ class AstrBotTrafficAudit:
         if host and '.' not in host: return 'container','独立容器'
         return 'external','外部 MCP 服务'
 
+    @staticmethod
+    def _mcp_proxy_matches(proxy: str, entry: str, locality: str, private: dict) -> bool:
+        try:
+            parsed = urlsplit(proxy)
+            if locality == 'stdio':
+                return bool(entry and proxy.rstrip('/') == entry.rstrip('/'))
+            if locality != 'container' or not private.get('enabled'):
+                return False
+            return bool(
+                parsed.scheme == 'http'
+                and parsed.hostname == private.get('service_host', 'astrbot')
+                and parsed.port == int(private.get('port', 17891))
+                and private.get('username') and private.get('password')
+                and unquote(parsed.username or '') == private['username']
+                and unquote(parsed.password or '') == private['password']
+                and parsed.path in {'', '/'} and not parsed.query and not parsed.fragment
+            )
+        except (TypeError, ValueError):
+            return False
+
     def _mcps(self, entry: str, private: dict|None) -> list[dict]:
         try: value=json.loads(self.mcp_path.read_text(encoding='utf-8-sig'))
         except (OSError,ValueError): return []
@@ -73,17 +93,24 @@ class AstrBotTrafficAudit:
             locality,label=self._mcp_locality(item)
             declared=declaration(item.get('proxy_manager'))
             env=item.get('env') if isinstance(item.get('env'),dict) else {}
-            proxy=str(env.get('HTTPS_PROXY') or env.get('https_proxy') or env.get('HTTP_PROXY') or env.get('http_proxy') or '')
-            parsed=urlsplit(proxy) if proxy else None
-            if locality=='stdio': connected=proxy.rstrip('/')==entry.rstrip('/')
-            elif locality=='container':
-                expected_port=int((private or {}).get('port',17891) or 17891)
-                connected=bool(parsed and parsed.port==expected_port and parsed.username and parsed.password)
-            else: connected=False
+            proxies=[str(env[key]) for key in ('HTTPS_PROXY','https_proxy','HTTP_PROXY','http_proxy') if env.get(key)]
+            connected=bool(proxies) and all(self._mcp_proxy_matches(proxy,entry,locality,private or {}) for proxy in proxies)
+            # One scheme or an external no_proxy value cannot prove complete HTTP egress.
+            connected=connected and all(env.get(key) or env.get(key.upper()) for key in ('http_proxy','https_proxy'))
+            bypass=str(env.get('no_proxy') or env.get('NO_PROXY') or '')
+            if any(host.strip() not in {'localhost','127.0.0.1','::1'} for host in bypass.split(',') if host.strip()):
+                connected=False
+            expected_mode='astrbot-environment' if locality=='stdio' else 'private-network'
+            protocol_connected=connected and declared.get('state')=='compatible' and declared.get('mode')==expected_mode
+            try:
+                transport=str(item.get('transport') or urlsplit(str(item.get('url') or '')).scheme or 'unknown')[:24]
+            except ValueError:
+                transport='unknown'
             results.append({'id':'mcp-'+str(key)[:80],'name':str(item.get('name') or key)[:80],
-                            'transport':'stdio' if item.get('command') else str(item.get('transport') or urlsplit(str(item.get('url') or '')).scheme or 'unknown')[:24],
+                            'transport':'stdio' if item.get('command') else transport,
                             'locality':locality,'locality_label':label,
-                            'proxy':'configured' if connected else ('other_proxy' if proxy else 'unset'),
+                            'proxy':'configured' if connected else ('other_proxy' if proxies else 'unset'),
+                            'protocol_connected':bool(protocol_connected),
                             'declaration':declared,
                             'restart':'重启 MCP 进程' if locality in {'stdio','same_host'} else ('重建或重启容器' if locality=='container' else '由外部服务管理')})
         return results

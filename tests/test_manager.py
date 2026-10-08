@@ -326,7 +326,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.4.1',html)
+        self.assertIn('流量控制 · 0.4.2',html)
         self.assertNotIn('data-tab="platforms"',html)
         self.assertNotIn("else if(tab==='platforms')",script)
         self.assertIn('traffic_inventory',script)
@@ -407,7 +407,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('DOMAIN-SUFFIX',script)
         self.assertNotIn('id="rule-domains"',script)
         self.assertNotIn("state.groups.push({id,name:template.name",script)
-        self.assertIn('流量控制 · 0.4.1',html)
+        self.assertIn('流量控制 · 0.4.2',html)
         self.assertIn('.compact-node-subline .chip',styles)
         self.assertIn('.rule-enabled { display: flex; align-items: center;',styles)
         self.assertIn('event.stopPropagation()',script)
@@ -1813,6 +1813,14 @@ class TestConfigurationRules(unittest.TestCase):
             {'protocol':PROTOCOL,'mode':'public-network','protocols':['https']},
             {'protocol':PROTOCOL,'mode':'manual','protocols':['icmp']},
             {'protocol':PROTOCOL,'mode':'manual','protocols':['https'],'token':'must-not-leak'},
+            {'protocol':PROTOCOL,'mode':[],'protocols':['https']},
+            {'protocol':PROTOCOL,'mode':'manual','protocols':'https'},
+            {'protocol':PROTOCOL,'mode':'manual','protocols':None},
+            {'protocol':PROTOCOL,'mode':'manual','protocols':['https','icmp']},
+            {'protocol':PROTOCOL,'mode':'manual','protocols':['https',1]},
+            {'protocol':PROTOCOL,'mode':'manual','protocols':['https'],'restart':'invalid'},
+            {'protocol':PROTOCOL,'mode':'manual','protocols':['https'],'auto_apply':'false'},
+            [], False, 'not-an-object',
         ):
             result=declaration(value)
             self.assertEqual(result['state'],'invalid')
@@ -1842,8 +1850,49 @@ class TestConfigurationRules(unittest.TestCase):
                                      astrbot={'configured':True,'effective':True},audit=audit)
             plugin_item=next(item for item in values if item['id']=='plugin-http')
             mcp_item=next(item for item in values if item['id']=='mcp-egress')
-            self.assertEqual((plugin_item['integration']['state'],plugin_item['status']),('managed','unknown'))
+            self.assertEqual((plugin_item['integration']['state'],plugin_item['status']),('configured','unknown'))
             self.assertEqual((mcp_item['integration']['state'],mcp_item['status']),('declared','not_connected'))
+
+    def test_opt_in_http_proxy_fails_closed_on_missing_or_conflicting_environment(self):
+        from proxy_manager.traffic.integration import PROTOCOL, managed_http_proxy
+        declared={'protocol':PROTOCOL,'mode':'astrbot-environment','protocols':['https']}
+        entry='http://127.0.0.1:17890'
+        self.assertIsNone(managed_http_proxy(None,enabled=False,environ={}))
+        self.assertEqual(managed_http_proxy(declared,enabled=True,
+                         environ={'http_proxy':entry,'https_proxy':entry}),entry)
+        for env in ({}, {'http_proxy':entry},
+                    {'http_proxy':entry,'https_proxy':entry,'HTTPS_PROXY':'http://other:8080'}):
+            with self.assertRaises(ValueError):
+                managed_http_proxy(declared,enabled=True,environ=env)
+        with self.assertRaises(ValueError):
+            managed_http_proxy({**declared,'mode':'manual'},enabled=True,environ={})
+
+    def test_mcp_audit_rejects_forged_private_entry_and_conflicting_http_scheme(self):
+        from proxy_manager.traffic.audit import AstrBotTrafficAudit
+        from proxy_manager.traffic.integration import PROTOCOL
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); (root/'data').mkdir()
+            private={'enabled':True,'service_host':'astrbot','port':17891,
+                     'username':'owned-user','password':'owned-password'}
+            proxy='http://owned-user:owned-password@astrbot:17891'
+            declared={'protocol':PROTOCOL,'mode':'private-network','protocols':['https']}
+            servers={
+                'valid':{'url':'http://mcp:9000/mcp','env':{'HTTP_PROXY':proxy,'HTTPS_PROXY':proxy},'proxy_manager':declared},
+                'forged':{'url':'http://mcp:9000/mcp','env':{'HTTP_PROXY':proxy,'HTTPS_PROXY':'http://other:wrong@astrbot:17891'}},
+                'bypass':{'url':'http://mcp:9000/mcp','env':{'HTTP_PROXY':proxy,'HTTPS_PROXY':proxy,'NO_PROXY':'.example.com'}},
+                'malformed':{'url':'http://mcp:9000/mcp','env':{'HTTPS_PROXY':'http://[broken'}},
+            }
+            (root/'data'/'mcp_server.json').write_text(json.dumps({'mcpServers':servers}))
+            rows=AstrBotTrafficAudit(root).snapshot('http://127.0.0.1:17890',private)['mcps']
+            self.assertEqual([row['proxy'] for row in rows],['configured','other_proxy','other_proxy','other_proxy'])
+            self.assertTrue(rows[0]['protocol_connected'])
+            self.assertNotIn('owned-password',json.dumps(rows))
+
+    def test_plugin_declarations_ignore_paths_outside_installed_plugins(self):
+        from proxy_manager.traffic.integration import plugin_declarations
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); (root/'data'/'plugins').mkdir(parents=True)
+            self.assertEqual(plugin_declarations(root,{'../../../outside':True,'..':True}),[])
 
     def test_astrbot_proxy_transaction_backs_up_narrows_and_restores(self):
         from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY

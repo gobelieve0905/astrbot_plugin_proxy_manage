@@ -1,6 +1,6 @@
 # 代理管理中心使用指南
 
-> 本指南记录 0.4.1 的当前操作方式。内核资源不会自动下载，需在资源管理中选择并启用；订阅只能通过“导入订阅”或“批量导入”创建；“审计历史”记录配置、订阅、内核、验证和接入事件，不等同于逐请求流量日志。产品边界和未完成能力以[产品定义与架构约束](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/PRODUCT_DEFINITION.md)为准。
+> 本指南记录 0.4.2 的当前操作方式。内核资源不会自动下载，需在资源管理中选择并启用；订阅只能通过“导入订阅”或“批量导入”创建；“审计历史”记录配置、订阅、内核、验证和接入事件，不等同于逐请求流量日志。产品边界和未完成能力以[产品定义与架构约束](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/PRODUCT_DEFINITION.md)为准。
 
 桌面端使用左侧导航，移动端使用顶部横向导航。页面顶部的“恢复上一版”和“预览并保存”作用于规范化配置；“内核管理”第一栏用于运行控制，第二栏使用可收放横栏管理各内核资源，不会与普通配置保存混在同一操作组。
 
@@ -34,7 +34,7 @@
 
 | 场景 | 接入方式 | 支持状态 |
 | --- | --- | --- |
-| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | 持久化 `http_proxy`/`no_proxy`；插件启动后在 AstrBot 进程设置 HTTP、HTTPS 和 SOCKS 入口 | 0.4.1 已接入，需重启后做请求级验证 |
+| AstrBot 核心及遵循全局 HTTP 代理的下载请求 | 持久化 `http_proxy`/`no_proxy`；插件启动后在 AstrBot 进程设置 HTTP、HTTPS 和 SOCKS 入口 | 0.4.2 已接入，需重启后做请求级验证 |
 | 使用 AstrBot 公共 HTTP 客户端且继承核心代理配置的插件 | 使用核心 `http_proxy` | 尚未逐项接入和验证 |
 | 支持独立代理字段的平台适配器 | 在适配器配置中填写统一 HTTP/SOCKS 入口 | 条件支持，应按适配器文档验证 |
 | 模型 Provider | 统一 Provider 注册表按类型适配；已确认路径的客户端注入稳定 HTTP 入口 | AstrBot 4.28.2 内置 44 类中，30 类已验证流量受控，14 类及未知类型保持“未验证”；[逐项名单见 README](README.md#provider-适配范围)。核验不代表业务 API 成功，指定节点、自动组、拒绝和失败关闭仍未逐类验收 |
@@ -61,7 +61,7 @@
 
 ## 统一接入协议
 
-外部插件在自身插件目录放置 `proxy_manager_integration.json`，MCP 在自身配置项内放置 `proxy_manager` 对象。两者使用同一份公开、无凭据声明：
+用户在第三方插件或 MCP 的设置中选择“由代理管理中心管理出站流量”后，组件应采用 `astrbot.proxy-manager/v1` 接入。外部插件在自身插件目录放置 `proxy_manager_integration.json`，MCP 在 AstrBot 的该服务器配置项内放置 `proxy_manager` 对象。两者使用同一份公开、无凭据的能力声明；声明不代替用户启用选择：
 
 ```json
 {
@@ -73,11 +73,13 @@
 }
 ```
 
-`mode` 只能是 `astrbot-environment`、`private-network` 或 `manual`。前者表示组件遵守 AstrBot 的代理环境；`private-network` 表示独立容器使用认证私网入口；`manual` 表示组件需由其所有者配置。声明只允许上述五个字段，不能包含 URL、用户名、密码、Token 或 Headers；多余字段会被标记为协议无效。插件在加载和之后每 30 秒检查新增或变化的声明，也可在概览点击“重新检查”。协议兼容只代表已纳入策略，仍需实际请求与内核记录才能确认出口。
+`mode` 只能是 `astrbot-environment`、`private-network` 或 `manual`。前者表示组件使用 AstrBot 稳定入口；`private-network` 表示独立容器使用认证私网入口；`manual` 表示组件需由其所有者配置。声明只允许上述五个字段，不能包含 URL、用户名、密码、Token 或 Headers；错误类型、未知协议或无效重启要求会被拒绝。`auto_apply` 必须是布尔值，它只表示组件允许未来自动接入，0.4.2 不自动修改、注入或重启第三方组件。
+
+插件在加载和之后每 30 秒检查新增或变化的声明，也可在概览点击“重新检查”。协议兼容只代表已纳入审计；环境/配置匹配仍显示“无法判定”，不会代替逐组件实际请求与内核出口证据。开启管理后入口不可用必须报错，不能静默直连。字段说明、Python 接入接口、stdio MCP 示例和私网部署边界见[插件与 MCP 接入协议](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/INTEGRATION_PROTOCOL.md)。
 
 概览中的动态流量清单使用四类状态：“已接管”必须有请求级证据；“明确直连”表示请求进入内核后由规则选择 `DIRECT`；“未接入”表示组件没有使用插件入口；“无法判定”表示只观察到配置或入口，证据不足。规则组新增弹窗内置飞书/Lark、Telegram、Meta 和 GitHub 域名模板，只预填内核规则，不会自动修改平台 SDK。
 
-0.4.1 的 50 项真实流量回归矩阵见 [TRAFFIC_REGRESSION_MATRIX.md](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/TRAFFIC_REGRESSION_MATRIX.md)。矩阵要求对全局 HTTP、Provider、飞书 HTTP/WebSocket/媒体、Telegram 轮询/媒体、第三方插件声明、stdio MCP 和私网 MCP 分别验证 `DIRECT`、指定节点、自动组、拒绝和失败关闭；只要入口、规则、节点链路或出口证据缺一项，就保持“无法判定”。
+当前版本沿用 [TRAFFIC_REGRESSION_MATRIX.md](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/TRAFFIC_REGRESSION_MATRIX.md) 的 50 项真实流量回归矩阵。矩阵要求对全局 HTTP、Provider、飞书 HTTP/WebSocket/媒体、Telegram 轮询/媒体、第三方插件声明、stdio MCP 和私网 MCP 分别验证 `DIRECT`、指定节点、自动组、拒绝和失败关闭；只要入口、规则、节点链路或出口证据缺一项，就保持“无法判定”。
 
 在“全局代理接入”点击接入后，页面会标记 AstrBot 需重启。插件停用、热重载或 AstrBot 关闭时，已写入的全局代理保持不变，自管内核会停止，因此新的外部请求应失败而不是直连。卸载前必须先点击“恢复旧配置”并重启 AstrBot；直接删除插件不会自动改写 AstrBot 配置。
 

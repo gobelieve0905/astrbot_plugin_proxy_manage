@@ -1,6 +1,6 @@
 # 代理管理中心
 
-当前版本：0.4.1
+当前版本：0.4.2
 
 代理管理中心是 AstrBot 的统一出站流量控制面。插件负责准备和监督可插拔代理内核，管理订阅、节点、代理组、分流规则，并通过请求级证据核对实际出口。
 
@@ -10,6 +10,7 @@
 | --- | --- |
 | [使用指南](USER_GUIDE.md) | 安装、首次接入、日常操作、支持矩阵和故障处理 |
 | [更新日志](CHANGELOG.md) | 按版本和日期记录用户可见变化 |
+| [插件与 MCP 接入协议](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/INTEGRATION_PROTOCOL.md) | 用户选择接入、客户端实现、失败关闭和验收要求 |
 | [产品定义与架构约束](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/PRODUCT_DEFINITION.md) | 产品边界、内核抽象、流量范围、安全模型和最终验收标准 |
 | [UI 开发与验收规范](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/UI_CHECKLIST.md) | 页面生命周期、脱敏、响应式和验收清单 |
 | [UI 问题复盘](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/UI_ISSUE_SUMMARY.md) | 已知页面故障模式和修复流程 |
@@ -19,7 +20,7 @@
 - 自管 Mihomo、sing-box 和 Xray 内核：固定官方制品、SHA-256 校验、安装、启停、切换、更新、卸载和失败恢复。
 - 订阅导入与刷新：支持单条或批量导入、节点差异、流量/到期信息、失效引用和订阅级忽略记录。
 - 节点、代理组和分流规则管理：支持筛选、测速、`select`、`url-test`、`fallback`、规则优先级和配置预览。
-- AstrBot 出站接入：维护全局代理入口、已验证的官方兼容层和公开的第三方插件/MCP 接入声明。
+- AstrBot 出站接入：维护全局代理入口、已验证的官方兼容层和第三方插件/MCP 的 `astrbot.proxy-manager/v1` 协议；第三方组件按用户选择接入，声明与请求级验证分别记录。
 - 机器人平台兼容层：已适配 AstrBot 4.28.1/4.28.2 下的飞书/Lark 与 Telegram；两者的兼容层范围和真实传输验证状态见下表，其他平台 SDK 不作兼容承诺。
 - 运行核对与安全边界：区分已接管、明确直连、未接入和无法判定；配置失败时使用失败关闭和可信回滚，不静默回落直连。
 - 真实流量回归矩阵：覆盖 AstrBot 全局 HTTP、Provider、飞书/Telegram 的 HTTP、WebSocket、媒体和轮询，以及第三方插件、stdio MCP、私网 MCP；每个用例记录入口、规则、节点链路和出口证据。
