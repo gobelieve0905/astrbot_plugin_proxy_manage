@@ -33,13 +33,11 @@ function componentRow(item){
   const status=dirty?'待保存':missing?'代理组已失效':{configured:'策略已应用 · 未验证',disabled:'已停用',pending_apply:'待应用',not_connected:'未接入'}[item.status]||'无法判定'
   const bindingRequired=item.kind==='mcp'&&!item.protocol_connected
   const canBind=!disabled&&!dirty&&policy?.enabled&&item.status==='configured'&&item.locality==='stdio'
-  const host=policy?.scope==='private'?state.proxy_entry?.private?.service_host||'astrbot':'127.0.0.1'
-  const restart=item.locality==='stdio'?'重启 MCP 进程':({none:'无需重启',process:item.kind==='plugin'?'重建插件客户端':'重启 MCP 进程',container:'重启容器',astrbot:'重启 AstrBot'}[item.declaration.restart]||'待确认')
   return `<article class="component-row" data-component-id="${esc(item.id)}" aria-label="${esc(name)}">
-    <div class="component-identity"><b title="${esc(item.name)}">${esc(name)}</b><small>${esc(item.declaration.protocols.join(' / '))} · ${esc(restart)}</small>${policy?.port?`<code>${esc(`http://${host}:${policy.port}`)}${policy.scope==='private'?' · 需认证':''}</code>`:''}</div>
+    <div class="component-identity"><b title="${esc(item.name)}">${esc(name)}</b></div>
     <label class="component-toggle"><input type="checkbox" role="switch" data-component-enable="${esc(item.id)}" aria-label="管理${esc(name)}的流量" ${policy?.enabled?'checked':''} ${disabled&&!policy?.enabled?'disabled':''}><span>管理流量</span></label>
     <label class="component-target"><span>目标代理组</span><select data-component-target="${esc(item.id)}" aria-label="${esc(name)}的目标代理组" ${disabled?'disabled':''}>${missing?`<option value="${esc(target)}" selected>已失效的代理组</option>`:''}${groupOptions(target)}</select></label>
-    <div class="component-state"><span class="component-status ${dirty||missing||disabled?'pending':policy?.enabled&&item.status==='configured'?'ok':''}">${esc(disabled?'需适配':status)}</span><small>${esc(disabled?item.message:bindingRequired&&policy?.enabled?'MCP 尚未使用专用入口':item.message)}</small>${item.locality==='stdio'?`<button type="button" data-component-bind="${esc(item.id)}" ${canBind?'':'disabled'}>${bindingRequired?'接入 MCP':'重新接入 MCP'}</button>`:''}</div>
+    <div class="component-state"><span title="${esc(bindingRequired&&policy?.enabled?'MCP 尚未使用专用入口':item.message)}" class="component-status ${dirty||missing||disabled?'pending':policy?.enabled&&item.status==='configured'?'ok':''}">${esc(disabled?'需适配':status)}</span>${item.locality==='stdio'?`<button type="button" data-component-bind="${esc(item.id)}" ${canBind?'':'disabled'}>${bindingRequired?'接入 MCP':'重新接入 MCP'}</button>`:''}</div>
   </article>`
 }
 function componentSection(kind,components){

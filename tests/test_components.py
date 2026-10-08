@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
+
 from proxy_manager.domain.components import component_entries, component_tag, normalize_component_routes
 from proxy_manager.domain.model import normalize_state
 from proxy_manager.traffic.audit import AstrBotTrafficAudit
@@ -120,6 +122,66 @@ class TestComponentPolicies(unittest.TestCase):
             server['env']['HTTP_PROXY'] = 'http://127.0.0.1:17890'
             (root/'data'/'mcp_server.json').write_text(json.dumps({'mcpServers': {'example': server}}))
             self.assertFalse(AstrBotTrafficAudit(root).snapshot('http://127.0.0.1:17890', components=state['component_routes'])['mcps'][0]['protocol_connected'])
+
+
+class TestManagedHttpClient(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        from tests.test_manager import install_astrbot_stubs
+        install_astrbot_stubs()
+        from proxy_manager.plugin import ProxyManager
+        cls.manager_type = ProxyManager
+
+    async def test_current_lease_routes_both_schemes_and_closes_each_client(self):
+        manager = self.manager_type.__new__(self.manager_type)
+        manager.get_proxy_manager_lease = Mock(side_effect=[
+            {'http_proxy': 'http://127.0.0.1:18000'},
+            {'http_proxy': 'http://127.0.0.1:18001'},
+        ])
+        clients, requests = [], []
+        client_type = httpx.AsyncClient
+
+        def build(**options):
+            client = client_type(transport=httpx.MockTransport(
+                lambda request: requests.append(request) or httpx.Response(200)))
+            clients.append(client)
+            return client
+
+        with patch('proxy_manager.plugin.httpx.AsyncClient', side_effect=build) as factory:
+            for scheme in ('http', 'https'):
+                async with manager.open_managed_http_client('example', enabled=True, timeout=7) as client:
+                    await client.get(scheme + '://example.test/')
+                self.assertTrue(client.is_closed)
+            self.assertEqual([call.kwargs['proxy'] for call in factory.call_args_list],
+                             ['http://127.0.0.1:18000', 'http://127.0.0.1:18001'])
+            self.assertTrue(all(call.kwargs['trust_env'] is False for call in factory.call_args_list))
+            self.assertTrue(all(call.kwargs['timeout'] == 7 for call in factory.call_args_list))
+        self.assertEqual([request.url.scheme for request in requests], ['http', 'https'])
+        self.assertEqual(manager.get_proxy_manager_lease.call_count, 2)
+
+    async def test_lease_failure_or_route_override_never_creates_client(self):
+        manager = self.manager_type.__new__(self.manager_type)
+        manager.get_proxy_manager_lease = Mock(side_effect=RuntimeError('entry unavailable'))
+        with patch('proxy_manager.plugin.httpx.AsyncClient') as factory:
+            for option in ('proxy', 'trust_env', 'transport', 'mounts'):
+                with self.subTest(option=option), self.assertRaises(ValueError):
+                    async with manager.open_managed_http_client('example', enabled=True, **{option: None}):
+                        self.fail('route override was accepted')
+            manager.get_proxy_manager_lease.assert_not_called()
+            with self.assertRaises(RuntimeError):
+                async with manager.open_managed_http_client('example', enabled=True):
+                    self.fail('lease failure was ignored')
+            factory.assert_not_called()
+
+    async def test_body_failure_closes_client(self):
+        manager = self.manager_type.__new__(self.manager_type)
+        manager.get_proxy_manager_lease = Mock(return_value={'http_proxy': 'http://127.0.0.1:18000'})
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+        with patch('proxy_manager.plugin.httpx.AsyncClient', return_value=client):
+            with self.assertRaises(RuntimeError):
+                async with manager.open_managed_http_client('example', enabled=True):
+                    raise RuntimeError('operation failed')
+        self.assertTrue(client.is_closed)
 
 
 class TestComponentBridge(unittest.TestCase):

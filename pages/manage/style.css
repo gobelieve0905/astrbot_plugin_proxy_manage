@@ -47,13 +47,12 @@
 .component-columns, .component-row { display: grid; grid-template-columns: var(--component-columns); gap: 20px; padding-inline: 20px; }
 .component-columns { padding-block: 6px 10px; color: var(--muted); font-size: 12px; }
 .component-list { display: grid; gap: 8px; }
-.component-row { align-items: start; padding-block: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.component-row { align-items: center; padding-block: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .component-row:hover { background: var(--panel-subtle); }
 .component-identity, .component-state { min-width: 0; display: grid; gap: 4px; }
 .component-identity b { display: flex; align-items: center; min-height: var(--component-control-height); font-size: 14px; line-height: 1.5; }
-.component-identity b, .component-identity code, .component-state small { overflow-wrap: anywhere; }
-.component-identity small, .component-state small, .component-target > span { color: var(--muted); font-size: 12px; line-height: 1.6; }
-.component-identity code { font-size: 11px; color: var(--muted); }
+.component-identity b { overflow-wrap: anywhere; }
+.component-target > span { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .component-target { display: grid; gap: 8px; min-width: 0; }
 .component-target > span { display: none; }
 .component-target select { width: 100%; min-width: 0; height: var(--component-control-height); border-radius: 8px; }

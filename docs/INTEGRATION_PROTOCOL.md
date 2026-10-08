@@ -42,6 +42,23 @@ AstrBot 市场插件在自己的安装目录放置 `proxy_manager_integration.js
 
 通过 AstrBot 的 `Context.get_registered_star("astrbot_plugin_proxy_manage")` 获取代理中心实例，调用公开方法 `get_proxy_manager_lease(plugin_id, enabled=True, protocols=[...])`。`plugin_id` 使用请求方 `metadata.yaml` 的 `name`，代理中心通过已注册元数据映射安装目录，不要求目录名与插件名相同。调用只向已加载、已启用、声明有效的插件返回 lease：`http_proxy`、`https_proxy`、`no_proxy`、`restart`、`revision` 和 `status: "configured"`；不返回认证凭据，也不声称该插件流量已经过验证。当前桥接仅提供 HTTP、HTTPS 和 HTTP 代理承载的 WebSocket；TCP/UDP 声明仍需专用适配。
 
+对于只有 HTTP/HTTPS 请求的 Python 插件，可直接使用代理中心公开的请求级 helper，避免重复实现 lease 校验、入口切换和客户端关闭：
+
+```python
+manager = context.get_registered_star("astrbot_plugin_proxy_manage")
+if not manager or not manager.activated or not manager.star_cls:
+    raise RuntimeError("代理管理中心未启用")
+
+async with manager.star_cls.open_managed_http_client(
+    "my_market_plugin", enabled=config.get("manage_egress", False), timeout=30
+) as client:
+    response = await client.get(url)
+```
+
+helper 每次创建客户端前重新申请 lease，固定使用 lease 的 HTTP 入口、`trust_env=False` 和失败关闭；调用方不应捕获入口错误后改用直连，也不能覆盖 `proxy`、`trust_env`、`transport` 或 `mounts`。插件仍需把自己的所有 HTTP/HTTPS 请求集中到这个边界；WebSocket、文件下载器或独立子进程按同一 lease 语义显式配置。
+
+以上代码只放在开关开启的请求分支；开关关闭时保留原请求路径。helper 不是用于包住整个插件生命周期的连接池：每次操作进入 `async with`，退出即关闭客户端，下一次操作重新发现代理中心并获得新入口。这样普通插件只需新增五字段声明、默认关闭的开关和替换统一请求处的客户端创建；大量高频请求、第三方 SDK 或多个网络出口可继续使用 lease 接口自行管理连接池及 revision。无需安装额外 Python 包或导入代理中心内部模块。
+
 开关关闭时插件沿用原行为且不申请 lease；开关开启后，代理中心缺失/停用、声明无效或内核不可用都必须失败关闭。声明是作者的能力承诺，不是用户授权。桥接利用 AstrBot 的 Python Star 运行时，插件的 Node.js/Go 等子进程由该 Star 显式传入代理环境；各客户端均需独立配置，不能假定子进程自动遵守环境。无需导入代理中心内部 Python 包。
 
 伪代码示例（AstrBot 插件代码）：

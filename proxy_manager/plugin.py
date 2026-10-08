@@ -12,6 +12,7 @@ import os
 import secrets
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse, urlsplit
 
@@ -194,6 +195,15 @@ class ProxyManager(Star):
             'component_id': component_id,
             'target': policy['target'] if policy else '',
         }
+
+    @asynccontextmanager
+    async def open_managed_http_client(self, plugin_id: str, *, enabled: bool, **options):
+        """Create a request-scoped public HTTP client using the current lease."""
+        if {'proxy', 'trust_env', 'transport', 'mounts'} & options.keys():
+            raise ValueError('受管理客户端不允许覆盖代理、环境或传输路由')
+        lease = self.get_proxy_manager_lease(plugin_id, enabled=enabled, protocols=['http', 'https'])
+        async with httpx.AsyncClient(proxy=lease['http_proxy'], trust_env=False, **options) as client:
+            yield client
 
     @staticmethod
     def _component_support(item: dict) -> tuple[str, str]:
