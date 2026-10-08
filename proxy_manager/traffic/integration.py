@@ -100,6 +100,6 @@ def plugin_declarations(root: Path, configured: object) -> list[dict]:
                 raw = {'protocol': ''}
         except (OSError, ValueError):
             raw = {'protocol': ''}
-        result.append({'id': 'plugin-'+name[:80], 'name': name[:80], 'kind': 'plugin',
+        result.append({'id': 'plugin-'+name, 'name': name[:80], 'kind': 'plugin',
                        'declaration': declaration(raw)})
     return result

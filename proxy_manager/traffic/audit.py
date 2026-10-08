@@ -82,7 +82,7 @@ class AstrBotTrafficAudit:
         except (TypeError, ValueError):
             return False
 
-    def _mcps(self, entry: str, private: dict|None) -> list[dict]:
+    def _mcps(self, entry: str, private: dict|None, components: list[dict]|None=None) -> list[dict]:
         try: value=json.loads(self.mcp_path.read_text(encoding='utf-8-sig'))
         except (OSError,ValueError): return []
         servers=value.get('mcpServers',{}) if isinstance(value,dict) else {}
@@ -90,11 +90,14 @@ class AstrBotTrafficAudit:
         results=[]
         for key,item in iterable:
             if not isinstance(item,dict): continue
+            policy=next((route for route in components or [] if route['id']=='mcp-'+str(key)), None)
+            expected_entry='http://127.0.0.1:'+str(policy['port']) if policy else entry
+            expected_private={**(private or {}), 'port':policy['port']} if policy else private
             locality,label=self._mcp_locality(item)
             declared=declaration(item.get('proxy_manager'))
             env=item.get('env') if isinstance(item.get('env'),dict) else {}
             proxies=[str(env[key]) for key in ('HTTPS_PROXY','https_proxy','HTTP_PROXY','http_proxy') if env.get(key)]
-            connected=bool(proxies) and all(self._mcp_proxy_matches(proxy,entry,locality,private or {}) for proxy in proxies)
+            connected=bool(proxies) and all(self._mcp_proxy_matches(proxy,expected_entry,locality,expected_private or {}) for proxy in proxies)
             # One scheme or an external no_proxy value cannot prove complete HTTP egress.
             connected=connected and all(env.get(key) or env.get(key.upper()) for key in ('http_proxy','https_proxy'))
             bypass=str(env.get('no_proxy') or env.get('NO_PROXY') or '')
@@ -106,7 +109,7 @@ class AstrBotTrafficAudit:
                 transport=str(item.get('transport') or urlsplit(str(item.get('url') or '')).scheme or 'unknown')[:24]
             except ValueError:
                 transport='unknown'
-            results.append({'id':'mcp-'+str(key)[:80],'name':str(item.get('name') or key)[:80],
+            results.append({'id':'mcp-'+str(key),'name':str(item.get('name') or key)[:80], 'kind':'mcp',
                             'transport':'stdio' if item.get('command') else transport,
                             'locality':locality,'locality_label':label,
                             'proxy':'configured' if connected else ('other_proxy' if proxies else 'unset'),
@@ -115,7 +118,7 @@ class AstrBotTrafficAudit:
                             'restart':'重启 MCP 进程' if locality in {'stdio','same_host'} else ('重建或重启容器' if locality=='container' else '由外部服务管理')})
         return results
 
-    def snapshot(self, entry: str, private: dict|None=None) -> dict:
+    def snapshot(self, entry: str, private: dict|None=None, components: list[dict]|None=None) -> dict:
         config=self._config()
         providers=[]
         for source in ('provider_sources','provider','provider_tts_settings','provider_stt_settings','provider_embedding_settings'):
@@ -136,7 +139,7 @@ class AstrBotTrafficAudit:
         plugins=config.get('plugin_set')
         return {'version':runtime_label(),'readable':self.config_path.is_file(),'providers':providers,
                 'platforms':platforms,'plugin_count':plugin_count,
-                'mcps':self._mcps(entry,private),
+                'mcps':self._mcps(entry,private,components),
                 'plugin_integrations':plugin_declarations(self.root,plugins),
                 'agent_runner':str(runner.get('runner_type') or 'unknown')[:80],
                 'computer_runtime':str((config.get('provider_settings') or {}).get('computer_use_runtime') or 'unknown')[:80]}

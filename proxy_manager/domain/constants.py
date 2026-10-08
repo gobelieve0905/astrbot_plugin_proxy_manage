@@ -47,7 +47,7 @@ NOTICE_PATTERNS=(
 )
 CONFIGURED='[configured]'
 SENSITIVE_KEYS={
-    'authorization','auth','password','passwd','secret','token','username','user','uuid','id',
+    'authorization','auth','password','passwd','pass','secret','token','username','user','uuid','id',
     'api-key','api_key','apikey','client-id','client_id',
     'private-key','private_key','client-key','client_key','psk','credential','credentials',
 }
