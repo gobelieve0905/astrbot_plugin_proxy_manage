@@ -25,7 +25,9 @@ function note(text,error=false){
 }
 function groupOptions(selected){ return state.groups.map(group=>`<option value="${esc(group.id)}" ${group.id===selected?'selected':''}>${esc(group.name)}</option>`).join('') }
 function componentPolicy(item){return state.component_routes?.find(route=>route.id===item.id)}
+function componentName(item){return item.display_name||item.name||item.id}
 function componentRow(item){
+  const name=componentName(item)
   const policy=componentPolicy(item),previous=original?.component_routes?.find(route=>route.id===item.id),dirty=JSON.stringify(policy)!==JSON.stringify(previous)
   const disabled=!item.supported,target=policy?.target||'direct',missing=!state.groups.some(group=>group.id===target)
   const status=dirty?'待保存':missing?'代理组已失效':{configured:'策略已应用 · 未验证',disabled:'已停用',pending_apply:'待应用',not_connected:'未接入'}[item.status]||'无法判定'
@@ -33,12 +35,16 @@ function componentRow(item){
   const canBind=!disabled&&!dirty&&policy?.enabled&&item.status==='configured'&&item.locality==='stdio'
   const host=policy?.scope==='private'?state.proxy_entry?.private?.service_host||'astrbot':'127.0.0.1'
   const restart=item.locality==='stdio'?'重启 MCP 进程':({none:'无需重启',process:item.kind==='plugin'?'重建插件客户端':'重启 MCP 进程',container:'重启容器',astrbot:'重启 AstrBot'}[item.declaration.restart]||'待确认')
-  return `<article class="component-row" data-component-id="${esc(item.id)}">
-    <div class="component-identity"><div><b>${esc(item.name)}</b><span class="chip">${item.kind==='plugin'?'AstrBot 插件':'MCP'}</span></div><small>${esc(item.declaration.protocols.join(' / '))} · ${esc(restart)}</small>${policy?.port?`<code>${esc(`http://${host}:${policy.port}`)}${policy.scope==='private'?' · 需认证':''}</code>`:''}</div>
-    <label class="component-toggle"><input type="checkbox" data-component-enable="${esc(item.id)}" ${policy?.enabled?'checked':''} ${disabled&&!policy?.enabled?'disabled':''}><span>管理流量</span></label>
-    <label class="component-target"><span>目标代理组</span><select data-component-target="${esc(item.id)}" aria-label="${esc(item.name)}的目标代理组" ${disabled?'disabled':''}>${missing?`<option value="${esc(target)}" selected>已失效的代理组</option>`:''}${groupOptions(target)}</select></label>
-    <div class="component-state"><span class="chip ${dirty||missing||disabled?'pending':policy?.enabled?'ok':''}">${esc(disabled?'需适配':status)}</span><small>${esc(disabled?item.message:bindingRequired&&policy?.enabled?'MCP 尚未使用专用入口':item.message)}</small>${item.locality==='stdio'?`<button type="button" data-component-bind="${esc(item.id)}" ${canBind?'':'disabled'}>${bindingRequired?'接入 MCP':'重新接入 MCP'}</button>`:''}</div>
+  return `<article class="component-row" data-component-id="${esc(item.id)}" aria-label="${esc(name)}">
+    <div class="component-identity"><b title="${esc(item.name)}">${esc(name)}</b><small>${esc(item.declaration.protocols.join(' / '))} · ${esc(restart)}</small>${policy?.port?`<code>${esc(`http://${host}:${policy.port}`)}${policy.scope==='private'?' · 需认证':''}</code>`:''}</div>
+    <label class="component-toggle"><input type="checkbox" data-component-enable="${esc(item.id)}" aria-label="管理${esc(name)}的流量" ${policy?.enabled?'checked':''} ${disabled&&!policy?.enabled?'disabled':''}><span>管理流量</span></label>
+    <label class="component-target"><span>目标代理组</span><select data-component-target="${esc(item.id)}" aria-label="${esc(name)}的目标代理组" ${disabled?'disabled':''}>${missing?`<option value="${esc(target)}" selected>已失效的代理组</option>`:''}${groupOptions(target)}</select></label>
+    <div class="component-state"><span class="component-status ${dirty||missing||disabled?'pending':policy?.enabled&&item.status==='configured'?'ok':''}">${esc(disabled?'需适配':status)}</span><small>${esc(disabled?item.message:bindingRequired&&policy?.enabled?'MCP 尚未使用专用入口':item.message)}</small>${item.locality==='stdio'?`<button type="button" data-component-bind="${esc(item.id)}" ${canBind?'':'disabled'}>${bindingRequired?'接入 MCP':'重新接入 MCP'}</button>`:''}</div>
   </article>`
+}
+function componentSection(kind,components){
+  const items=components.filter(item=>item.kind===kind),title=kind==='plugin'?'AstrBot 插件':'MCP'
+  return `<section class="component-section" aria-labelledby="component-${kind}-title"><div class="component-section-head"><h3 id="component-${kind}-title">${title}</h3><span>${items.length} 个组件</span></div>${items.length?`<div class="component-columns" aria-hidden="true"><span>组件名称</span><span>流量管理</span><span>目标代理组</span><span>接入状态</span></div><div class="component-list">${items.map(componentRow).join('')}</div>`:`<div class="component-empty">尚未发现符合协议的${kind==='plugin'?' AstrBot 插件':' MCP'}。</div>`}</section>`
 }
 const ruleTypeOptions=[
   ['DOMAIN','匹配完整域名'],['DOMAIN-SUFFIX','匹配域名后缀'],['DOMAIN-KEYWORD','匹配域名关键字'],['DOMAIN-WILDCARD','匹配域名通配符'],['DOMAIN-REGEX','匹配域名正则表达式'],
@@ -312,7 +318,7 @@ function render(){
     html=`<section class="panel routes-panel"><div class="bar"><div><h2>规则组</h2><p class="muted panel-lede">拖动规则组调整优先顺序；也可使用上移、下移按钮。目标代理组可直接在标题行修改。</p></div><button id="add" class="primary" type="button">新增规则组</button></div><div class="rule-list">${orderedRules.map((rule,index)=>`<article class="rule-card" data-rule-id="${esc(rule.id)}"><div class="rule-card-head"><button type="button" class="rule-drag-handle" draggable="true" data-rule-drag-handle="${esc(rule.id)}" aria-label="拖动调整 ${esc(rule.name)} 的优先级" title="拖动调整优先级">⠿</button><div class="rule-card-title"><b>${esc(rule.name)}</b><small>优先顺序 ${index+1} · 优先级 ${esc(rule.priority)} · ${rule.domains.length} 条规则</small></div><label class="rule-target-inline" for="rule-target-${esc(rule.id)}"><span>目标代理组</span><select id="rule-target-${esc(rule.id)}" data-rule-target="${esc(rule.id)}">${groupOptions(rule.target)}</select></label><span class="chip ${rule.enabled?'ok':'pending'}">${rule.enabled?'已启用':'已停用'}</span><div class="rule-card-actions"><button type="button" data-rule-move="up" data-rule-id="${esc(rule.id)}" aria-label="上移 ${esc(rule.name)}" title="上移" ${index===0?'disabled':''}>↑</button><button type="button" data-rule-move="down" data-rule-id="${esc(rule.id)}" aria-label="下移 ${esc(rule.name)}" title="下移" ${index===orderedRules.length-1?'disabled':''}>↓</button><button type="button" data-edit-rule="${esc(rule.id)}">编辑</button><button type="button" data-del="rule_groups" data-id="${esc(rule.id)}" class="danger">删除</button></div></div></article>`).join('')||'<div class="group-empty"><b>还没有规则组</b><span>新增规则组后，可在弹窗中配置规则。</span></div>'}</div></section>`
   } else if(tab==='components'){
     const components=state.components||[]
-    html=`<section class="components-panel"><div class="bar"><div><h2>组件流量</h2><span class="muted">${components.length} 个符合协议的组件</span></div><button id="component-refresh" type="button">重新检查</button></div>${['plugin','mcp'].map(kind=>{const items=components.filter(item=>item.kind===kind);return `<section class="component-section" aria-label="${kind==='plugin'?'AstrBot 插件':'MCP'}"><h3>${kind==='plugin'?'AstrBot 插件':'MCP'}</h3><div class="component-list">${items.map(componentRow).join('')||`<div class="component-empty">尚未发现符合协议的${kind==='plugin'?' AstrBot 插件':' MCP'}。</div>`}</div></section>`}).join('')}</section>`
+    html=`<section class="components-panel"><div class="bar component-toolbar"><div><h2>组件流量</h2><span class="muted">${components.length} 个符合协议的组件</span></div><button id="component-refresh" type="button">重新检查</button></div>${['plugin','mcp'].map(kind=>componentSection(kind,components)).join('')}</section>`
   } else if(tab==='control'){
     const artifact=kernelStatus.artifact||state.kernel?.artifact||{}, process=kernelStatus.process||state.kernel?.process||{}
     const adapters=state.adapters||[]
@@ -785,7 +791,7 @@ function changeSignature(type,item){return JSON.stringify(changeComparable(type,
 function snapshotSubscriptionName(snapshot,id){return snapshot?.subscriptions?.find(item=>item.id===id)?.name||'未命名订阅'}
 function snapshotGroupName(snapshot,id){return snapshot?.groups?.find(item=>item.id===id)?.name||'未命名代理组'}
 function changeTitle(type,item,snapshot){
-  if(type==='component_routes')return snapshot?.components?.find(component=>component.id===item.id)?.name||item.id
+  if(type==='component_routes'){const component=snapshot?.components?.find(component=>component.id===item.id);return component?componentName(component):item.id}
   if(type==='nodes')return `${snapshotSubscriptionName(snapshot,item.subscription_id)} · ${item.display_name||item.name||item.id}`
   if(type==='subscriptions')return item.name||'未命名订阅'
   if(type==='groups')return item.name||'未命名代理组'

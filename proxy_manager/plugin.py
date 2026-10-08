@@ -226,11 +226,22 @@ class ProxyManager(Star):
 
     def _component_inventory(self, audit: dict) -> list[dict]:
         routes = {item['id']: item for item in self.state.get('component_routes', [])}
+        display_names = {}
+        context = getattr(self, 'context', None)
+        stars = context.get_all_stars() if callable(getattr(context, 'get_all_stars', None)) else []
+        if isinstance(stars, (list, tuple)):
+            for star in stars:
+                directory = getattr(star, 'root_dir_name', None)
+                display_name = getattr(star, 'display_name', None)
+                if directory and isinstance(display_name, str) and display_name.strip():
+                    display_names['plugin-'+str(directory)] = display_name.strip()[:120]
         result = []
         for item in [*audit.get('plugin_integrations', []), *audit.get('mcps', [])]:
             if item.get('declaration', {}).get('state') != 'compatible':
                 continue
             item = {**item, 'kind': item.get('kind', 'mcp')}
+            if item['kind'] == 'plugin':
+                item['display_name'] = display_names.get(item['id']) or item.get('display_name') or item['name']
             scope, reason = self._component_support(item)
             policy = routes.get(item['id'])
             status, message = 'not_connected', reason or '尚未分配组件策略'

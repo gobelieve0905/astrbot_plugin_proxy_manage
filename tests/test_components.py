@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from proxy_manager.domain.components import component_entries, component_tag, normalize_component_routes
 from proxy_manager.domain.model import normalize_state
 from proxy_manager.traffic.audit import AstrBotTrafficAudit
-from proxy_manager.traffic.integration import PROTOCOL
+from proxy_manager.traffic.integration import PROTOCOL, plugin_declarations
 
 
 def fixture():
@@ -26,6 +26,35 @@ def fixture():
 
 
 class TestComponentPolicies(unittest.TestCase):
+    def test_plugin_display_name_uses_metadata_without_changing_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / 'data' / 'plugins' / 'market-example'
+            plugin.mkdir(parents=True)
+            (plugin / 'metadata.yaml').write_text('\ufeffdisplay_name: API 工具接入\n', encoding='utf-8')
+            item = plugin_declarations(root, {})[0]
+            self.assertEqual(item['display_name'], 'API 工具接入')
+            self.assertEqual(item['name'], 'market-example')
+            self.assertEqual(item['id'], 'plugin-market-example')
+
+    def test_invalid_or_external_metadata_falls_back_to_directory_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / 'data' / 'plugins' / 'market-example'
+            plugin.mkdir(parents=True)
+            metadata = plugin / 'metadata.yaml'
+            for value in ('display_name: [', 'display_name: 123', 'display_name: " "', '- invalid', '\xff'):
+                metadata.write_bytes(value.encode('latin-1'))
+                with self.subTest(value=value):
+                    self.assertEqual(plugin_declarations(root, {})[0]['display_name'], 'market-example')
+            metadata.unlink()
+            outside = root / 'external.yaml'
+            outside.write_text('display_name: external\n')
+            metadata.symlink_to(outside)
+            self.assertEqual(plugin_declarations(root, {})[0]['display_name'], 'market-example')
+            metadata.unlink()
+            self.assertEqual(plugin_declarations(root, {})[0]['display_name'], 'market-example')
+
     def test_ports_survive_normalization_and_reject_missing_or_disabled_groups(self):
         state = fixture()
         normalized, _ = normalize_state(state)
@@ -108,6 +137,30 @@ class TestComponentBridge(unittest.TestCase):
         document = manager._runtime_document()
         manager.runtime_application = {'status': 'applied', 'applied_revision': manager._runtime_revision(document)}
         return manager
+
+    def test_inventory_prefers_astrbot_display_name_and_keeps_metadata_fallback(self):
+        manager = self.manager()
+        manager.context = types.SimpleNamespace(get_all_stars=lambda: [
+            types.SimpleNamespace(root_dir_name='example', display_name=' API 工具接入 '),
+            types.SimpleNamespace(root_dir_name='stopped', display_name=' '),
+        ])
+        declaration = {'state': 'compatible', 'mode': 'astrbot-environment', 'protocols': ['http']}
+        audit = {'plugin_integrations': [
+            {'id': 'plugin-example', 'name': 'example', 'display_name': 'metadata name',
+             'kind': 'plugin', 'declaration': declaration},
+            {'id': 'plugin-stopped', 'name': 'stopped', 'display_name': '已停用插件',
+             'kind': 'plugin', 'declaration': declaration},
+            {'id': 'plugin-legacy', 'name': 'legacy', 'kind': 'plugin', 'declaration': declaration},
+        ], 'mcps': [{'id': 'mcp-example', 'name': 'example MCP', 'locality': 'stdio',
+                     'declaration': declaration}]}
+        items = manager._component_inventory(audit)
+        self.assertEqual([item.get('display_name') for item in items],
+                         ['API 工具接入', '已停用插件', 'legacy', None])
+        self.assertEqual(items[0]['id'], 'plugin-example')
+        self.assertEqual(items[0]['name'], 'example')
+        self.assertEqual(items[0]['port'], manager.state['component_routes'][0]['port'])
+        self.assertEqual(items[-1]['name'], 'example MCP')
+        self.assertEqual(audit['plugin_integrations'][0]['display_name'], 'metadata name')
 
     def test_market_plugin_lease_uses_dedicated_entry_and_refuses_stale_disabled_policy(self):
         manager = self.manager()

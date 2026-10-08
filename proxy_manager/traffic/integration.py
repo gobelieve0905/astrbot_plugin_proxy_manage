@@ -5,6 +5,8 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
+import yaml
+
 PROTOCOL = 'astrbot.proxy-manager/v1'
 DECLARATION_FILE = 'proxy_manager_integration.json'
 MODES = {'astrbot-environment', 'private-network', 'manual'}
@@ -100,6 +102,17 @@ def plugin_declarations(root: Path, configured: object) -> list[dict]:
                 raw = {'protocol': ''}
         except (OSError, ValueError):
             raw = {'protocol': ''}
-        result.append({'id': 'plugin-'+name, 'name': name[:80], 'kind': 'plugin',
+        display_name = name[:80]
+        metadata_path = plugin_path / 'metadata.yaml'
+        try:
+            metadata_path.resolve().relative_to(plugin_path)
+            if metadata_path.is_file() and metadata_path.stat().st_size <= 64 * 1024:
+                metadata = yaml.safe_load(metadata_path.read_text(encoding='utf-8-sig'))
+                value = metadata.get('display_name') if isinstance(metadata, dict) else None
+                if isinstance(value, str) and value.strip():
+                    display_name = value.strip()[:120]
+        except (OSError, ValueError, UnicodeError, yaml.YAMLError):
+            pass
+        result.append({'id': 'plugin-'+name, 'name': name[:80], 'display_name': display_name, 'kind': 'plugin',
                        'declaration': declaration(raw)})
     return result
