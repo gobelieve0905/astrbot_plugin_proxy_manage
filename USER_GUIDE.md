@@ -61,7 +61,7 @@
 
 ## 统一接入协议
 
-用户在第三方插件或 MCP 的设置中选择“由代理管理中心管理出站流量”后，组件应采用 `astrbot.proxy-manager/v1` 接入。外部插件在自身插件目录放置 `proxy_manager_integration.json`，MCP 在 AstrBot 的该服务器配置项内放置 `proxy_manager` 对象。两者使用同一份公开、无凭据的能力声明；声明不代替用户启用选择：
+用户在 AstrBot 市场插件或 MCP 的设置中选择“由代理管理中心管理出站流量”后，组件应采用 `astrbot.proxy-manager/v1` 接入。市场插件在自身插件目录放置 `proxy_manager_integration.json`，并通过 AstrBot 已注册插件实例申请脱敏 lease；MCP 在 AstrBot 的该服务器配置项内放置 `proxy_manager` 对象。两者使用同一份公开、无凭据的能力声明；声明不代替用户启用选择：
 
 ```json
 {
@@ -75,7 +75,7 @@
 
 `mode` 只能是 `astrbot-environment`、`private-network` 或 `manual`。前者表示组件使用 AstrBot 稳定入口；`private-network` 表示独立容器使用认证私网入口；`manual` 表示组件需由其所有者配置。声明只允许上述五个字段，不能包含 URL、用户名、密码、Token 或 Headers；错误类型、未知协议或无效重启要求会被拒绝。`auto_apply` 必须是布尔值，它只表示组件允许未来自动接入，0.4.2 不自动修改、注入或重启第三方组件。
 
-插件在加载和之后每 30 秒检查新增或变化的声明，也可在概览点击“重新检查”。协议兼容只代表已纳入审计；环境/配置匹配仍显示“无法判定”，不会代替逐组件实际请求与内核出口证据。开启管理后入口不可用必须报错，不能静默直连。字段说明、Python 接入接口、stdio MCP 示例和私网部署边界见[插件与 MCP 接入协议](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/INTEGRATION_PROTOCOL.md)。
+插件在加载和之后每 30 秒检查新增或变化的声明，也可在概览点击“重新检查”。协议兼容只代表已纳入审计；环境/配置匹配仍显示“无法判定”，不会代替逐组件实际请求与内核出口证据。开启管理后入口不可用必须报错，不能静默直连。字段说明、市场插件 lease、stdio MCP 示例和私网部署边界见[插件与 MCP 接入协议](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/INTEGRATION_PROTOCOL.md)。
 
 概览中的动态流量清单使用四类状态：“已接管”必须有请求级证据；“明确直连”表示请求进入内核后由规则选择 `DIRECT`；“未接入”表示组件没有使用插件入口；“无法判定”表示只观察到配置或入口，证据不足。规则组新增弹窗内置飞书/Lark、Telegram、Meta 和 GitHub 域名模板，只预填内核规则，不会自动修改平台 SDK。
 

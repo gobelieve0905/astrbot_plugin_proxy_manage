@@ -137,6 +137,58 @@ class ProxyManager(Star):
         http_url,socks_url=self._entry_urls()
         return self.astrbot_proxy.status(http_url,socks_url)
 
+    def get_proxy_manager_lease(self, plugin_id: str, *, enabled: bool,
+                                protocols: tuple[str, ...] | list[str] = ('http', 'https')) -> dict:
+        """Return a public, credential-free lease for an opt-in market plugin.
+
+        Market plugins call this through AstrBot's registered plugin instance;
+        they do not import this plugin's private modules. The plugin's
+        ``proxy_manager_integration.json`` remains the compatibility contract.
+        """
+        if not isinstance(enabled, bool) or not enabled:
+            raise ValueError('请先在插件设置中开启代理管理中心接入')
+        plugin_name = str(plugin_id or '').strip()
+        if not plugin_name or plugin_name == 'astrbot_plugin_proxy_manage':
+            raise ValueError('市场插件标识无效')
+        metadata = self.context.get_registered_star(plugin_name)
+        if not metadata or not metadata.activated or not metadata.star_cls:
+            raise ValueError('请求接入的市场插件未加载或已停用')
+        directory_name = str(metadata.root_dir_name or '')
+        audit = self._refresh_integration_audit(record=False)
+        item = next((value for value in audit.get('plugin_integrations', [])
+                     if value.get('name') == directory_name), None)
+        declared = (item or {}).get('declaration') or {}
+        if declared.get('state') != 'compatible':
+            raise ValueError('插件未声明有效的 astrbot.proxy-manager/v1 接入协议')
+        if declared.get('mode') != 'astrbot-environment':
+            raise ValueError('当前插件声明的接入模式不支持 AstrBot 市场插件 lease')
+        if not isinstance(protocols, (tuple, list)) or any(not isinstance(value, str) for value in protocols):
+            raise ValueError('请求的代理协议必须是字符串数组')
+        requested = tuple(dict.fromkeys(value.lower() for value in protocols))
+        allowed = {'http', 'https', 'websocket'}
+        if not requested or any(value not in allowed for value in requested):
+            raise ValueError('请求的代理协议无效')
+        if any(value not in declared.get('protocols', []) for value in requested):
+            raise ValueError('插件声明未覆盖请求的代理协议')
+        status = self._astrbot_status()
+        if not status.get('effective') or not self.supervisor.status().get('ready'):
+            raise RuntimeError('代理管理中心稳定入口当前不可用，插件请求已失败关闭')
+        http_url, _ = self._entry_urls()
+        if http_url != 'http://127.0.0.1:17890':
+            raise RuntimeError('代理管理中心稳定入口不匹配')
+        return {
+            'protocol': 'astrbot.proxy-manager/v1',
+            'plugin_id': plugin_name,
+            'mode': 'astrbot-environment',
+            'protocols': list(requested),
+            'http_proxy': http_url if 'http' in requested or 'https' in requested or 'websocket' in requested else '',
+            'https_proxy': http_url if 'https' in requested or 'websocket' in requested else '',
+            'no_proxy': list(status.get('no_proxy') or []),
+            'restart': declared.get('restart', 'process'),
+            'revision': str(self.runtime_application.get('applied_revision') or ''),
+            'status': 'configured',
+        }
+
     def _refresh_integration_audit(self, *, record: bool=True) -> dict:
         http_url,_=self._entry_urls()
         audit=self.traffic_audit.snapshot(http_url,self.state.get('proxy_entry',{}).get('private'))

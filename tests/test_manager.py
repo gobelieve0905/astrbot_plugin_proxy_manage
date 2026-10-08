@@ -1894,6 +1894,47 @@ class TestConfigurationRules(unittest.TestCase):
             root=Path(directory); (root/'data'/'plugins').mkdir(parents=True)
             self.assertEqual(plugin_declarations(root,{'../../../outside':True,'..':True}),[])
 
+    def test_market_plugin_lease_requires_opt_in_declaration_and_effective_entry(self):
+        manager=self._manager_for_runtime()
+        manager.integration_audit={'plugin_integrations':[{
+            'name':'market-folder', 'declaration':{
+                'state':'compatible','mode':'astrbot-environment',
+                'protocols':['http','https'],'restart':'process'}}]}
+        manager.context=Mock()
+        manager.context.get_registered_star.return_value=types.SimpleNamespace(
+            activated=True,star_cls=object(),root_dir_name='market-folder')
+        manager._refresh_integration_audit=Mock(return_value=manager.integration_audit)
+        manager.supervisor=Mock()
+        manager.supervisor.status.return_value={'ready':True}
+        manager._astrbot_status=Mock(return_value={'effective':True,'no_proxy':['localhost']})
+        manager._entry_urls=Mock(return_value=('http://127.0.0.1:17890','socks5://127.0.0.1:17890'))
+        lease=manager.get_proxy_manager_lease('market-plugin',enabled=True,protocols=['https'])
+        self.assertEqual(lease['https_proxy'],'http://127.0.0.1:17890')
+        self.assertEqual(lease['status'],'configured')
+        self.assertNotIn('managed',lease)
+        self.assertNotIn('username',json.dumps(lease)); self.assertNotIn('password',json.dumps(lease))
+        with self.assertRaises(ValueError):
+            manager.get_proxy_manager_lease('market-plugin',enabled=False)
+        with self.assertRaises(ValueError):
+            manager.get_proxy_manager_lease('market-plugin',enabled=True,protocols='https')
+        with self.assertRaises(ValueError):
+            manager.get_proxy_manager_lease('market-plugin',enabled=True,protocols=['udp'])
+        manager.context.get_registered_star.return_value.activated=False
+        with self.assertRaises(ValueError):
+            manager.get_proxy_manager_lease('market-plugin',enabled=True)
+        manager.context.get_registered_star.return_value=None
+        with self.assertRaises(ValueError):
+            manager.get_proxy_manager_lease('unknown-plugin',enabled=True)
+        manager.context.get_registered_star.return_value=types.SimpleNamespace(
+            activated=True,star_cls=object(),root_dir_name='market-folder')
+        manager.supervisor.status.return_value={'ready':False}
+        with self.assertRaises(RuntimeError):
+            manager.get_proxy_manager_lease('market-plugin',enabled=True)
+        manager.supervisor.status.return_value={'ready':True}
+        manager._astrbot_status=Mock(return_value={'effective':False})
+        with self.assertRaises(RuntimeError):
+            manager.get_proxy_manager_lease('market-plugin',enabled=True)
+
     def test_astrbot_proxy_transaction_backs_up_narrows_and_restores(self):
         from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
         with tempfile.TemporaryDirectory() as directory:
