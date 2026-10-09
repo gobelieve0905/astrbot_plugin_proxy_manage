@@ -18,21 +18,12 @@
 .chip.error, .chip.timeout, .chip.invalid { border-color: color-mix(in srgb, var(--danger) 44%, var(--line)); background: var(--danger-soft); color: var(--danger); }
 .chip.pending { border-color: color-mix(in srgb, var(--warning) 44%, var(--line)); background: var(--warning-soft); color: var(--warning); }
 .node-error { margin-top: 10px; padding: 9px 11px; border-left: 3px solid var(--danger); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--danger-soft); color: var(--danger); font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
-.verification-levels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
-.verification { display: grid; gap: 5px; min-width: 0; padding: 13px 14px; border: 1px solid var(--line); border-top: 3px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--panel-subtle); }
-.verification b { color: var(--text); font-size: 13px; font-weight: 700; }
-.verification span, .verification code { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.verification.passed, .verification.matched, .verification.default, .verification.confirmed { border-color: color-mix(in srgb, var(--success) 44%, var(--line)); border-top-color: var(--success); background: var(--success-soft); }
-.verification.passed b, .verification.matched b, .verification.default b, .verification.confirmed b { color: var(--success); }
-.verification.failed, .verification.unconfirmed { border-color: color-mix(in srgb, var(--danger) 44%, var(--line)); border-top-color: var(--danger); background: var(--danger-soft); }
-.verification.failed b, .verification.unconfirmed b { color: var(--danger); }
 @media (max-width: 980px) {
   .import-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sub-card .table, .node-card .table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .verification-levels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 700px) {
-  .import-form, .filter, .sub-card .table, .node-card .table, .verification-levels { grid-template-columns: 1fr; }
+  .import-form, .filter, .sub-card .table, .node-card .table { grid-template-columns: 1fr; }
   #content[data-view="subscriptions"] .filter { grid-template-columns: 1fr; }
 }
