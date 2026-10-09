@@ -134,7 +134,28 @@ class AstrBotProxyTransaction:
             config = {}; configured = False
         expected = entry.rstrip('/')
         socks=socks_entry.rstrip('/') or expected
-        effective = configured and all(
+        expected_env = {
+            'http_proxy': expected,
+            'https_proxy': expected,
+            'all_proxy': socks,
+        }
+        environment_conflicts = []
+        for key, expected_value in expected_env.items():
+            for env_key in (key, key.upper()):
+                value = str(environ.get(env_key) or '').rstrip('/')
+                if value and value != expected_value:
+                    environment_conflicts.append(env_key)
+
+        expected_no_proxy = self._expected_no_proxy()
+        expected_no_proxy_set = {value.lower() for value in expected_no_proxy}
+        for env_key in ('no_proxy', 'NO_PROXY'):
+            value = environ.get(env_key)
+            if value:
+                actual_no_proxy = {part.strip().lower() for part in str(value).split(',') if part.strip()}
+                if actual_no_proxy != expected_no_proxy_set:
+                    environment_conflicts.append(env_key)
+
+        effective = configured and not environment_conflicts and all(
             str(environ.get(key, '')).rstrip('/') == expected
             for key in ('http_proxy', 'https_proxy')
         ) and (
@@ -142,7 +163,9 @@ class AstrBotProxyTransaction:
             or str(environ.get('all_proxy')).rstrip('/') == socks
         )
         status = record.get('status', 'not_connected')
-        if status == 'active' and not effective:
+        if environment_conflicts:
+            status = 'environment_conflict'
+        elif status == 'active' and not effective:
             status = 'restart_required' if configured else 'drifted'
         elif status in {'pending_restart', 'restore_pending_restart'}:
             status = status
@@ -154,6 +177,7 @@ class AstrBotProxyTransaction:
             'effective': effective,
             'restart_required': status in {'pending_restart', 'restore_pending_restart', 'restart_required', 'drifted'},
             'entry': entry,
+            'environment_conflicts': environment_conflicts,
             'no_proxy': list(config.get('no_proxy') or []),
             'expected_no_proxy': list(self._expected_no_proxy()),
             'backup_available': bool(record.get('backup')),
@@ -163,6 +187,7 @@ class AstrBotProxyTransaction:
                 'restore_pending_restart': '旧全局代理配置已恢复，等待重启 AstrBot 生效',
                 'restart_required': '配置已写入但当前进程尚未重启',
                 'drifted': 'AstrBot 全局代理配置与当前进程环境不一致',
+                'environment_conflict': 'AstrBot 进程环境变量与插件稳定入口不一致：' + ', '.join(environment_conflicts),
             }.get(status, 'AstrBot 尚未接入插件稳定入口'),
         }
 

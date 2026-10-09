@@ -1940,6 +1940,32 @@ class TestConfigurationRules(unittest.TestCase):
                 active=transaction.mark_started(entry,socks)
             self.assertEqual(active['status'],'active'); self.assertTrue(active['effective'])
 
+    def test_astrbot_proxy_status_checks_uppercase_environment_conflicts(self):
+        from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); config=root/'cmd_config.json'; data=root/'plugin'; data.mkdir()
+            config.write_text('{}',encoding='utf-8')
+            entry='http://127.0.0.1:17890'; socks='socks5://127.0.0.1:17890'
+            transaction=AstrBotProxyTransaction(data,config)
+            transaction.enable(entry,socks)
+            environment={
+                'http_proxy':entry,'https_proxy':entry,'all_proxy':socks,
+                'HTTP_PROXY':entry,'HTTPS_PROXY':entry,'ALL_PROXY':socks,
+                'no_proxy':','.join(INTERNAL_NO_PROXY),'NO_PROXY':','.join(INTERNAL_NO_PROXY),
+            }
+            with patch.dict(os.environ,environment,clear=True):
+                active=transaction.mark_started(entry,socks)
+            self.assertTrue(active['effective'])
+            self.assertEqual(active['status'],'active')
+
+            conflicting={**environment,'HTTP_PROXY':'http://user:secret@other.example:7890','NO_PROXY':'*'}
+            status=transaction.status(entry,socks,conflicting)
+            self.assertFalse(status['effective'])
+            self.assertEqual(status['status'],'environment_conflict')
+            self.assertEqual(status['environment_conflicts'],['HTTP_PROXY','NO_PROXY'])
+            self.assertIn('HTTP_PROXY',status['message'])
+            self.assertNotIn('secret',json.dumps(status,ensure_ascii=False))
+
     def test_astrbot_proxy_transaction_applies_complete_process_environment(self):
         from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY
         with tempfile.TemporaryDirectory() as directory:
