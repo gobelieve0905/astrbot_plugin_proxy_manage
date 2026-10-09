@@ -7,6 +7,7 @@ from proxy_manager.compat.lease import ComponentLease
 from proxy_manager.compat.provider_transport import (
     ProxySession, ScopedAiohttp, ScopedDashscopeCall, build_transport_provider,
     scoped_xinference_client,
+    scoped_websocket_module,
 )
 
 
@@ -109,13 +110,33 @@ class Base:
         model.session.post('https://example.invalid/v1/rerank')
         self.assertEqual(model.session._session.request.call_args.kwargs['proxy'], ENTRY)
 
+    async def test_dashscope_websocket_app_forces_stable_http_proxy(self):
+        class WebSocketApp:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+            def run_forever(self, *args, **kwargs):
+                return args, kwargs
+
+        module = types.SimpleNamespace(WebSocketApp=WebSocketApp)
+        scoped = scoped_websocket_module(module, ComponentLease('test', ENTRY))
+        app = scoped.WebSocketApp('wss://example.invalid')
+        _, proxy = app.run_forever(ping_interval=10)
+        self.assertEqual(proxy['http_proxy_host'], '127.0.0.1')
+        self.assertEqual(proxy['http_proxy_port'], 17890)
+        self.assertEqual(proxy['proxy_type'], 'http')
+        self.assertEqual(proxy['ping_interval'], 10)
+        with self.assertRaises(ValueError):
+            scoped_websocket_module(module, ComponentLease('test', ''))
+
     async def test_partial_and_local_coverage_are_not_reported_as_complete(self):
         from proxy_manager.compat.provider_registry import PROVIDER_ADAPTER_MAP
         from proxy_manager.compat.registry import SUPPORTED_PROVIDER_TYPES
 
-        self.assertEqual(len(SUPPORTED_PROVIDER_TYPES), 40)
-        self.assertEqual(PROVIDER_ADAPTER_MAP['dashscope_tts'].proxy_mode, 'partial')
-        self.assertNotIn('dashscope_tts', SUPPORTED_PROVIDER_TYPES)
+        self.assertEqual(len(SUPPORTED_PROVIDER_TYPES), 41)
+        self.assertEqual(PROVIDER_ADAPTER_MAP['dashscope_tts'].proxy_mode, 'transport')
+        self.assertIn('dashscope_tts', SUPPORTED_PROVIDER_TYPES)
         for name in ('sensevoice_stt_selfhost', 'openai_whisper_selfhost'):
             self.assertEqual(PROVIDER_ADAPTER_MAP[name].proxy_mode, 'partial')
             self.assertNotIn(name, SUPPORTED_PROVIDER_TYPES)

@@ -1,6 +1,6 @@
 name: astrbot_plugin_proxy_manage
 display_name: 代理管理中心
-desc: 可视化管理 AstrBot 的代理出口、分流策略、节点健康状态和连通性诊断；AstrBot 4.28.2 内置 44 类 Provider 中，30 类已有请求级证据，10 类新增显式传输路径待验证，3 类部分接入，1 类及未知类型保持未适配或未验证。
+desc: 可视化管理 AstrBot 的代理出口、分流策略、节点健康状态和连通性诊断；AstrBot 4.28.2 内置 44 类 Provider 中，30 类已有请求级证据，11 类显式接入稳定入口，2 类部分接入，1 类及未知类型保持未适配或未验证。
 version: 0.4.3
 author: gobelieve
 repo: https://github.com/gobelieve0905/astrbot_plugin_proxy_manage

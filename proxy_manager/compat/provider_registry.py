@@ -99,7 +99,7 @@ TRANSPORT_COVERAGE = {
     "openai_whisper_api": "OpenAI 转写客户端与 MediaResolver 外部音频下载",
     "xinference_rerank": "SDK 初始化同步鉴权、模型查询与独立模型句柄排序请求",
     "xinference_stt": "SDK 初始化同步鉴权、模型查询、转写与外部音频下载",
-    "dashscope_tts": "仅 Qwen HTTP 与返回音频下载；CosyVoice WebSocket 尚未显式接入/验证",
+    "dashscope_tts": "Qwen HTTP、CosyVoice WebSocket 与返回音频下载显式使用稳定入口",
     "sensevoice_stt_selfhost": "本地推理；外部输入媒体通过稳定入口下载，模型下载尚未覆盖",
     "openai_whisper_selfhost": "本地推理；外部输入媒体通过稳定入口下载，模型下载尚未覆盖",
 }
@@ -108,7 +108,7 @@ LOCAL_COVERAGE = {
 }
 SDK_REQUIREMENTS = {
     "dashscope_embedding": (("dashscope", "1.27.4"),),
-    "dashscope_tts": (("dashscope", "1.27.4"),),
+    "dashscope_tts": (("dashscope", "1.27.4"), ("websocket-client", "1.9.2")),
     "xinference_rerank": (("xinference-client", "3.2.0"),),
     "xinference_stt": (("xinference-client", "3.2.0"),),
 }
@@ -118,7 +118,7 @@ PROVIDER_ADAPTER_MAP = {
         item.module_name,
         "session" if item.provider_type in SESSION_PROXY_TYPES else
         "config" if item.provider_type in CONFIG_PROXY_TYPES else
-        "partial" if item.provider_type in {"dashscope_tts", "sensevoice_stt_selfhost", "openai_whisper_selfhost"} else
+        "partial" if item.provider_type in {"sensevoice_stt_selfhost", "openai_whisper_selfhost"} else
         "transport" if item.provider_type in TRANSPORT_COVERAGE else "unverified",
         coverage=TRANSPORT_COVERAGE.get(item.provider_type, LOCAL_COVERAGE.get(
             item.provider_type, "普通 API 请求；辅助路径按请求证据另行核验")),

@@ -174,7 +174,7 @@ class TestConfigurationRules(unittest.TestCase):
         manager = CompatibilityManager(None, ComponentLease('test', 'http://127.0.0.1:17890'))
         registry_module = sys.modules['proxy_manager.compat.registry']
         with patch.object(registry_module, '_package_version', side_effect=lambda name: {
-            'dashscope': '1.27.4', 'xinference-client': '3.2.0',
+            'dashscope': '1.27.4', 'websocket-client': '1.9.2', 'xinference-client': '3.2.0',
         }.get(name, 'unknown')), patch.object(registry_module, 'build_transport_provider',
             side_effect=lambda name, base, lease: type('ProxyManagedProvider_' + name, (base,), {'_proxy_manager_base': base}),
         ), patch.object(registry_module.importlib, 'import_module', return_value=None), patch.dict(

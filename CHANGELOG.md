@@ -7,7 +7,8 @@
 
 ## Unreleased - 2026-10-09
 
-- **Provider 普通请求显式接入（2026-10-09）**：按 AstrBot 4.28.2 源码确认 DashScope Embedding、Edge TTS、GSV/GSVI/MiniMax TTS、NVIDIA Rerank、Volcengine TTS、Whisper API 和 Xinference Rerank/STT 的稳定入口；额外媒体请求一并接入。DashScope TTS 与两个本地 STT 仅部分路径可控，Genie TTS 和未知类型不宣称接入。10 类新增适配路径的请求证据仍待验证。
+- **Provider 普通请求显式接入（2026-10-09）**：按 AstrBot 4.28.2 源码为 DashScope Embedding、Edge TTS、GSV/GSVI/MiniMax TTS、NVIDIA Rerank、Volcengine TTS、Whisper API 和 Xinference Rerank/STT 设置稳定入口；额外媒体请求一并接入。两个本地 STT 的媒体下载部分接入；Genie TTS 本地推理及未知类型不改写。
+- **DashScope CosyVoice WebSocket 接入（2026-10-09）**：为官方 `SpeechSynthesizer` 建立实例级 WebSocket 客户端子类，将 HTTP 稳定入口显式传给 `websocket-client`；DashScope TTS 的 Qwen、CosyVoice 和音频下载路径均已接入。
 - **订阅请求接入稳定入口（2026-10-09）**：导入预览、手动刷新和定时刷新显式指定插件稳定 HTTP 入口，保留重定向逐跳公网校验、超时与响应大小限制；入口缺失或不可用时失败关闭，不读取环境代理或回退直连。新增订阅流量登记及请求回归检查，未取得实际规则与出口证据时保持待验证。
 - **概览页移除实际出站验证**：删除概览页验证卡片、验证输入和前端绑定，保留后端验证接口、诊断快照与审计事件；分流预览继续用于检查网址规则命中结果。
 - **旧运行配置迁移（2026-10-09）**：加载时规范化移除持久配置中的旧组件策略；拒绝恢复含旧组件专用监听器的运行配置，保持失败关闭直至重新应用网址规则；服务器部署后重新应用并核对原有网址策略。

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import copy
 import functools
+import inspect
 import types
+from urllib.parse import unquote, urlsplit
 
 
 def require_entry(lease):
@@ -171,6 +173,36 @@ def scoped_xinference_client(client, lease):
     return ProxyManagedXinferenceClient
 
 
+def scoped_websocket_module(module, lease):
+    parts = urlsplit(require_entry(lease))
+    if parts.scheme.lower() != "http" or not parts.hostname:
+        raise ValueError("DashScope WebSocket requires the stable HTTP entry")
+    proxy = {
+        "http_proxy_host": parts.hostname,
+        "http_proxy_port": parts.port or 80,
+        "proxy_type": "http",
+    }
+    if parts.username is not None:
+        proxy["http_proxy_auth"] = (unquote(parts.username), unquote(parts.password or ""))
+    base_app = module.WebSocketApp
+
+    class ProxyManagedWebSocketApp(base_app):
+        def run_forever(self, *args, **kwargs):
+            kwargs.update(proxy)
+            return super().run_forever(*args, **kwargs)
+
+    return types.SimpleNamespace(WebSocketApp=ProxyManagedWebSocketApp)
+
+
+def scoped_dashscope_synthesizer(synthesizer, lease):
+    connect_name = "_SpeechSynthesizer__connect"
+    connect = getattr(synthesizer, connect_name)
+    websocket = scoped_websocket_module(connect.__globals__["websocket"], lease)
+    return type("ProxyManagedDashscopeSynthesizer", (synthesizer,), {
+        connect_name: clone_function(connect, {"websocket": websocket}),
+    })
+
+
 # Only these reviewed methods receive private SDK/client factories.
 AIOHTTP_METHODS = {
     "gsv_tts_selfhost": ("initialize",),
@@ -201,6 +233,11 @@ def build_transport_provider(provider_type, base, lease):
         sdk = method.__globals__["MultiModalConversation"]
         attrs["_call_qwen_tts"] = clone_function(method, {
             "MultiModalConversation": ScopedDashscopeCall(sdk, lease) if sdk else None,
+        })
+        method = base._synthesize_with_cosyvoice
+        synthesizer = method.__globals__["SpeechSynthesizer"]
+        attrs["_synthesize_with_cosyvoice"] = clone_function(method, {
+            "SpeechSynthesizer": scoped_dashscope_synthesizer(synthesizer, lease),
         })
     if provider_type == "openai_whisper_api":
         method = base.__init__
@@ -243,7 +280,9 @@ def build_transport_provider(provider_type, base, lease):
             try:
                 terminate = getattr(super(), "terminate", None)
                 if terminate:
-                    await terminate()
+                    result = terminate()
+                    if inspect.isawaitable(result):
+                        await result
             finally:
                 # Xinference client.close() does not close its model handle.
                 model = getattr(self, "model", None)

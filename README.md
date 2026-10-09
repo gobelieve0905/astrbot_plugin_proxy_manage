@@ -37,7 +37,7 @@
 
 真实流量回归矩阵及服务器执行记录格式见 [TRAFFIC_REGRESSION_MATRIX.md](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/TRAFFIC_REGRESSION_MATRIX.md)。矩阵未完成服务器验收前，相关入口保持“无法判定”。
 
-AstrBot 4.28.2 内置 44 类 Provider 的逐项适配范围如下。表中的“显示名称”就是 AstrBot“新建模型提供商”窗口中的名称；同一显示名称可能随 AstrBot 版本变化，判断适配状态以旁边的内部 `provider_type` 为准。“请求已验证”是既有 30 类无业务凭据请求证据；新增适配只表示已接入明确客户端路径，仍待服务器真实请求取得规则、链路和出口证据。它们都不表示真实模型、语音或排序业务 API 成功。指定节点、自动组、拒绝和失败关闭也尚未逐类验收。
+AstrBot 4.28.2 内置 44 类 Provider 的逐项适配范围如下。表中的“显示名称”就是 AstrBot“新建模型提供商”窗口中的名称；同一显示名称可能随 AstrBot 版本变化，判断适配状态以旁边的内部 `provider_type` 为准。30 类有既有请求级证据；另外 11 类的已确认客户端路径已显式配置为使用稳定入口，不要求真实业务请求或 API 凭据才能接入。入口配置不等于业务 API 成功，也不等于指定节点、自动组、拒绝和失败关闭已逐类验收。
 
 ## Provider 适配范围
 
@@ -76,25 +76,25 @@ AstrBot 4.28.2 内置 44 类 Provider 的逐项适配范围如下。表中的“
 | Xiaomi Token Plan | `xiaomi_token_plan` | 已验证：稳定入口、规则、连接链路和出口 |
 | Zhipu | `zhipu_chat_completion` | 已验证：稳定入口、规则、连接链路和出口 |
 
-### 新增显式传输适配，待请求验证（10 类）
+### 新增显式使用稳定入口（11 类）
 
 | AstrBot 显示名称 | 内部 `provider_type` | 当前状态 |
 | --- | --- | --- |
-| DashScope Embedding | `dashscope_embedding` | DashScope SDK 的文本/多模态文本调用传入实例级 HTTP Session；待请求验证 |
-| Edge TTS | `edge_tts` | `Communicate` 显式传入稳定入口；服务器缺少 SDK，WebSocket 待验证 |
-| GSV TTS(Local) | `gsv_tts_selfhost` | 会话初始化和后续 GET 使用稳定入口；待请求验证 |
-| GSVI TTS(API) | `gsvi_tts_api` | 合成 POST 和返回音频二次下载均走稳定入口；待请求验证 |
-| MiniMax TTS(API) | `minimax_tts_api` | SSE 合成会话显式走稳定入口；待请求验证 |
-| NVIDIA Rerank | `nvidia_rerank` | 惰性创建/重建的客户端显式走稳定入口；待请求验证 |
-| 火山引擎_TTS(API) | `volcengine_tts` | 合成 POST 显式走稳定入口；待请求验证 |
-| Whisper(API) | `openai_whisper_api` | OpenAI 转写客户端及外部音频下载显式走稳定入口；待请求验证 |
-| Xinference Rerank / STT | `xinference_rerank`, `xinference_stt` | SDK 初始化鉴权、主会话、排序模型句柄和 STT 输入下载使用稳定入口；待请求验证 |
+| DashScope Embedding | `dashscope_embedding` | DashScope SDK 的文本/多模态文本调用传入实例级 HTTP Session |
+| 阿里云百炼 TTS(API) | `dashscope_tts` | Qwen HTTP、CosyVoice WebSocket 和返回音频下载使用稳定入口 |
+| Edge TTS | `edge_tts` | `Communicate` 显式传入稳定入口；当前服务器缺少 SDK，安装该 Provider 依赖后生效 |
+| GSV TTS(Local) | `gsv_tts_selfhost` | 会话初始化和后续 GET 使用稳定入口 |
+| GSVI TTS(API) | `gsvi_tts_api` | 合成 POST 和返回音频二次下载均走稳定入口 |
+| MiniMax TTS(API) | `minimax_tts_api` | SSE 合成会话显式走稳定入口 |
+| NVIDIA Rerank | `nvidia_rerank` | 惰性创建/重建的客户端显式走稳定入口 |
+| 火山引擎_TTS(API) | `volcengine_tts` | 合成 POST 显式走稳定入口 |
+| Whisper(API) | `openai_whisper_api` | OpenAI 转写客户端及外部音频下载显式走稳定入口 |
+| Xinference Rerank / STT | `xinference_rerank`, `xinference_stt` | SDK 初始化鉴权、主会话、排序模型句柄和 STT 输入下载使用稳定入口 |
 
-### 部分路径接入（3 类）
+### 部分路径接入（2 类）
 
 | AstrBot 显示名称 | 内部 `provider_type` | 已接入范围与限制 |
 | --- | --- | --- |
-| 阿里云百炼 TTS(API) | `dashscope_tts` | Qwen HTTP 调用和返回音频下载使用稳定入口；CosyVoice WebSocket 尚未适配；保持部分状态 |
 | SenseVoice(Local) | `sensevoice_stt_selfhost` | 本地推理不产生外部请求；输入媒体下载使用稳定入口，模型下载不在覆盖范围 |
 | Whisper(Local) | `openai_whisper_selfhost` | 本地推理不产生外部请求；输入媒体下载使用稳定入口，模型下载不在覆盖范围 |
 
@@ -123,7 +123,7 @@ AstrBot 4.28.2 内置 44 类 Provider 的逐项适配范围如下。表中的“
 | 内核 | 插件自管 Mihomo 1.19.31、sing-box 1.14.1、Xray 26.3.27；另含固定版本 1.19.30、1.13.2、26.6.27 |
 | 制品来源 | 固定官方 URL、SHA-256 校验和离线上传；不使用 `latest` 或未经验证的镜像 |
 | 机器人平台 SDK | 已适配飞书/Lark（`lark-oapi` 1.7.3）和 Telegram（`python-telegram-bot` 22.8）；各传输验证状态见上表，其他平台 SDK 不作兼容承诺 |
-| 模型 Provider | 44 类全部进入显式注册表；30 类有请求级证据、10 类新增路径待证据、3 类部分接入、1 类未适配；未知类型保持“未验证”，逐项名单见上表 |
+| 模型 Provider | 44 类全部进入显式注册表；30 类有既有请求级证据、11 类新增路径已显式使用稳定入口、2 类部分接入、1 类未适配；未知类型保持原类，逐项名单见上表 |
 | 不自动接入 | 未显式使用统一入口的 `trust_env=False` 客户端、指向其他入口的自带代理、裸 socket 及独立网络；[具体边界见使用指南](USER_GUIDE.md#第三方插件与-mcp-的流量边界) |
 
 未知或暂未验证的协议会保留原始信息并明确标记，不会静默写入运行配置。Xray 的代理组控制能力有限，页面会按实际能力提示。没有内核时仍可整理订阅、节点、代理组和规则，但原生协议测速、配置应用和出口验证会显示缺少的运行条件。
