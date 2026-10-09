@@ -1903,6 +1903,9 @@ class TestConfigurationRules(unittest.TestCase):
             provider=next(value for value in values if value['id']=='provider-proxy')
             platform=next(value for value in values if value['id']=='platform-sdk')
             self.assertEqual(provider['status'],'unknown'); self.assertEqual(platform['status'],'not_connected')
+            self.assertEqual(provider['adapter_status'],'not_installed')
+            self.assertEqual(provider['transport_status'],'unverified')
+            self.assertEqual(provider['integration']['state'],'not-installed')
 
     def test_traffic_audit_separates_model_records_from_provider_configs(self):
         from proxy_manager.traffic.audit import AstrBotTrafficAudit
@@ -1924,6 +1927,33 @@ class TestConfigurationRules(unittest.TestCase):
             provider=next(item for item in values if item['id']=='provider-proxy')
             self.assertEqual(provider['model_count'],1)
             self.assertNotIn('未适配',provider['message'])
+            self.assertEqual(provider['status'],'unknown')
+            self.assertEqual(provider['adapter_status'],'installed')
+            self.assertEqual(provider['transport_status'],'unverified')
+            self.assertEqual(provider['transport_evidence'],{
+                'openai_chat_completion':'unverified','openai_embedding':'unverified'})
+            self.assertEqual(provider['integration']['state'],'adapter-installed')
+            self.assertIn('不代表 Provider 请求已经经过稳定入口',provider['integration']['message'])
+
+    def test_compatibility_installation_is_separate_from_platform_transport_evidence(self):
+        from proxy_manager.traffic.inventory import traffic_inventory
+        compatibility={'state':'installed','providers':{},'platforms':{
+            'lark':{'state':'installed','protocols':['http','websocket','media']},
+            'telegram':{'state':'installed','protocols':['http','polling','media']},
+        }}
+        values=traffic_inventory({'proxy_entry':{'http_url':'http://127.0.0.1:17890'}},{},
+                                 astrbot={'effective':True},
+                                 audit={'platforms':[{'id':'telegram','type':'telegram'}],
+                                        'compatibility':compatibility})
+        platform=next(item for item in values if item['id']=='platform-sdk')
+        self.assertEqual(platform['status'],'unknown')
+        self.assertEqual(platform['adapter_status'],'installed')
+        self.assertEqual(platform['transport_status'],'unverified')
+        self.assertEqual(platform['transport_evidence']['telegram'],{
+            'http':'unverified','polling':'unverified','media':'unverified'})
+        self.assertEqual(platform['integration']['state'],'adapter-installed')
+        self.assertEqual(platform['integration']['adapted_platforms']['telegram'],['http','polling','media'])
+        self.assertIn('仍需分别取得请求级证据',platform['integration']['message'])
 
     def test_astrbot_proxy_transaction_backs_up_narrows_and_restores(self):
         from proxy_manager.traffic.astrbot import AstrBotProxyTransaction, INTERNAL_NO_PROXY

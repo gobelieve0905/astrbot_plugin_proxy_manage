@@ -132,9 +132,9 @@ class TrafficRegistry:
                 else:
                     item.update({'status': 'unknown', 'message': '尚无完整的请求级规则与出口证据'})
             elif identifier == 'provider-proxy':
-                self._provider_status(item, audit, astrbot, policy)
+                self._provider_status(item, audit, astrbot)
             elif identifier == 'platform-sdk':
-                self._platform_status(item, audit, astrbot, policy)
+                self._platform_status(item, audit, astrbot)
             elif identifier == 'updates':
                 item.update({'status': 'not_connected', 'message': '其他插件市场与依赖下载尚未统一接入稳定入口'})
             elif identifier == 'plugin-subscriptions':
@@ -177,7 +177,7 @@ class TrafficRegistry:
     inventory = snapshot
 
     @staticmethod
-    def _provider_status(item: dict, audit: dict, astrbot: dict, policy: str) -> None:
+    def _provider_status(item: dict, audit: dict, astrbot: dict) -> None:
         entries = audit.get('providers', [])
         providers = [value for value in entries if value.get('kind', 'provider') == 'provider']
         model_entries = [value for value in entries if value.get('kind') == 'model']
@@ -211,33 +211,96 @@ class TrafficRegistry:
             item.update({'status': 'unknown', 'message': '未发现 Provider 专用 proxy；部分客户端可能继承全局代理，但尚无请求级证据'})
         else:
             item.update({'status': 'not_connected', 'message': '未发现已启用 Provider 的稳定入口专用 proxy 配置'})
+        adapter_status = 'unsupported'
+        if compatibility.get('state') == 'installed':
+            adapter_status = 'partial' if unsupported or partial else 'installed'
+        elif compatibility.get('state') != 'unsupported':
+            adapter_status = 'not_installed'
+        if adapter_status == 'installed':
+            integration_state = 'adapter-installed'
+            integration_message = 'Provider 适配层已安装；这不代表 Provider 请求已经经过稳定入口，当前无请求级传输证据'
+            integration_mode = 'runtime-entry'
+        elif adapter_status == 'partial':
+            integration_state = 'adapter-partial'
+            integration_message = 'Provider 适配层仅覆盖部分已启用类型；已适配路径仍无请求级传输证据'
+            integration_mode = 'runtime-entry'
+        elif stable:
+            integration_state = 'entry-configured'
+            integration_message = '发现 Provider 稳定入口配置；当前无请求级传输证据'
+            integration_mode = 'explicit-entry'
+        elif providers and astrbot.get('effective'):
+            integration_state = 'possible'
+            integration_message = '部分 Provider 客户端可能继承 AstrBot 环境代理；当前无请求级传输证据'
+            integration_mode = 'environment-inherited'
+        else:
+            integration_state = 'not-installed'
+            integration_message = '没有已安装的 Provider 适配或可确认的稳定入口配置'
+            integration_mode = ''
         item['discovered'] = providers
         item['model_count'] = len(model_entries)
+        item['adapter_status'] = adapter_status
+        item['transport_status'] = 'unverified'
+        item['transport_evidence'] = {
+            str(value.get('type')): 'unverified'
+            for value in providers if value.get('enabled') and value.get('type')
+        }
         item['integration'] = {
-            'state': 'managed' if compatibility.get('state') == 'installed' else policy,
-            'mode': 'runtime-entry',
-            'message': '由版本化官方兼容层注入 Provider 稳定入口；未命中规则默认 DIRECT',
+            'state': integration_state,
+            'adapter_status': adapter_status,
+            'transport_status': 'unverified',
+            'mode': integration_mode,
+            'adapted_types': sorted(supported_types),
+            'partial_types': sorted(partial_types),
+            'message': integration_message,
         }
 
     @staticmethod
-    def _platform_status(item: dict, audit: dict, astrbot: dict, policy: str) -> None:
+    def _platform_status(item: dict, audit: dict, astrbot: dict) -> None:
         platforms = audit.get('platforms', [])
         compatibility = audit.get('compatibility', {})
         compatibility = compatibility if isinstance(compatibility, dict) else {}
         message = (
-            '官方兼容层已接入已验证平台；HTTP、WebSocket 和媒体仍需请求级验证'
+            '官方平台适配层已安装；HTTP、WebSocket、轮询和媒体仍需分别进行请求级验证'
             if compatibility.get('state') == 'installed' else
             '发现 ' + str(len(platforms)) + ' 个平台；全局代理可能覆盖部分 HTTP，HTTP、WebSocket 和媒体仍需逐项请求级验证'
             if platforms else '未发现可审计的平台配置'
         )
+        adapter_status = 'installed' if compatibility.get('state') == 'installed' else str(compatibility.get('state') or 'not_installed')
+        adapted_platforms = {
+            name: list(value.get('protocols') or [])
+            for name, value in (compatibility.get('platforms') or {}).items()
+            if isinstance(value, dict) and value.get('state') == 'installed'
+        }
+        transport_evidence = {
+            name: {protocol: 'unverified' for protocol in protocols}
+            for name, protocols in adapted_platforms.items()
+        }
+        if adapter_status == 'installed':
+            integration_state = 'adapter-installed'
+            integration_message = '平台适配层已安装；HTTP、WebSocket、媒体或轮询是否经过稳定入口仍需分别取得请求级证据'
+            integration_mode = 'runtime-entry'
+        elif platforms and astrbot.get('effective'):
+            integration_state = 'possible'
+            integration_message = '平台客户端可能继承 AstrBot 环境代理；各传输路径尚无请求级证据'
+            integration_mode = 'environment-inherited'
+        else:
+            integration_state = 'not-installed'
+            integration_message = '没有已安装的平台适配层；全局代理配置本身不证明平台传输已接入'
+            integration_mode = ''
         item.update({
             'status': 'unknown' if platforms and (astrbot.get('effective') or compatibility.get('state') == 'installed') else 'not_connected',
             'message': message,
             'discovered': platforms,
+            'adapter_status': adapter_status,
+            'transport_status': 'unverified',
+            'transport_evidence': transport_evidence,
             'integration': {
-                'state': 'managed' if compatibility.get('state') == 'installed' else policy,
-                'mode': 'runtime-entry',
-                'message': '由版本化官方兼容层注入平台 SDK 代理；长连接仍需请求级验证',
+                'state': integration_state,
+                'adapter_status': adapter_status,
+                'transport_status': 'unverified',
+                'mode': integration_mode,
+                'adapted_platforms': adapted_platforms,
+                'message': integration_message,
             },
         })
 
