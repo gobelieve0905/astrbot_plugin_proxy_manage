@@ -826,9 +826,48 @@ class TestConfigurationRules(unittest.TestCase):
         response=self.module.httpx.Response(302,headers={'location':'http://127.0.0.1/admin'},request=request)
         client=AsyncMock(); client.__aenter__.return_value=client; client.build_request=Mock(return_value=request)
         client.send=AsyncMock(return_value=response)
-        with patch('proxy_manager.traffic.safe_http.httpx.AsyncClient',return_value=client):
+        with patch('proxy_manager.traffic.safe_http.httpx.AsyncClient',return_value=client) as constructor:
             with self.assertRaisesRegex(ValueError,'禁止访问'):
-                asyncio.run(fetch_public_url('https://1.1.1.1/sub'))
+                asyncio.run(fetch_public_url('https://1.1.1.1/sub',proxy='http://127.0.0.1:17890'))
+        client.send.assert_awaited_once()
+        self.assertEqual(constructor.call_args.kwargs['proxy'],'http://127.0.0.1:17890')
+        self.assertFalse(constructor.call_args.kwargs['trust_env'])
+
+    def test_public_fetch_blocks_missing_entry_before_creating_client(self):
+        from proxy_manager.traffic.safe_http import fetch_public_url
+        with patch('proxy_manager.traffic.safe_http.httpx.AsyncClient') as constructor:
+            for proxy in ('', '  ', None):
+                with self.assertRaisesRegex(ValueError,'未回落到直连'):
+                    asyncio.run(fetch_public_url('https://1.1.1.1/sub',proxy=proxy))
+        constructor.assert_not_called()
+
+    def test_public_fetch_uses_same_explicit_entry_across_public_redirects(self):
+        from proxy_manager.traffic.safe_http import fetch_public_url
+        client=AsyncMock(); client.__aenter__.return_value=client
+        client.build_request=Mock(side_effect=lambda method,url,**kwargs: self.module.httpx.Request(method,url,**kwargs))
+        client.send=AsyncMock(side_effect=[
+            self.module.httpx.Response(302,headers={'location':'https://8.8.8.8/final'}),
+            self.module.httpx.Response(200,content=b'subscription'),
+        ])
+        with patch('proxy_manager.traffic.safe_http.httpx.AsyncClient',return_value=client) as constructor, \
+             patch.dict(os.environ,{'HTTP_PROXY':'http://other:7890','NO_PROXY':'*'}):
+            response=asyncio.run(fetch_public_url('https://1.1.1.1/sub',proxy='http://127.0.0.1:17890'))
+        self.assertEqual(response.content,b'subscription')
+        self.assertEqual([str(call.args[0].url) for call in client.send.await_args_list],
+                         ['https://1.1.1.1/sub','https://8.8.8.8/final'])
+        constructor.assert_called_once()
+        self.assertEqual(constructor.call_args.kwargs['proxy'],'http://127.0.0.1:17890')
+        self.assertFalse(constructor.call_args.kwargs['trust_env'])
+
+    def test_public_fetch_entry_failure_does_not_retry_direct(self):
+        from proxy_manager.traffic.safe_http import fetch_public_url
+        client=AsyncMock(); client.__aenter__.return_value=client
+        client.build_request=Mock(return_value=self.module.httpx.Request('GET','https://1.1.1.1/sub'))
+        client.send=AsyncMock(side_effect=self.module.httpx.ConnectError('entry unavailable'))
+        with patch('proxy_manager.traffic.safe_http.httpx.AsyncClient',return_value=client) as constructor:
+            with self.assertRaises(self.module.httpx.ConnectError):
+                asyncio.run(fetch_public_url('https://1.1.1.1/sub',proxy='http://127.0.0.1:17890'))
+        constructor.assert_called_once()
         client.send.assert_awaited_once()
 
     def test_snapshot_redacts_node_endpoint(self):
@@ -1373,10 +1412,37 @@ class TestConfigurationRules(unittest.TestCase):
         manager=self._manager_for_runtime(); manager.state=manager._normalize(manager.state)
         before_nodes=copy.deepcopy(manager.state['nodes']); before_groups=copy.deepcopy(manager.state['groups'])
         response=self.module.httpx.Response(503,request=self.module.httpx.Request('GET','https://sub.example/hk'))
-        with patch('proxy_manager.plugin.fetch_public_url',new=AsyncMock(return_value=response)):
+        with patch('proxy_manager.plugin.fetch_public_url',new=AsyncMock(return_value=response)) as fetch:
             with self.assertRaisesRegex(ValueError,'订阅请求失败'):
                 asyncio.run(manager._refresh_with_retry('sub-hk',attempts=1))
+        self.assertEqual(fetch.await_args.kwargs['proxy'],manager.state['proxy_entry']['http_url'])
         self.assertEqual(manager.state['nodes'],before_nodes); self.assertEqual(manager.state['groups'],before_groups)
+        self.assertTrue(manager.state['subscriptions'][0]['last_error'])
+
+    def test_subscription_preview_uses_explicit_stable_entry(self):
+        manager=self._manager_for_runtime()
+        response=self.module.httpx.Response(200,content=b'http://8.8.8.8:8080',
+                                           request=self.module.httpx.Request('GET','https://sub.example/new'))
+        fake_request=types.SimpleNamespace(json=AsyncMock(return_value={
+            'name':'New subscription','urls':['https://sub.example/new'],
+        }))
+        with patch('proxy_manager.plugin.request',fake_request), \
+             patch('proxy_manager.plugin.fetch_public_url',new=AsyncMock(return_value=response)) as fetch:
+            result=asyncio.run(manager.subscription_preview())
+        self.assertIn('preview_id',result)
+        self.assertEqual(fetch.await_args.kwargs['proxy'],manager.state['proxy_entry']['http_url'])
+
+    def test_subscription_entry_failure_preserves_nodes_and_groups(self):
+        manager=self._manager_for_runtime(); manager.state=manager._normalize(manager.state)
+        before_nodes=copy.deepcopy(manager.state['nodes']); before_groups=copy.deepcopy(manager.state['groups'])
+        with patch('proxy_manager.plugin.fetch_public_url',new=AsyncMock(
+                side_effect=self.module.httpx.ConnectError('entry unavailable'))) as fetch:
+            with self.assertRaises(self.module.httpx.ConnectError):
+                asyncio.run(manager._refresh_with_retry('sub-hk',attempts=1))
+        fetch.assert_awaited_once()
+        self.assertEqual(fetch.await_args.kwargs['proxy'],manager.state['proxy_entry']['http_url'])
+        self.assertEqual(manager.state['nodes'],before_nodes)
+        self.assertEqual(manager.state['groups'],before_groups)
         self.assertTrue(manager.state['subscriptions'][0]['last_error'])
 
     def test_expired_import_preview_is_rejected_and_removed(self):
@@ -1783,7 +1849,11 @@ class TestConfigurationRules(unittest.TestCase):
         managed=traffic_inventory(manager.state,verified, {'http_proxy':entry,'https_proxy':entry},
                                   {'effective':True,'configured':True})
         self.assertEqual(managed[0]['status'],'managed')
-        self.assertTrue(all(item['status']=='not_connected' for item in managed[1:-1]))
+        self.assertTrue(all(item['status']=='not_connected' for item in managed[1:-1]
+                            if item['id']!='plugin-subscriptions'))
+        subscriptions=next(item for item in managed if item['id']=='plugin-subscriptions')
+        self.assertEqual(subscriptions['status'],'unknown')
+        self.assertEqual(subscriptions['integration']['mode'],'explicit-entry')
         self.assertEqual(managed[-1]['status'],'managed')
 
     def test_traffic_audit_discovers_configuration_without_credentials(self):

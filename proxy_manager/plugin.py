@@ -892,7 +892,8 @@ class ProxyManager(Star):
                 url=str(entry.get('url','')).strip(); name=entry['name']
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
-                response=await fetch_public_url(url,headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.3'})
+                response=await fetch_public_url(url,proxy=self._entry_urls()[0],
+                                                headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.3'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -970,7 +971,8 @@ class ProxyManager(Star):
         async with self.refresh_lock:
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
-            response=await fetch_public_url(subscription['url'],headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.3'})
+            response=await fetch_public_url(subscription['url'],proxy=self._entry_urls()[0],
+                                            headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.3'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])

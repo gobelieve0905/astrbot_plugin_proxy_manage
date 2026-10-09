@@ -34,13 +34,14 @@
 | --- | --- | --- | --- | --- | --- |
 | AstrBot 全局 HTTP/HTTPS | `AB-HTTP-D` | `AB-HTTP-N` | `AB-HTTP-A` | `AB-HTTP-R` | `AB-HTTP-F` |
 | Provider HTTP 请求 | `PROVIDER-D` | `PROVIDER-N` | `PROVIDER-A` | `PROVIDER-R` | `PROVIDER-F` |
+| 代理管理中心订阅预览 / 刷新 | `SUB-HTTP-D` | `SUB-HTTP-N` | `SUB-HTTP-A` | `SUB-HTTP-R` | `SUB-HTTP-F` |
 | 飞书 HTTP API | `FEISHU-HTTP-D` | `FEISHU-HTTP-N` | `FEISHU-HTTP-A` | `FEISHU-HTTP-R` | `FEISHU-HTTP-F` |
 | 飞书 WebSocket | `FEISHU-WS-D` | `FEISHU-WS-N` | `FEISHU-WS-A` | `FEISHU-WS-R` | `FEISHU-WS-F` |
 | 飞书媒体上传/下载 | `FEISHU-MEDIA-D` | `FEISHU-MEDIA-N` | `FEISHU-MEDIA-A` | `FEISHU-MEDIA-R` | `FEISHU-MEDIA-F` |
 | Telegram 轮询 / Bot API | `TG-POLL-D` | `TG-POLL-N` | `TG-POLL-A` | `TG-POLL-R` | `TG-POLL-F` |
 | Telegram 媒体上传/下载 | `TG-MEDIA-D` | `TG-MEDIA-N` | `TG-MEDIA-A` | `TG-MEDIA-R` | `TG-MEDIA-F` |
 
-矩阵共 35 个用例。插件和 MCP 不作为独立入口；其请求若进入 AstrBot 全局、Provider 或平台适配器使用的统一入口，按实际传输类型记录在对应行，若绕过入口则记录为旁路风险，不计入通过用例。
+矩阵共 40 个用例。代理管理中心自身的订阅客户端显式接入稳定入口，单独核验；其他插件和 MCP 不作为独立入口，其请求若进入 AstrBot 全局、Provider 或平台适配器使用的统一入口，按实际传输类型记录在对应行，若绕过入口则记录为旁路风险，不计入通过用例。
 
 下表是执行记录账本；执行人只填写证据摘要和结果，不改变用例 ID 或列含义。
 
@@ -48,13 +49,23 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | `AB-HTTP-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
 | `PROVIDER-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
+| `SUB-HTTP-{D,N,A,R,F}` | 显式稳定 HTTP 入口；待真实请求核验 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 见下方订阅核验要求 |
 | `FEISHU-HTTP-{D,N,A,R,F}` | D：统一入口已观测；N/A/R/F：待执行 | D：`MATCH`；其余待执行 | D：`DIRECT`；其余待执行 | D：无飞书响应出口 IP | `UNKNOWN` | 见下方 2026-09-29 记录 |
 | `FEISHU-WS-{D,N,A,R,F}` | D：`127.0.0.1:17890` | D：`Match` | D：`DIRECT` | 无出口 IP 回显 | `UNKNOWN` | 见下方 2026-09-29 记录 |
 | `FEISHU-MEDIA-{D,N,A,R,F}` | D：入站文件下载已观测；N/A/R/F：待执行 | D：`MATCH`；其余待执行 | D：`DIRECT`；其余待执行 | D：文件事件已进入附件处理；上传未执行 | `UNKNOWN` | 见下方 2026-09-29 记录 |
 | `TG-POLL-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
 | `TG-MEDIA-{D,N,A,R,F}` | 待执行 | 待执行 | 待执行 | 待执行 | `UNKNOWN` | 待执行 |
 
-账本中的 `{D,N,A,R,F}` 是五条独立记录的压缩写法，不能作为最终验收记录。服务器验收应将其展开为 35 行，或提交等价的 JSON/CSV，确保每个具体 ID 都有四段证据。
+账本中的 `{D,N,A,R,F}` 是五条独立记录的压缩写法，不能作为最终验收记录。服务器验收应将其展开为 40 行，或提交等价的 JSON/CSV，确保每个具体 ID 都有四段证据。
+
+### 订阅核验要求（2026-10-09）
+
+- 改善的流量：导入预览、手动刷新和定时刷新共用的 `fetch_public_url()`；客户端必须显式传入稳定 HTTP 入口，`trust_env=False` 防止环境代理和 `NO_PROXY` 改变路径。
+- 规范化模型、持久配置与内核适配器均不改动；请求由现有网址规则分流，不引入内核专用逻辑。
+- 服务器回归覆盖：缺失入口、入口连接失败、环境旁路、跨域重定向、私网重定向拦截、预览与刷新调用路径及失败后的节点/组保留。
+- 真实传输使用无业务凭据回显目标，通过同一客户端关联内核连接快照、命中规则、链路与出口；不能把回显验证当成所有供应商订阅成功，也不能据此更新全部订阅接管状态。
+- 额外验证关闭的代理端口，确认请求失败且没有目标直连；不停止生产内核、不发送机器人消息。实际供应商重定向、指定节点、自动组、拒绝和全部节点失效策略未逐项验收时维持 `UNKNOWN`。
+- 失败刷新沿用现有错误/重试记录及旧节点保留；部署由既有备份、部署锁和回滚入口保护。README 与用户指南同步记录首次导入也需要可用入口，离线解析不受影响。
 
 ## 执行顺序
 
@@ -68,7 +79,7 @@
 
 ## 通过门槛
 
-- 35 个用例全部有具体记录；每条记录四段证据齐全。
+- 40 个用例全部有具体记录；每条记录四段证据齐全。
 - `D` 用例的规则和链路必须包含 `DIRECT`，出口是直连出口；不能只看 `no_proxy`。
 - `N` 用例必须同时出现目标代理组和指定节点；出口 IP 必须与同次请求链路关联。
 - `A` 用例必须记录自动组实际选择和选优时间；不能用配置中的首个成员代替。

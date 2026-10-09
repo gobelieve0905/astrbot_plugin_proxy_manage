@@ -42,10 +42,12 @@ async def validate_public_url(value: object, *, https_only: bool=False) -> str:
     return text
 
 
-async def fetch_public_url(url: object, *, headers: dict|None=None, timeout: float=20,
+async def fetch_public_url(url: object, *, proxy: str, headers: dict|None=None, timeout: float=20,
                            max_bytes: int=10*1024*1024) -> httpx.Response:
+    if not isinstance(proxy,str) or not proxy.strip():
+        raise ValueError('尚未配置统一 HTTP 代理入口；订阅请求已阻止，未回落到直连')
     current=str(url or '').strip()
-    async with httpx.AsyncClient(timeout=timeout,follow_redirects=False,trust_env=False,
+    async with httpx.AsyncClient(proxy=proxy.strip(),timeout=timeout,follow_redirects=False,trust_env=False,
                                  limits=httpx.Limits(max_connections=4)) as client:
         for redirect in range(MAX_REDIRECTS+1):
             current=await validate_public_url(current)

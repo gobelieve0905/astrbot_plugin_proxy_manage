@@ -25,6 +25,10 @@ class TrafficRegistry:
          'method': '更新组件显式使用稳定入口',
          'verification': '下载请求的内核记录和制品摘要校验',
          'bypass_risk': '市场、GitHub、PyPI 与 pip 安装器是独立进程或客户端'},
+        {'id': 'plugin-subscriptions', 'name': '代理管理中心订阅请求', 'restart': False,
+         'method': '导入预览、手动与定时刷新显式使用稳定 HTTP 入口',
+         'verification': '真实订阅请求（含重定向）的内核连接记录、规则与出口链路；入口故障时失败关闭',
+         'bypass_risk': '不读取环境代理；入口缺失或不可用时请求失败，不回退直连'},
         {'id': 'recent-verification', 'name': '最近一次受控验证请求', 'restart': False,
          'method': '通过请求级内核连接记录核对规则与出口链路',
          'verification': '同次请求的入口、规则、代理链、节点与出口 IP',
@@ -125,6 +129,15 @@ class TrafficRegistry:
                 self._platform_status(item, audit, astrbot, policy)
             elif identifier == 'updates':
                 item.update({'status': 'not_connected', 'message': '插件市场、GitHub、PyPI 和依赖安装器尚未统一接入稳定入口'})
+            elif identifier == 'plugin-subscriptions':
+                item.update({'status': 'unknown' if entry else 'not_connected',
+                             'message': '订阅请求已显式使用稳定入口，实际规则与出口需请求级验证' if entry else
+                             '稳定 HTTP 入口缺失，订阅请求已阻止'})
+                item['integration'] = {
+                    'state': 'managed' if entry else 'pending',
+                    'mode': 'explicit-entry',
+                    'message': '每跳重定向校验公网目标；入口故障不回退直连',
+                }
             else:
                 item.update({'status': 'not_connected', 'message': '当前版本尚未实现该接入点的配置与验证'})
             if 'integration' not in item:
