@@ -162,13 +162,18 @@ class TrafficRegistry:
             key for key, value in (compatibility.get('providers') or {}).items()
             if isinstance(value, dict) and value.get('state') == 'installed'
         }
+        partial_types = {
+            key for key, value in (compatibility.get('providers') or {}).items()
+            if isinstance(value, dict) and value.get('state') == 'partial'
+        }
         stable = [value for value in providers if value.get('enabled') and value.get('proxy') == 'stable_entry']
         other = [value for value in providers if value.get('enabled') and value.get('proxy') == 'other_proxy']
-        unsupported = [value for value in providers if value.get('enabled') and value.get('type') not in supported_types]
+        unsupported = [value for value in providers if value.get('enabled') and value.get('type') not in supported_types and value.get('type') not in partial_types]
+        partial = [value for value in providers if value.get('enabled') and value.get('type') in partial_types]
         if compatibility.get('state') == 'unsupported':
             item.update({'status': 'not_connected', 'message': '官方兼容层未启用：' + str(compatibility.get('message') or '运行时版本不受支持')})
-        elif unsupported and compatibility.get('state') == 'installed':
-            item.update({'status': 'unknown', 'message': '官方兼容层已接入支持的 Provider，但仍有 ' + str(len(unsupported)) + ' 个 Provider 未适配；尚无请求级 Provider 证据'})
+        elif (unsupported or partial) and compatibility.get('state') == 'installed':
+            item.update({'status': 'unknown', 'message': '官方兼容层已为 ' + str(len(supported_types)) + ' 类 Provider 接入完整适配、' + str(len(partial_types)) + ' 类接入部分路径；仍有 ' + str(len(unsupported)) + ' 类未适配，且无新增请求级证据'})
         elif compatibility.get('state') == 'installed':
             item.update({'status': 'unknown', 'message': '官方兼容层已为 ' + str(len(supported_types)) + ' 类 Provider 注入稳定入口；尚无请求级 Provider 证据'})
         elif unsupported and stable:

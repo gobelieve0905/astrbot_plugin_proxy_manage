@@ -16,6 +16,8 @@ class ProviderAdapterSpec:
     module_name: str
     proxy_mode: str = "config"
     verification: str = "request_pending"
+    coverage: str = "普通 API 请求；辅助路径按请求证据另行核验"
+    requirements: tuple[tuple[str, str], ...] = ()
 
 
 def _spec(provider_type: str, module_name: str, *, proxy_mode: str = "unverified") -> ProviderAdapterSpec:
@@ -86,12 +88,41 @@ CONFIG_PROXY_TYPES = frozenset({
 SESSION_PROXY_TYPES = frozenset({
     "bailian_rerank", "tei_rerank", "vllm_rerank",
 })
+TRANSPORT_COVERAGE = {
+    "dashscope_embedding": "原生 SDK 文本与多模态文本 Embedding 请求",
+    "edge_tts": "Communicate 显式 proxy；服务器缺少 edge-tts，实际 WebSocket 待验证",
+    "gsv_tts_selfhost": "初始化、权重设置与语音 GET；内部地址也由内核 DIRECT 规则处理",
+    "gsvi_tts_api": "语音 POST 与返回 audio_url 的二次下载",
+    "minimax_tts_api": "语音 POST 与 SSE 流",
+    "nvidia_rerank": "惰性创建及关闭后重建的排序 POST 客户端",
+    "volcengine_tts": "语音 POST",
+    "openai_whisper_api": "OpenAI 转写客户端与 MediaResolver 外部音频下载",
+    "xinference_rerank": "SDK 初始化同步鉴权、模型查询与独立模型句柄排序请求",
+    "xinference_stt": "SDK 初始化同步鉴权、模型查询、转写与外部音频下载",
+    "dashscope_tts": "仅 Qwen HTTP 与返回音频下载；CosyVoice WebSocket 尚未显式接入/验证",
+    "sensevoice_stt_selfhost": "本地推理；外部输入媒体通过稳定入口下载，模型下载尚未覆盖",
+    "openai_whisper_selfhost": "本地推理；外部输入媒体通过稳定入口下载，模型下载尚未覆盖",
+}
+LOCAL_COVERAGE = {
+    "genie_tts": "普通请求调用本地 genie.tts；可选依赖缺失，模型/资源下载未验证",
+}
+SDK_REQUIREMENTS = {
+    "dashscope_embedding": (("dashscope", "1.27.4"),),
+    "dashscope_tts": (("dashscope", "1.27.4"),),
+    "xinference_rerank": (("xinference-client", "3.2.0"),),
+    "xinference_stt": (("xinference-client", "3.2.0"),),
+}
 PROVIDER_ADAPTER_MAP = {
     item.provider_type: ProviderAdapterSpec(
         item.provider_type,
         item.module_name,
         "session" if item.provider_type in SESSION_PROXY_TYPES else
-        "config" if item.provider_type in CONFIG_PROXY_TYPES else "unverified",
+        "config" if item.provider_type in CONFIG_PROXY_TYPES else
+        "partial" if item.provider_type in {"dashscope_tts", "sensevoice_stt_selfhost", "openai_whisper_selfhost"} else
+        "transport" if item.provider_type in TRANSPORT_COVERAGE else "unverified",
+        coverage=TRANSPORT_COVERAGE.get(item.provider_type, LOCAL_COVERAGE.get(
+            item.provider_type, "普通 API 请求；辅助路径按请求证据另行核验")),
+        requirements=SDK_REQUIREMENTS.get(item.provider_type, ()),
     )
     for item in PROVIDER_ADAPTERS
 }
@@ -118,5 +149,5 @@ def request_sample(provider_type: str) -> dict[str, object]:
         "rule": "pending rule match",
         "chain": "pending connection snapshot",
         "exit": "pending credential-free echo or explicit refusal",
-        "notes": "不得携带业务凭据；请求窗口内同时采集四段证据" if spec.proxy_mode != "unverified" else "源码尚无已验证的独立代理路径，不安装包装器",
+        "notes": spec.coverage + "；不得携带业务凭据；请求证据独立于适配器安装状态",
     }

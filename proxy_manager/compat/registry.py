@@ -12,6 +12,7 @@ from .lark import install_sdk_patch as install_lark_sdk_patch
 from .lease import ComponentLease
 from .telegram import build_proxy_adapter as build_telegram_adapter
 from .provider_registry import PROVIDER_ADAPTER_MAP, PROVIDER_ADAPTERS, request_sample
+from .provider_transport import build_transport_provider
 
 LIVE_COMPONENT_RELOAD_TIMEOUT = 8.0
 
@@ -24,7 +25,7 @@ SUPPORTED_SDK_VERSIONS = {
 }
 SUPPORTED_PLATFORM_TYPES = ("lark", "telegram")
 SUPPORTED_PROVIDER_TYPES = frozenset(
-    name for name, spec in PROVIDER_ADAPTER_MAP.items() if spec.proxy_mode != "unverified"
+    name for name, spec in PROVIDER_ADAPTER_MAP.items() if spec.proxy_mode not in {"unverified", "partial"}
 )
 PROVIDER_MODULES = {item.provider_type: item.module_name for item in PROVIDER_ADAPTERS}
 
@@ -148,6 +149,9 @@ class CompatibilityManager:
         lease = self.lease.for_component("provider:" + provider_type)
         spec = PROVIDER_ADAPTER_MAP[provider_type]
 
+        if spec.proxy_mode in {"transport", "partial"}:
+            return build_transport_provider(provider_type, base, lease)
+
         if spec.proxy_mode == "session":
             class ProxySession:
                 def __init__(self, session):
@@ -207,7 +211,15 @@ class CompatibilityManager:
                     "proxy_mode": spec.proxy_mode,
                     "verification": spec.verification,
                     "sample": request_sample(provider_type),
-                    "message": "Provider 已登记但源码未确认独立代理路径；保持原类，不自动改写",
+                    "coverage": spec.coverage,
+                    "message": spec.coverage + "；保持原类，不宣称外部下载已接入",
+                }
+                continue
+            mismatches = [name for name, version in spec.requirements if _package_version(name) != version]
+            if mismatches:
+                self.report.providers[provider_type] = {
+                    "state": "unsupported", "coverage": spec.coverage,
+                    "message": "Provider SDK 未匹配审计版本：" + ", ".join(mismatches),
                 }
                 continue
             try:
@@ -226,14 +238,23 @@ class CompatibilityManager:
                 }
                 continue
             base = getattr(metadata.cls_type, "_proxy_manager_base", metadata.cls_type)
+            try:
+                wrapped = self._provider_wrapper(provider_type, base)
+            except (AttributeError, KeyError, ValueError, TypeError):
+                self.report.providers[provider_type] = {
+                    "state": "unsupported", "coverage": spec.coverage,
+                    "message": "Provider 方法指纹与审计源码不匹配；保持原类",
+                }
+                continue
             self._original_provider_classes[provider_type] = base
-            metadata.cls_type = self._provider_wrapper(provider_type, base)
+            metadata.cls_type = wrapped
             self.report.providers[provider_type] = {
-                "state": "installed",
+                "state": "partial" if spec.proxy_mode == "partial" else "installed",
                 "proxy_mode": spec.proxy_mode,
                 "verification": spec.verification,
+                "coverage": spec.coverage,
                 "sample": request_sample(provider_type),
-                "message": "Provider 配置副本已注入插件稳定 HTTP 入口；请求级证据仍按类型记录",
+                "message": spec.coverage + "；已注入稳定入口的路径仍需请求级证据，未覆盖路径不作承诺",
             }
 
     async def install(self) -> CompatibilityReport:
@@ -286,7 +307,7 @@ class CompatibilityManager:
         if provider_manager is not None and getattr(provider_manager, "provider_insts", None):
             configs = getattr(provider_manager, "providers_config", [])
             for config in configs:
-                if self.report.providers.get(config.get("type"), {}).get("state") == "installed":
+                if self.report.providers.get(config.get("type"), {}).get("state") in {"installed", "partial"}:
                     try:
                         await asyncio.wait_for(
                             provider_manager.reload(config),

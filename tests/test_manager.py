@@ -147,7 +147,7 @@ class TestConfigurationRules(unittest.TestCase):
                 self.client = Session()
 
         for provider_type, spec in PROVIDER_ADAPTER_MAP.items():
-            if spec.proxy_mode == 'unverified':
+            if spec.proxy_mode not in {'config', 'session'}:
                 continue
             config = {'key': ['placeholder'], 'nested': {'original': True}}
             base = SessionBase if spec.proxy_mode == 'session' else ConfigBase
@@ -172,8 +172,13 @@ class TestConfigurationRules(unittest.TestCase):
         register = types.ModuleType('astrbot.core.provider.register')
         register.provider_cls_map = metadata
         manager = CompatibilityManager(None, ComponentLease('test', 'http://127.0.0.1:17890'))
-        with patch.dict(sys.modules, {'astrbot.core.provider.register': register}), patch(
-            'proxy_manager.compat.registry.importlib.import_module', return_value=None
+        registry_module = sys.modules['proxy_manager.compat.registry']
+        with patch.object(registry_module, '_package_version', side_effect=lambda name: {
+            'dashscope': '1.27.4', 'xinference-client': '3.2.0',
+        }.get(name, 'unknown')), patch.object(registry_module, 'build_transport_provider',
+            side_effect=lambda name, base, lease: type('ProxyManagedProvider_' + name, (base,), {'_proxy_manager_base': base}),
+        ), patch.object(registry_module.importlib, 'import_module', return_value=None), patch.dict(
+            sys.modules, {'astrbot.core.provider.register': register}
         ):
             manager._install_providers()
             for name, spec in PROVIDER_ADAPTER_MAP.items():
