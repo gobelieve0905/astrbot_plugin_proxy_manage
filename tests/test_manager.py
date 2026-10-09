@@ -1905,7 +1905,7 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertEqual(provider['status'],'unknown'); self.assertEqual(platform['status'],'not_connected')
             self.assertEqual(provider['adapter_status'],'not_installed')
             self.assertEqual(provider['transport_status'],'unverified')
-            self.assertEqual(provider['integration']['state'],'not-installed')
+            self.assertEqual(provider['integration']['state'],'entry-configured')
 
     def test_traffic_audit_separates_model_records_from_provider_configs(self):
         from proxy_manager.traffic.audit import AstrBotTrafficAudit
