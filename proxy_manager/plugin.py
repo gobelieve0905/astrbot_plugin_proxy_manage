@@ -257,7 +257,9 @@ class ProxyManager(Star):
                 try: raw=json.loads(self.config.get('config_json','{}'))
                 except (TypeError,ValueError): raw={}
         normalized=self._normalize(raw)
-        if from_disk and isinstance(raw,dict) and (recovered_from_backup or int(raw.get('version',0) or 0)<6):
+        if from_disk and isinstance(raw,dict) and (
+            recovered_from_backup or int(raw.get('version',0) or 0)<6 or 'component_routes' in raw
+        ):
             try:
                 if int(raw.get('version',0) or 0)<6 and not self.migration_backup.exists():
                     self.migration_backup.write_text(json.dumps(raw,ensure_ascii=False,indent=2),encoding='utf-8')

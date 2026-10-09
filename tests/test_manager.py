@@ -1253,6 +1253,20 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertIsNone(manager._verified_recovery_document({'status':'applied','document':old}))
         self.assertFalse(manager._has_legacy_component_routes({'listeners':[{'name':'component-example'}]}))
 
+    def test_component_routes_are_removed_from_persisted_state_during_load(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            raw=copy.deepcopy(self._manager_for_runtime().state)
+            raw['component_routes']=[{'id':'plugin-example','kind':'plugin','target':'hk',
+                                     'enabled':True,'port':18000,'scope':'local'}]
+            (root/'config.json').write_text(json.dumps(raw,ensure_ascii=False))
+            context=types.SimpleNamespace(register_web_api=lambda *args:None)
+            with patch.object(self.module.StarTools,'get_data_dir',return_value=root):
+                manager=self.module.ProxyManager(context,{})
+                persisted=json.loads((root/'config.json').read_text())
+            self.assertNotIn('component_routes',persisted)
+            self.assertNotIn('component_routes',manager.state)
+
     def test_refresh_preserves_excluded_node_preferences(self):
         manager = self._manager_for_runtime()
         old = manager.state['nodes'][0]
