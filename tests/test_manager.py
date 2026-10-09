@@ -1855,11 +1855,37 @@ class TestConfigurationRules(unittest.TestCase):
                                   {'effective':True,'configured':True})
         self.assertEqual(managed[0]['status'],'managed')
         self.assertTrue(all(item['status']=='not_connected' for item in managed[1:-1]
-                            if item['id']!='plugin-subscriptions'))
+                            if item['id'] not in {'plugin-subscriptions','kernel-update-check','kernel-artifact-download'}))
         subscriptions=next(item for item in managed if item['id']=='plugin-subscriptions')
         self.assertEqual(subscriptions['status'],'unknown')
+        self.assertEqual(subscriptions['evidence_status'],'unverified')
         self.assertEqual(subscriptions['integration']['mode'],'explicit-entry')
         self.assertEqual(managed[-1]['status'],'managed')
+
+    def test_plugin_download_inventory_separates_subscription_update_and_artifact_paths(self):
+        from proxy_manager.traffic.inventory import traffic_inventory
+        entry='http://127.0.0.1:17890'
+        values=traffic_inventory({'proxy_entry':{'http_url':entry}}, {},
+                                 {'http_proxy':entry,'https_proxy':entry},
+                                 {'effective':True,'configured':True})
+        by_id={item['id']:item for item in values}
+        subscriptions=by_id['plugin-subscriptions']
+        self.assertEqual(subscriptions['status'],'unknown')
+        self.assertEqual(subscriptions['integration']['mode'],'explicit-entry')
+        for identifier in ('kernel-update-check','kernel-artifact-download'):
+            item=by_id[identifier]
+            self.assertEqual(item['status'],'unknown')
+            self.assertEqual(item['evidence_status'],'unverified')
+            self.assertIn('trust_env=True',item['method'])
+            self.assertIn('请求级证据',item['message'])
+            self.assertEqual(item['integration']['mode'],'environment-inherited')
+            self.assertEqual(item['integration']['state'],'possible')
+        self.assertNotEqual(by_id['kernel-update-check']['id'],by_id['kernel-artifact-download']['id'])
+        self.assertEqual(by_id['updates']['status'],'not_connected')
+
+        all_proxy=traffic_inventory({'proxy_entry':{'http_url':entry}}, {}, {'ALL_PROXY':entry})
+        update_check=next(item for item in all_proxy if item['id']=='kernel-update-check')
+        self.assertIn('当前进程指向插件稳定入口',update_check['message'])
 
     def test_traffic_audit_discovers_configuration_without_credentials(self):
         from proxy_manager.traffic.audit import AstrBotTrafficAudit

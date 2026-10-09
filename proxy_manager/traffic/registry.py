@@ -21,14 +21,22 @@ class TrafficRegistry:
          'method': '平台专用 proxy 字段或 SDK 代理能力',
          'verification': '重启适配器后对 HTTP、WebSocket、媒体分别关联内核连接记录',
          'bypass_risk': 'SDK 长连接、媒体客户端或 webhook 可能不继承环境'},
-        {'id': 'updates', 'name': '插件市场与依赖下载', 'restart': False,
-         'method': '更新组件显式使用稳定入口',
-         'verification': '下载请求的内核记录和制品摘要校验',
-         'bypass_risk': '市场、GitHub、PyPI 与 pip 安装器是独立进程或客户端'},
+        {'id': 'updates', 'name': '其他插件市场与依赖下载', 'restart': False,
+         'method': '由各市场客户端或依赖安装器自行决定代理方式，当前未统一接入',
+         'verification': '各下载器请求的入口、规则、连接链路和结果校验',
+         'bypass_risk': '市场、GitHub、PyPI 与 pip 安装器可能使用独立进程或客户端'},
         {'id': 'plugin-subscriptions', 'name': '代理管理中心订阅请求', 'restart': False,
          'method': '导入预览、手动与定时刷新显式使用稳定 HTTP 入口',
          'verification': '真实订阅请求（含重定向）的内核连接记录、规则与出口链路；入口故障时失败关闭',
          'bypass_risk': '不读取环境代理；入口缺失或不可用时请求失败，不回退直连'},
+        {'id': 'kernel-update-check', 'name': '内核更新检查', 'restart': False,
+         'method': 'HTTPX 使用 trust_env=True 请求官方 Release API，可能继承 AstrBot 进程环境代理',
+         'verification': '更新检查请求的入口、规则、内核连接和出口记录；当前无请求级证据',
+         'bypass_risk': '是否经过插件稳定入口取决于进程代理环境及目标是否命中 NO_PROXY'},
+        {'id': 'kernel-artifact-download', 'name': '内核制品下载', 'restart': False,
+         'method': 'HTTPX 使用 trust_env=True 下载固定版本制品并跟随重定向，可能继承 AstrBot 进程环境代理',
+         'verification': '下载及重定向请求的入口、规则、内核连接和出口记录；当前无请求级证据',
+         'bypass_risk': '是否经过插件稳定入口取决于进程代理环境及目标是否命中 NO_PROXY'},
         {'id': 'recent-verification', 'name': '最近一次受控验证请求', 'restart': False,
          'method': '通过请求级内核连接记录核对规则与出口链路',
          'verification': '同次请求的入口、规则、代理链、节点与出口 IP',
@@ -77,7 +85,7 @@ class TrafficRegistry:
         entry = str((state.get('proxy_entry') or {}).get('http_url') or '').rstrip('/')
         configured = {
             str(environ.get(key, '')).rstrip('/')
-            for key in ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY')
+            for key in ('http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')
             if environ.get(key)
         }
         application = application if isinstance(application, dict) else {}
@@ -128,9 +136,10 @@ class TrafficRegistry:
             elif identifier == 'platform-sdk':
                 self._platform_status(item, audit, astrbot, policy)
             elif identifier == 'updates':
-                item.update({'status': 'not_connected', 'message': '插件市场、GitHub、PyPI 和依赖安装器尚未统一接入稳定入口'})
+                item.update({'status': 'not_connected', 'message': '其他插件市场与依赖下载尚未统一接入稳定入口'})
             elif identifier == 'plugin-subscriptions':
                 item.update({'status': 'unknown' if entry else 'not_connected',
+                             'evidence_status': 'unverified' if entry else 'blocked',
                              'message': '订阅请求已显式使用稳定入口，实际规则与出口需请求级验证' if entry else
                              '稳定 HTTP 入口缺失，订阅请求已阻止'})
                 item['integration'] = {
@@ -138,6 +147,22 @@ class TrafficRegistry:
                     'mode': 'explicit-entry',
                     'message': '每跳重定向校验公网目标；入口故障不回退直连',
                 }
+            elif identifier in {'kernel-update-check', 'kernel-artifact-download'}:
+                may_inherit_entry = bool(entry and (entry in configured or astrbot.get('effective')))
+                item.update({
+                    'status': 'unknown',
+                    'evidence_status': 'unverified',
+                    'message': (
+                        'HTTPX trust_env=True，当前进程指向插件稳定入口，可能继承该入口；尚无本类请求级证据'
+                        if may_inherit_entry else
+                        'HTTPX trust_env=True，可继承进程环境代理；是否经过插件稳定入口尚未确认，且无请求级证据'
+                    ),
+                    'integration': {
+                        'state': 'possible',
+                        'mode': 'environment-inherited',
+                        'message': '使用 HTTPX 环境代理继承；未记录本类请求的入口、规则、连接链路和出口证据',
+                    },
+                })
             else:
                 item.update({'status': 'not_connected', 'message': '当前版本尚未实现该接入点的配置与验证'})
             if 'integration' not in item:

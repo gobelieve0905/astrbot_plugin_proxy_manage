@@ -7,6 +7,7 @@
 
 ## Unreleased - 2026-10-09
 
+- **插件下载流量清单拆分（2026-10-09）**：独立登记订阅请求、内核更新检查与内核制品下载；后两者标明 HTTPX 可能继承进程代理环境且尚无请求级证据，不再误报为确定未接入。
 - **AstrBot 环境代理冲突诊断（2026-10-09）**：全局代理状态同时检查大小写代理变量及 `NO_PROXY`，冲突时不报告入口生效，并只列出冲突变量名。
 - **Provider 普通请求显式接入（2026-10-09）**：按 AstrBot 4.28.2 源码为 DashScope Embedding、Edge TTS、GSV/GSVI/MiniMax TTS、NVIDIA Rerank、Volcengine TTS、Whisper API 和 Xinference Rerank/STT 设置稳定入口；额外媒体请求一并接入。两个本地 STT 的媒体下载部分接入；Genie TTS 本地推理及未知类型不改写。
 - **DashScope CosyVoice WebSocket 接入（2026-10-09）**：为官方 `SpeechSynthesizer` 建立实例级 WebSocket 客户端子类，将 HTTP 稳定入口显式传给 `websocket-client`；DashScope TTS 的 Qwen、CosyVoice 和音频下载路径均已接入。
