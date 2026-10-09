@@ -12,6 +12,7 @@ import tempfile
 import types
 import unittest
 from io import BytesIO
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -106,6 +107,182 @@ class TestConfigurationRules(unittest.TestCase):
         from proxy_manager.compat.registry import SUPPORTED_PLATFORM_TYPES
 
         self.assertEqual(SUPPORTED_PLATFORM_TYPES, ("lark", "telegram"))
+
+    @contextmanager
+    def _compatibility_sandbox(self, versions=None, failures=(), context=None, astrbot="4.28.2"):
+        from proxy_manager.compat import registry
+        from proxy_manager.compat.lease import ComponentLease
+
+        class Base:
+            def __init__(self, config, settings):
+                self.config = config
+
+        platform_map = {'lark': Base, 'telegram': Base}
+        names = ('openai_chat_completion', 'dashscope_embedding', 'dashscope_tts')
+        metadata = {name: types.SimpleNamespace(cls_type=Base) for name in names}
+        platform_register = types.ModuleType('astrbot.core.platform.register')
+        platform_register.platform_cls_map = platform_map
+        provider_register = types.ModuleType('astrbot.core.provider.register')
+        provider_register.provider_cls_map = metadata
+        actual = {**registry.SUPPORTED_SDK_VERSIONS, 'dashscope': '1.27.4', 'websocket-client': '1.9.2'}
+        actual.update(versions or {})
+        restore_sdk = Mock()
+        def load(name):
+            if name in failures: raise RuntimeError('changed module')
+            return types.SimpleNamespace(LarkPlatformAdapter=Base, TelegramPlatformAdapter=Base)
+        def platform_wrapper(base, lease):
+            return type('ManagedPlatform', (base,), {'_proxy_manager_base': base, '_proxy_manager_lease': lease})
+        def provider_wrapper(name, base, lease):
+            return type('ProxyManagedProvider_' + name, (base,), {'_proxy_manager_base': base})
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(sys.modules, {
+                'astrbot.core.platform.register': platform_register,
+                'astrbot.core.provider.register': provider_register,
+            }))
+            stack.enter_context(patch.object(registry, '_astrbot_version', return_value=astrbot))
+            stack.enter_context(patch.object(registry, '_package_version', side_effect=lambda name: actual.get(name, 'unknown')))
+            stack.enter_context(patch.object(registry, 'PROVIDER_MODULES', {name: registry.PROVIDER_MODULES[name] for name in names}))
+            imports = stack.enter_context(patch.object(registry.importlib, 'import_module', side_effect=load))
+            sdk = stack.enter_context(patch.object(registry, 'install_lark_sdk_patch', return_value=restore_sdk))
+            stack.enter_context(patch.object(registry, 'build_telegram_adapter', side_effect=platform_wrapper))
+            stack.enter_context(patch.object(registry, 'build_transport_provider', side_effect=provider_wrapper))
+            manager = registry.CompatibilityManager(context, ComponentLease('test', 'http://127.0.0.1:17890'))
+            yield manager, platform_map, metadata, Base, sdk, imports
+            manager.restore()
+
+    def test_platform_sdk_mismatch_only_blocks_dependent_platform(self):
+        cases = [('lark-oapi', '9.0', 'lark'), ('lark-oapi', 'unknown', 'lark'),
+                 ('websockets', '16.0', 'lark'), ('websockets', 'unknown', 'lark'),
+                 ('python-telegram-bot', '23.0', 'telegram'), ('python-telegram-bot', 'unknown', 'telegram')]
+        for package, version, blocked in cases:
+            with self.subTest(package=package, version=version), self._compatibility_sandbox({package: version}) as sandbox:
+                manager, platform_map, metadata, base, sdk, imports = sandbox
+                self.assertNotEqual(manager.report.state, 'unsupported')
+                report = asyncio.run(manager.install())
+                self.assertEqual(report.state, 'partial')
+                self.assertEqual(report.platforms[blocked]['state'], 'unsupported')
+                self.assertIn(package, report.platforms[blocked]['message'])
+                self.assertIs(platform_map[blocked], base)
+                other = 'telegram' if blocked == 'lark' else 'lark'
+                self.assertEqual(report.platforms[other]['state'], 'installed')
+                self.assertIsNot(platform_map[other], base)
+                self.assertTrue(all(value['state'] == 'installed' for value in report.providers.values()))
+                instance = metadata['openai_chat_completion'].cls_type({'proxy': 'http://old'}, {})
+                self.assertEqual(instance.config['proxy'], 'http://127.0.0.1:17890')
+                imported = [call.args[0] for call in imports.call_args_list]
+                self.assertNotIn('astrbot.core.platform.sources.' + ('lark.lark_adapter' if blocked == 'lark' else 'telegram.tg_adapter'), imported)
+                if blocked == 'lark': sdk.assert_not_called()
+                call_count = imports.call_count
+                self.assertIs(asyncio.run(manager.install()), report)
+                self.assertEqual(imports.call_count, call_count)
+                manager.restore()
+                self.assertTrue(all(value is base for value in platform_map.values()))
+                self.assertTrue(all(value.cls_type is base for value in metadata.values()))
+
+    def test_provider_sdk_mismatch_only_blocks_dependent_providers(self):
+        for package, blocked in [('dashscope', {'dashscope_embedding', 'dashscope_tts'}),
+                                 ('websocket-client', {'dashscope_tts'})]:
+            with self.subTest(package=package), self._compatibility_sandbox({package: 'unknown'}) as sandbox:
+                manager, platform_map, metadata, base, *_ = sandbox
+                report = asyncio.run(manager.install())
+                self.assertEqual(report.state, 'partial')
+                self.assertTrue(all(item['state'] == 'installed' for item in report.platforms.values()))
+                for name, item in report.providers.items():
+                    self.assertEqual(item['state'], 'unsupported' if name in blocked else 'installed')
+                    if name in blocked: self.assertIs(metadata[name].cls_type, base)
+                    else: self.assertIsNot(metadata[name].cls_type, base)
+
+    def test_component_module_failure_does_not_restore_other_adapters(self):
+        from proxy_manager.compat.registry import PLATFORM_MODULES, PROVIDER_MODULES
+        for component, module in [('lark', PLATFORM_MODULES['lark'][0]),
+                                  ('telegram', PLATFORM_MODULES['telegram'][0]),
+                                  ('dashscope_embedding', PROVIDER_MODULES['dashscope_embedding'])]:
+            with self.subTest(component=component), self._compatibility_sandbox(failures=(module,)) as sandbox:
+                manager, platform_map, metadata, base, *_ = sandbox
+                report = asyncio.run(manager.install())
+                self.assertEqual(report.state, 'partial')
+                self.assertEqual({**report.platforms, **report.providers}[component]['state'], 'unsupported')
+                self.assertEqual(report.providers['openai_chat_completion']['state'], 'installed')
+                self.assertIsNot(metadata['openai_chat_completion'].cls_type, base)
+                for name in {'lark', 'telegram'} - {component}: self.assertIsNot(platform_map[name], base)
+
+    def test_unknown_astrbot_still_blocks_all_official_adapters(self):
+        with self._compatibility_sandbox(astrbot='4.29.0') as sandbox:
+            manager, platform_map, metadata, base, sdk, imports = sandbox
+            report = asyncio.run(manager.install())
+            self.assertEqual(report.state, 'unsupported')
+            imports.assert_not_called(); sdk.assert_not_called()
+            self.assertTrue(all(value is base for value in platform_map.values()))
+            self.assertTrue(all(value.cls_type is base for value in metadata.values()))
+
+    def test_component_reload_failure_does_not_reload_blocked_platform_or_undo_providers(self):
+        platforms = types.SimpleNamespace(platform_insts=[object()], platforms_config=[
+            {'id': 'lark', 'type': 'lark'}, {'id': 'telegram', 'type': 'telegram'}],
+            _inst_map={}, reload=AsyncMock(side_effect=RuntimeError('reload failed')))
+        providers = types.SimpleNamespace(provider_insts=[object()], providers_config=[
+            {'type': 'dashscope_embedding'}, {'type': 'openai_chat_completion'}],
+            reload=AsyncMock(side_effect=[RuntimeError('reload failed'), None]))
+        context = types.SimpleNamespace(platform_manager=platforms, provider_manager=providers)
+        with self._compatibility_sandbox({'python-telegram-bot': 'unknown'}, context=context) as sandbox:
+            manager, _, metadata, base, *_ = sandbox
+            report = asyncio.run(manager.install())
+            platforms.reload.assert_awaited_once_with({'id': 'lark', 'type': 'lark'})
+            self.assertEqual(providers.reload.await_count, 2)
+            self.assertEqual(report.platforms['lark']['reload_state'], 'failed')
+            self.assertEqual(report.providers['dashscope_embedding']['reload_state'], 'failed')
+            self.assertEqual(report.providers['openai_chat_completion']['state'], 'installed')
+            self.assertIsNot(metadata['openai_chat_completion'].cls_type, base)
+
+    def test_partial_compatibility_inventory_reports_platforms_and_providers_independently(self):
+        from proxy_manager.traffic.inventory import traffic_inventory
+        with self._compatibility_sandbox({'lark-oapi': 'unknown'}) as sandbox:
+            report = asyncio.run(sandbox[0].install())
+            values = traffic_inventory({'proxy_entry': {'http_url': 'http://127.0.0.1:17890'}}, {},
+                astrbot={'effective': True}, audit={'compatibility': report.as_public_dict(),
+                    'platforms': [{'id': 'lark', 'type': 'lark'}, {'id': 'telegram', 'type': 'telegram'}],
+                    'providers': [{'type': 'openai_chat_completion', 'enabled': True}]})
+            provider = next(item for item in values if item['id'] == 'provider-proxy')
+            platform = next(item for item in values if item['id'] == 'platform-sdk')
+            self.assertEqual(provider['adapter_status'], 'installed')
+            self.assertEqual(platform['adapter_status'], 'partial')
+            self.assertEqual(set(platform['integration']['adapted_platforms']), {'telegram'})
+            self.assertEqual(platform['integration']['state'], 'adapter-partial')
+            self.assertEqual(provider['transport_status'], 'unverified')
+            self.assertEqual(platform['transport_status'], 'unverified')
+
+    def test_reload_timeout_preserves_partial_provider_coverage(self):
+        providers = types.SimpleNamespace(provider_insts=[object()], providers_config=[{'type': 'dashscope_embedding'}],
+                                         reload=AsyncMock(side_effect=asyncio.TimeoutError))
+        with self._compatibility_sandbox(context=types.SimpleNamespace(provider_manager=providers)) as sandbox:
+            manager = sandbox[0]
+            manager.report.providers['dashscope_embedding'] = {'state': 'partial', 'coverage': 'limited', 'sample': {'result': 'UNKNOWN'}}
+            asyncio.run(manager._reload_live_components())
+            item = manager.report.providers['dashscope_embedding']
+            self.assertEqual(item['state'], 'partial')
+            self.assertEqual(item['coverage'], 'limited')
+            self.assertEqual(item['sample']['result'], 'UNKNOWN')
+            self.assertEqual(item['reload_state'], 'timeout')
+
+    def test_lark_sdk_patch_failure_restores_only_its_hooks(self):
+        from proxy_manager.compat import lark
+        from proxy_manager.compat.lease import ComponentLease
+        original_kwargs = lambda: {}
+        original_execute = lambda *args: None
+        original_aexecute = lambda *args: None
+        ws = types.SimpleNamespace(_ws_connect_kwargs=original_kwargs, requests=object())
+        transport = types.SimpleNamespace(requests=object(), Transport=type('Transport', (), {
+            'execute': staticmethod(original_execute), 'aexecute': staticmethod(original_aexecute)}))
+        ws_requests, transport_requests = ws.requests, transport.requests
+        with patch('importlib.import_module', side_effect=[ws, transport]), \
+             patch.object(lark, '_RequestsFacade', side_effect=[object(), RuntimeError('patch failed')]):
+            with self.assertRaises(RuntimeError):
+                lark.install_sdk_patch(ComponentLease('test', 'http://127.0.0.1:17890'))
+        self.assertIs(ws._ws_connect_kwargs, original_kwargs)
+        self.assertIs(ws.requests, ws_requests)
+        self.assertIs(transport.requests, transport_requests)
+        self.assertIs(transport.Transport.execute, original_execute)
+        self.assertIs(transport.Transport.aexecute, original_aexecute)
+        self.assertIsNone(ws._proxy_manager_patch)
 
     def test_provider_registry_is_explicit_and_each_type_has_request_sample(self):
         from proxy_manager.compat.provider_registry import PROVIDER_ADAPTERS, PROVIDER_ADAPTER_MAP, request_sample
@@ -307,6 +484,7 @@ class TestConfigurationRules(unittest.TestCase):
             reload=AsyncMock(),
         )
         manager = CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager), lease)
+        manager.report.platforms['telegram'] = {'state': 'installed'}
 
         asyncio.run(manager._reload_live_components())
 

@@ -111,13 +111,6 @@ def install_sdk_patch(lease):
             return {"proxy": lease.http_proxy or None}
         return {}
 
-    ws_client._ws_connect_kwargs = ws_kwargs
-    if lease.http_proxy:
-        ws_client.requests = _RequestsFacade(ws_client.requests, lease.http_proxy)
-        transport.requests = _RequestsFacade(transport.requests, lease.http_proxy)
-        transport.Transport.execute = staticmethod(_transport_execute(transport, lease.http_proxy))
-        transport.Transport.aexecute = staticmethod(_transport_aexecute(transport, lease.http_proxy))
-
     def restore():
         ws_client._ws_connect_kwargs = originals["ws_kwargs"]
         ws_client.requests = originals["ws_requests"]
@@ -125,7 +118,18 @@ def install_sdk_patch(lease):
         transport.Transport.aexecute = originals["aexecute"]
         transport.requests = originals["transport_requests"]
 
-    ws_client._proxy_manager_patch = {"restore": restore}
+    try:
+        ws_client._ws_connect_kwargs = ws_kwargs
+        if lease.http_proxy:
+            ws_client.requests = _RequestsFacade(ws_client.requests, lease.http_proxy)
+            transport.requests = _RequestsFacade(transport.requests, lease.http_proxy)
+            transport.Transport.execute = staticmethod(_transport_execute(transport, lease.http_proxy))
+            transport.Transport.aexecute = staticmethod(_transport_aexecute(transport, lease.http_proxy))
+        ws_client._proxy_manager_patch = {"restore": restore}
+    except Exception:
+        restore()
+        ws_client._proxy_manager_patch = None
+        raise
 
     return restore
 

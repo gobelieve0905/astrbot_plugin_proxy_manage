@@ -196,15 +196,16 @@ class TrafficRegistry:
             key for key, value in (compatibility.get('providers') or {}).items()
             if isinstance(value, dict) and value.get('state') == 'partial'
         }
+        adapters_installed = bool(supported_types or partial_types)
         stable = [value for value in providers if value.get('enabled') and value.get('proxy') == 'stable_entry']
         other = [value for value in providers if value.get('enabled') and value.get('proxy') == 'other_proxy']
         unsupported = [value for value in providers if value.get('enabled') and value.get('type') not in supported_types and value.get('type') not in partial_types]
         partial = [value for value in providers if value.get('enabled') and value.get('type') in partial_types]
         if compatibility.get('state') == 'unsupported':
             item.update({'status': 'not_connected', 'message': '官方兼容层未启用：' + str(compatibility.get('message') or '运行时版本不受支持')})
-        elif (unsupported or partial) and compatibility.get('state') == 'installed':
+        elif (unsupported or partial) and adapters_installed:
             item.update({'status': 'unknown', 'message': '官方兼容层已为 ' + str(len(supported_types)) + ' 类 Provider 接入完整适配、' + str(len(partial_types)) + ' 类接入部分路径；仍有 ' + str(len(unsupported)) + ' 类未适配，且无新增请求级证据'})
-        elif compatibility.get('state') == 'installed':
+        elif adapters_installed:
             item.update({'status': 'unknown', 'message': '官方兼容层已为 ' + str(len(supported_types)) + ' 类 Provider 注入稳定入口；尚无请求级 Provider 证据'})
         elif unsupported and stable:
             item.update({'status': 'unknown', 'message': '已接入 ' + str(len(stable)) + ' 个 Provider，但仍有 ' + str(len(unsupported)) + ' 个 Provider 未适配'})
@@ -217,7 +218,7 @@ class TrafficRegistry:
         else:
             item.update({'status': 'not_connected', 'message': '未发现已启用 Provider 的稳定入口专用 proxy 配置'})
         adapter_status = 'unsupported'
-        if compatibility.get('state') == 'installed':
+        if adapters_installed:
             adapter_status = 'partial' if unsupported or partial else 'installed'
         elif compatibility.get('state') != 'unsupported':
             adapter_status = 'not_installed'
@@ -264,24 +265,30 @@ class TrafficRegistry:
         platforms = audit.get('platforms', [])
         compatibility = audit.get('compatibility', {})
         compatibility = compatibility if isinstance(compatibility, dict) else {}
+        platform_reports = compatibility.get('platforms') or {}
+        adapted_platforms = {
+            name: list(value.get('protocols') or [])
+            for name, value in platform_reports.items()
+            if isinstance(value, dict) and value.get('state') == 'installed'
+        }
+        if adapted_platforms:
+            adapter_status = 'installed' if len(adapted_platforms) == len(platform_reports) else 'partial'
+        else:
+            adapter_status = 'unsupported' if compatibility.get('state') == 'unsupported' or any(
+                isinstance(value, dict) and value.get('state') == 'unsupported' for value in platform_reports.values()
+            ) else 'not_installed'
         message = (
-            '官方平台适配层已安装；HTTP、WebSocket、轮询和媒体仍需分别进行请求级验证'
-            if compatibility.get('state') == 'installed' else
+            '官方平台适配层' + ('部分已安装' if adapter_status == 'partial' else '已安装') + '；HTTP、WebSocket、轮询和媒体仍需分别进行请求级验证'
+            if adapted_platforms else
             '发现 ' + str(len(platforms)) + ' 个平台；全局代理可能覆盖部分 HTTP，HTTP、WebSocket 和媒体仍需逐项请求级验证'
             if platforms else '未发现可审计的平台配置'
         )
-        adapter_status = 'installed' if compatibility.get('state') == 'installed' else str(compatibility.get('state') or 'not_installed')
-        adapted_platforms = {
-            name: list(value.get('protocols') or [])
-            for name, value in (compatibility.get('platforms') or {}).items()
-            if isinstance(value, dict) and value.get('state') == 'installed'
-        }
         transport_evidence = {
             name: {protocol: 'unverified' for protocol in protocols}
             for name, protocols in adapted_platforms.items()
         }
-        if adapter_status == 'installed':
-            integration_state = 'adapter-installed'
+        if adapter_status in {'installed', 'partial'}:
+            integration_state = 'adapter-partial' if adapter_status == 'partial' else 'adapter-installed'
             integration_message = '平台适配层已安装；HTTP、WebSocket、媒体或轮询是否经过稳定入口仍需分别取得请求级证据'
             integration_mode = 'runtime-entry'
         elif platforms and astrbot.get('effective'):
@@ -293,7 +300,7 @@ class TrafficRegistry:
             integration_message = '没有已安装的平台适配层；全局代理配置本身不证明平台传输已接入'
             integration_mode = ''
         item.update({
-            'status': 'unknown' if platforms and (astrbot.get('effective') or compatibility.get('state') == 'installed') else 'not_connected',
+            'status': 'unknown' if platforms and (astrbot.get('effective') or adapted_platforms) else 'not_connected',
             'message': message,
             'discovered': platforms,
             'adapter_status': adapter_status,
