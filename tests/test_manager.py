@@ -1222,6 +1222,37 @@ class TestConfigurationRules(unittest.TestCase):
                 self.assertEqual(second.state['nodes'][0]['id'],new_id)
                 self.assertEqual((root/'config.pre-v5.json').read_text(),backup)
 
+    def test_removed_component_entries_are_not_restored_from_runtime_backup(self):
+        manager=self._manager_for_runtime()
+        from proxy_manager.domain.model import normalize_state
+        raw=copy.deepcopy(manager.state)
+        raw['component_routes']=[{'id':'plugin-example','kind':'plugin','target':'hk',
+                                 'enabled':True,'port':18000,'scope':'local'}]
+        normalized,_=normalize_state(raw)
+        self.assertNotIn('component_routes',normalized)
+        document=manager._runtime_document()
+        original_listeners=copy.deepcopy(document.get('listeners',[]))
+        document.setdefault('listeners',[]).append({'name':'component-'+'a'*24,'type':'http','port':18000})
+        application={'status':'applied','adapter':'mihomo','document':document,
+                     'applied_revision':manager._adapter().revision(document)}
+        self.assertIsNone(manager._verified_recovery_document(application))
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            manager.runtime_path=root/'runtime.json'
+            manager.runtime_backup=root/'previous.json'
+            manager.runtime_path.write_text(json.dumps(application))
+            document['listeners']=original_listeners
+            application['applied_revision']=manager._adapter().revision(document)
+            manager.runtime_backup.write_text(json.dumps(application))
+            loaded=manager._load_runtime_application()
+            self.assertEqual(loaded['status'],'fail_closed')
+            self.assertNotIn('document',loaded)
+        for kind in ('sing-box','xray'):
+            manager.state['control']['adapter']=kind
+            old={'inbounds':[{'tag':'component-'+'b'*24,'port':18000}]}
+            self.assertIsNone(manager._verified_recovery_document({'status':'applied','document':old}))
+        self.assertFalse(manager._has_legacy_component_routes({'listeners':[{'name':'component-example'}]}))
+
     def test_refresh_preserves_excluded_node_preferences(self):
         manager = self._manager_for_runtime()
         old = manager.state['nodes'][0]
