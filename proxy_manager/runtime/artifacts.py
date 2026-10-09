@@ -14,14 +14,19 @@ import time
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 import httpx
+
+from ..traffic.safe_http import MAX_REDIRECTS, validate_public_url
 
 MAX_ARCHIVE_SIZE=64*1024*1024
 MAX_BINARY_SIZE=128*1024*1024
 DOWNLOAD_ATTEMPTS=2
 DOWNLOAD_TOTAL_TIMEOUT=600
 DOWNLOAD_IDLE_TIMEOUT=60
+MANAGED_DOWNLOAD_PROXY='http://127.0.0.1:17890'
+GITHUB_ASSET_HOSTS=frozenset({'release-assets.githubusercontent.com','objects.githubusercontent.com'})
 
 
 def _version_key(value: object) -> tuple[int, ...]:
@@ -61,6 +66,10 @@ class ArtifactManager:
         self.version=requested
         self.manifest=manifest if not manifest.get('versions') and requested==str(manifest.get('version') or '') else self._manifest_for_version(requested)
         self.platform=detect_platform()
+        # Direct bootstrap is granted only by the explicit first-install action.
+        # Normal downloads never inherit NO_PROXY or retry through direct I/O.
+        self.download_proxy=MANAGED_DOWNLOAD_PROXY
+        self.bootstrap_download=False
 
     def available_versions(self) -> list[str]:
         versions={}
@@ -309,21 +318,42 @@ class ArtifactManager:
         async def fetch() -> bytes:
             chunks=[]; size=0
             timeout=httpx.Timeout(DOWNLOAD_IDLE_TIMEOUT,connect=10,write=DOWNLOAD_IDLE_TIMEOUT,pool=10)
-            async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,trust_env=True) as client:
-                async with client.stream('GET',source['url']) as response:
-                    response.raise_for_status()
-                    length=int(response.headers.get('content-length','0') or 0)
-                    if length>MAX_ARCHIVE_SIZE: raise ValueError('内核制品超过 64 MiB 限制')
-                    async for chunk in response.aiter_bytes():
-                        self._check_cancel(cancel_event); size+=len(chunk)
-                        if size>MAX_ARCHIVE_SIZE: raise ValueError('内核制品超过 64 MiB 限制')
-                        chunks.append(chunk)
-                        if progress: progress({'phase':'downloading','source':source.get('name',source['id']),
-                                               'source_id':source['id'],'source_index':source_index+1,
-                                               'source_count':len(item['sources']),'attempt':attempt,
-                                               'attempts':DOWNLOAD_ATTEMPTS,'downloaded':size,
-                                               'total':length or item.get('size',0),'message':'正在下载固定版本内核'})
-            return b''.join(chunks)
+            bootstrap=getattr(self,'bootstrap_download',False)
+            allowed=getattr(self,'bootstrap_allowed',lambda: False)
+            if bootstrap and not allowed(): raise ValueError('首次安装通道已关闭，请通过稳定入口下载')
+            proxy=None if bootstrap else getattr(self,'download_proxy',MANAGED_DOWNLOAD_PROXY)
+            if not bootstrap and not proxy: raise ValueError('稳定下载入口缺失，已阻止内核下载')
+            url=source['url']; source_host=urlsplit(url).hostname
+            allowed_hosts={source_host}
+            if source_host=='github.com': allowed_hosts.update(GITHUB_ASSET_HOSTS)
+            async with httpx.AsyncClient(timeout=timeout,proxy=proxy,follow_redirects=False,trust_env=False) as client:
+                for redirect in range(MAX_REDIRECTS+1):
+                    self._check_cancel(cancel_event)
+                    if bootstrap and not allowed(): raise ValueError('首次安装通道已关闭，请通过稳定入口下载')
+                    parsed=urlsplit(url)
+                    if parsed.hostname not in allowed_hosts or parsed.port not in {None,443}:
+                        raise ValueError('内核下载目标不在受信制品通道中')
+                    await validate_public_url(url,https_only=True)
+                    async with client.stream('GET',url) as response:
+                        if response.is_redirect:
+                            location=response.headers.get('location','')
+                            if not location or redirect==MAX_REDIRECTS:
+                                raise ValueError('内核下载重定向缺失或超过限制')
+                            url=urljoin(url,location)
+                            continue
+                        response.raise_for_status()
+                        length=int(response.headers.get('content-length','0') or 0)
+                        if length>MAX_ARCHIVE_SIZE: raise ValueError('内核制品超过 64 MiB 限制')
+                        async for chunk in response.aiter_bytes():
+                            self._check_cancel(cancel_event); size+=len(chunk)
+                            if size>MAX_ARCHIVE_SIZE: raise ValueError('内核制品超过 64 MiB 限制')
+                            chunks.append(chunk)
+                            if progress: progress({'phase':'downloading','source':source.get('name',source['id']),
+                                                   'source_id':source['id'],'source_index':source_index+1,
+                                                   'source_count':len(item['sources']),'attempt':attempt,
+                                                   'attempts':DOWNLOAD_ATTEMPTS,'downloaded':size,
+                                                   'total':length or item.get('size',0),'message':'正在下载固定版本内核'})
+                        return b''.join(chunks)
         try: return await asyncio.wait_for(fetch(),DOWNLOAD_TOTAL_TIMEOUT)
         except asyncio.TimeoutError as exc: raise RuntimeError('下载超过 600 秒总时限') from exc
 
@@ -401,7 +431,7 @@ class ArtifactInstallTask:
         try:
             process=await self.on_installed()
             self.manager.commit()
-            self.record_completed(artifact,process)
+            self.record_completed(artifact,process,process.get('message','内核资源安装完成') if isinstance(process,dict) and process.get('state')=='installed' else '内核安装并启动成功')
         except Exception as exc:
             try: self.manager.rollback()
             except OSError: pass

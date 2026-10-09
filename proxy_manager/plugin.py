@@ -212,6 +212,36 @@ class ProxyManager(Star):
         preferences=self.state.setdefault('core_preferences',{})
         preferences.setdefault(adapter_id,{})['enabled']=bool(enabled)
 
+    def _kernel_setup_status(self, adapters: list[dict]|None=None) -> dict:
+        """Detect managed resources without executing or trusting external cores."""
+        adapters=adapters if adapters is not None else [
+            {'id':adapter.id,'enabled':self._core_enabled(adapter.id),
+             'artifact':ArtifactManager(self.data_dir,adapter.artifact()).status()}
+            for adapter in all_adapters().values()
+        ]
+        supported=[item for item in adapters if item.get('artifact',{}).get('resource_state')=='available']
+        installed=[item for item in adapters if item.get('artifact',{}).get('ready')]
+        enabled=[item for item in installed if item.get('enabled')]
+        process=self.supervisor.status()
+        preferred=next((item for item in (enabled or installed or supported) if item['id']==self._adapter().id),
+                       next(iter(enabled or installed or supported),{}))
+        if process.get('ready'):
+            status='ready'; message='内核已运行；流量接管仍以实际出站验证为准。'
+        elif not supported:
+            status='unsupported'; message='当前系统或 CPU 架构没有受支持的固定内核制品，请更换受支持环境。'
+        elif not installed:
+            status='install_required'; message='未检测到通过校验的代理内核，请先安装一个内核。'
+        elif not enabled:
+            status='enable_required'; message='代理内核已安装，请在内核资源管理中启用后启动。'
+        else:
+            status='start_required'; message='代理内核已安装并启用，请启动内核后应用代理配置。'
+        return {'state':status,'message':message,
+                'platform':self.artifacts.platform,'recommended_adapter':preferred.get('id',''),
+                'supported_adapters':[item['id'] for item in supported],
+                'installed_adapters':[item['id'] for item in installed],
+                'bootstrap_allowed':status=='install_required',
+                'business_policy':'fail-closed'}
+
     async def _activate_installed_kernel_if_running(self, adapter_id: str, manager: ArtifactManager):
         """Only restart a core after a resource update when it was already serving traffic."""
         if adapter_id != self._adapter().id:
@@ -437,6 +467,8 @@ class ProxyManager(Star):
                                            if adapter.id in getattr(self,'install_tasks',{}) else {}}
                                 if hasattr(self,'data_dir') else {})}
                               for adapter in all_adapters().values()]
+        if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
+            result['kernel_setup']=self._kernel_setup_status(result['adapters'])
         application=getattr(self,'runtime_application',{})
         result['application']={key:application.get(key) for key in (
             'status','saved_revision','applied_revision','updated_at','message','verification'
@@ -1084,11 +1116,11 @@ class ProxyManager(Star):
         adapter=self._adapter(); control=self.state['control']
         if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
             artifact=self.artifacts.status()
-            if not self._core_enabled(adapter.id):
-                return {'state':'disabled','ready':False,'adapter':adapter.id,'message':'当前内核未启用，请在内核资源管理中启用后再启动','artifact':artifact,
-                        'process':self.supervisor.status()}
             if not artifact.get('ready'):
                 return {'state':artifact['state'],'ready':False,'adapter':adapter.id,'message':artifact['message'],'artifact':artifact,
+                        'process':self.supervisor.status()}
+            if not self._core_enabled(adapter.id):
+                return {'state':'disabled','ready':False,'adapter':adapter.id,'message':'当前内核未启用，请在内核资源管理中启用后再启动','artifact':artifact,
                         'process':self.supervisor.status()}
             process=self.supervisor.status()
             if not process.get('ready'):
@@ -1178,6 +1210,15 @@ class ProxyManager(Star):
             if existing_task and existing_task.task and not existing_task.task.done():
                 return json_response(existing_task.status())
             manager=ArtifactManager(self.data_dir,adapter.artifact(),str(payload.get('version') or '') or None)
+            setup=self._kernel_setup_status()
+            bootstrap=payload.get('bootstrap') is True
+            if bootstrap and not setup['bootstrap_allowed']:
+                raise ValueError('已有可用或运行中的内核，不能使用首次安装直连通道；请启动内核后通过稳定入口下载')
+            if setup['bootstrap_allowed'] and not bootstrap:
+                raise ValueError('尚无可用代理内核，请从安装引导选择受限直连安装，或使用离线上传')
+            manager.bootstrap_download=bootstrap
+            manager.bootstrap_allowed=lambda: self._kernel_setup_status()['bootstrap_allowed']
+            manager.download_proxy=self._entry_urls()[0]
             if adapter_id==self._adapter().id:
                 self.artifacts=manager
                 task=self.install_task
@@ -1191,6 +1232,8 @@ class ProxyManager(Star):
                 task=ArtifactInstallTask(manager,lambda: self._activate_installed_kernel_if_running(adapter_id,manager),
                                          lambda _manager=manager: self._restore_running_kernel_after_install_failure(adapter_id,_manager))
                 self.install_tasks[adapter_id]=task
+            self.event({'action':'kernel_install','adapter':adapter_id,'result':'started',
+                        'download_channel':'bootstrap-direct' if bootstrap else 'explicit-entry'})
             return json_response(task.start())
         except (ValueError,OSError,RuntimeError) as exc:
             return error_response(str(exc),status_code=400)
@@ -1818,6 +1861,10 @@ class ProxyManager(Star):
         try: await self._start_owned_kernel()
         except (ValueError,OSError,RuntimeError,httpx.HTTPError) as exc:
             logger.warning('代理管理中心自管内核未启动：'+safe_error(exc))
+        setup=self._kernel_setup_status()
+        if setup['state']!='ready':
+            logger.warning('代理管理中心安装引导：'+setup['message']+
+                           '请打开插件管理页面的“内核管理”；内核及配置未就绪时业务流量保持失败关闭。')
         try:
             lease=ComponentLease.from_entry(
                 'astrbot', self.state.get('proxy_entry'),

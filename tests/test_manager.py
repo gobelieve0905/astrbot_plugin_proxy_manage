@@ -437,7 +437,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('runtime-control',script + styles)
         self.assertIn('runtime-facts',script + styles)
         self.assertIn('data-kernel-install',script)
-        self.assertNotIn('core-enable',script)
+        self.assertIn('core-enable',script)
         self.assertIn('kernel-update-check',script)
         self.assertIn('data-kernel-check',script)
         self.assertIn('data-kernel-uninstall',script)
@@ -641,7 +641,7 @@ class TestConfigurationRules(unittest.TestCase):
     def test_xray_download_idle_timeout_is_passed_to_http_client(self):
         from proxy_manager.runtime.artifacts import ArtifactManager
         async def scenario():
-            response=AsyncMock(); response.headers={'content-length':'4'}
+            response=AsyncMock(); response.headers={'content-length':'4'}; response.is_redirect=False
             async def chunks():
                 yield b'data'
             response.aiter_bytes=chunks
@@ -650,12 +650,120 @@ class TestConfigurationRules(unittest.TestCase):
             client=AsyncMock(); client.stream=Mock(return_value=stream)
             context=AsyncMock(); context.__aenter__.return_value=client
             manager=ArtifactManager.__new__(ArtifactManager)
-            with patch('proxy_manager.runtime.artifacts.httpx.AsyncClient',return_value=context) as make_client:
+            with patch('proxy_manager.runtime.artifacts.httpx.AsyncClient',return_value=context) as make_client, patch('proxy_manager.runtime.artifacts.validate_public_url',new=AsyncMock()):
                 await manager._download_source({'sources':[{}],'size':4},{'id':'github','name':'GitHub','url':'https://example.invalid/xray.zip'},
                                                None,None,0,1)
             self.assertEqual(make_client.call_args.kwargs['timeout'].read,60)
             self.assertEqual(make_client.call_args.kwargs['timeout'].connect,10)
         asyncio.run(scenario())
+
+    def test_bootstrap_download_ignores_dead_proxy_and_allows_only_official_redirects(self):
+        from proxy_manager.runtime import artifacts
+        httpx=self.module.httpx
+        original_client=httpx.AsyncClient
+        source={'id':'github','url':'https://github.com/owner/core/releases/download/v1/core.gz'}
+        visited=[]; options=[]
+        def respond(request):
+            visited.append(str(request.url))
+            if request.url.host=='github.com':
+                return httpx.Response(302,headers={'location':'https://release-assets.githubusercontent.com/asset'})
+            return httpx.Response(200,content=b'archive')
+        def make_client(**kwargs):
+            options.append(kwargs)
+            return original_client(**kwargs,transport=httpx.MockTransport(respond))
+        async def scenario():
+            manager=artifacts.ArtifactManager.__new__(artifacts.ArtifactManager)
+            manager.bootstrap_download=True; manager.bootstrap_allowed=lambda: True
+            with patch.object(artifacts.httpx,'AsyncClient',side_effect=make_client), patch.object(artifacts,'validate_public_url',new=AsyncMock()) as validate:
+                result=await manager._download_source({'sources':[source]},source,None,None,0,1)
+            self.assertEqual(result,b'archive'); self.assertEqual(validate.await_count,2)
+        with patch.dict(os.environ,{'HTTP_PROXY':'http://127.0.0.1:1','HTTPS_PROXY':'http://127.0.0.1:1','NO_PROXY':'*'}):
+            before=dict(os.environ); asyncio.run(scenario()); self.assertEqual(dict(os.environ),before)
+        self.assertEqual(len(visited),2); self.assertIsNone(options[0]['proxy'])
+        self.assertFalse(options[0]['trust_env']); self.assertFalse(options[0]['follow_redirects'])
+
+    def test_artifact_download_blocks_untrusted_redirect_before_connecting(self):
+        from proxy_manager.runtime import artifacts
+        httpx=self.module.httpx; original_client=httpx.AsyncClient
+        source={'id':'github','url':'https://github.com/owner/core/releases/download/v1/core.gz'}
+        for destination in ('https://attacker.example/core','http://release-assets.githubusercontent.com/core',
+                            'https://127.0.0.1/core','https://release-assets.githubusercontent.com:8443/core',
+                            'https://user:password@release-assets.githubusercontent.com/core'):
+            with self.subTest(destination=destination):
+                visited=[]
+                def respond(request):
+                    visited.append(str(request.url))
+                    return httpx.Response(302,headers={'location':destination})
+                def make_client(**kwargs):
+                    return original_client(**kwargs,transport=httpx.MockTransport(respond))
+                async def validate(url,**_kwargs):
+                    from urllib.parse import urlsplit
+                    parsed=urlsplit(url)
+                    if parsed.scheme!='https' or parsed.username: raise ValueError('unsafe')
+                async def scenario():
+                    manager=artifacts.ArtifactManager.__new__(artifacts.ArtifactManager)
+                    manager.bootstrap_download=True; manager.bootstrap_allowed=lambda: True
+                    with patch.object(artifacts.httpx,'AsyncClient',side_effect=make_client), patch.object(artifacts,'validate_public_url',side_effect=validate):
+                        with self.assertRaises(ValueError):
+                            await manager._download_source({'sources':[source]},source,None,None,0,1)
+                asyncio.run(scenario()); self.assertEqual(len(visited),1)
+
+    def test_artifact_managed_download_never_falls_back_to_bootstrap(self):
+        from proxy_manager.runtime import artifacts
+        source={'id':'github','url':'https://github.com/owner/core/releases/download/v1/core.gz'}
+        manager=artifacts.ArtifactManager.__new__(artifacts.ArtifactManager)
+        manager.download_proxy='http://127.0.0.1:17890'
+        context=AsyncMock(); context.__aenter__.side_effect=self.module.httpx.ConnectError('blocked')
+        with patch.object(artifacts.httpx,'AsyncClient',return_value=context) as client:
+            with self.assertRaises(self.module.httpx.ConnectError):
+                asyncio.run(manager._download_source({'sources':[source]},source,None,None,0,1))
+        client.assert_called_once()
+        self.assertEqual(client.call_args.kwargs['proxy'],manager.download_proxy)
+        self.assertFalse(client.call_args.kwargs['trust_env'])
+        manager.bootstrap_download=True; manager.bootstrap_allowed=lambda: False
+        with patch.object(artifacts.httpx,'AsyncClient') as client:
+            with self.assertRaises(ValueError):
+                asyncio.run(manager._download_source({'sources':[source]},source,None,None,0,1))
+            client.assert_not_called()
+
+    def test_first_install_setup_distinguishes_resources_enable_and_start(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+        manager=self._manager_for_runtime()
+        with tempfile.TemporaryDirectory() as directory:
+            manager.data_dir=Path(directory)
+            manager.artifacts=ArtifactManager(manager.data_dir,manager._adapter().artifact())
+            manager.supervisor=types.SimpleNamespace(status=lambda:{'ready':False})
+            result=manager._kernel_setup_status()
+            self.assertEqual(result['state'],'install_required'); self.assertTrue(result['bootstrap_allowed'])
+            self.assertEqual(result['business_policy'],'fail-closed')
+            self.assertIn('mihomo',result['supported_adapters'])
+            items=[{'id':'mihomo','enabled':False,'artifact':{'ready':True,'resource_state':'available'}}]
+            self.assertEqual(manager._kernel_setup_status(items)['state'],'enable_required')
+            self.assertFalse(manager._kernel_setup_status(items)['bootstrap_allowed'])
+            items[0]['enabled']=True
+            self.assertEqual(manager._kernel_setup_status(items)['state'],'start_required')
+            self.assertEqual(manager._kernel_setup_status([])['state'],'unsupported')
+            manager.supervisor.status=lambda:{'ready':True}
+            self.assertEqual(manager._kernel_setup_status(items)['state'],'ready')
+
+    def test_first_install_requires_explicit_bootstrap_and_rejects_it_with_installed_core(self):
+        from proxy_manager import plugin
+        async def scenario(allowed,requested):
+            manager=self._manager_for_runtime(); manager.data_dir=Path(manager._test_dir.name)
+            manager.artifacts=Mock(); manager.install_task=Mock(); manager.install_tasks={}
+            manager._kernel_setup_status=Mock(return_value={'bootstrap_allowed':allowed})
+            request=types.SimpleNamespace(json=AsyncMock(return_value={'adapter':'mihomo','bootstrap':requested}))
+            task=Mock(); task.start.return_value={'state':'running'}
+            artifact=Mock()
+            with patch.object(plugin,'request',request), patch.object(plugin,'ArtifactManager',return_value=artifact), patch.object(plugin,'ArtifactInstallTask',return_value=task):
+                await manager.kernel_install()
+            if allowed==requested:
+                task.start.assert_called_once()
+                self.assertEqual(artifact.bootstrap_download,requested)
+                self.assertEqual(artifact.download_proxy,manager._entry_urls()[0])
+            else: task.start.assert_not_called()
+        for allowed in (False,True):
+            for requested in (False,True): asyncio.run(scenario(allowed,requested))
 
     def test_artifact_install_task_returns_immediately_and_can_cancel(self):
         from proxy_manager.runtime.artifacts import ArtifactInstallTask
@@ -1872,7 +1980,7 @@ class TestConfigurationRules(unittest.TestCase):
         subscriptions=by_id['plugin-subscriptions']
         self.assertEqual(subscriptions['status'],'unknown')
         self.assertEqual(subscriptions['integration']['mode'],'explicit-entry')
-        for identifier in ('kernel-update-check','kernel-artifact-download'):
+        for identifier in ('kernel-update-check',):
             item=by_id[identifier]
             self.assertEqual(item['status'],'unknown')
             self.assertEqual(item['evidence_status'],'unverified')
@@ -1880,6 +1988,8 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertIn('请求级证据',item['message'])
             self.assertEqual(item['integration']['mode'],'environment-inherited')
             self.assertEqual(item['integration']['state'],'possible')
+        self.assertEqual(by_id['kernel-artifact-download']['integration']['mode'],'explicit-entry-or-bootstrap')
+        self.assertIn('受限',by_id['kernel-artifact-download']['method'])
         self.assertNotEqual(by_id['kernel-update-check']['id'],by_id['kernel-artifact-download']['id'])
         self.assertEqual(by_id['updates']['status'],'not_connected')
 

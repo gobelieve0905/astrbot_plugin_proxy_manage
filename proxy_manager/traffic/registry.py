@@ -34,9 +34,9 @@ class TrafficRegistry:
          'verification': '更新检查请求的入口、规则、内核连接和出口记录；当前无请求级证据',
          'bypass_risk': '是否经过插件稳定入口取决于进程代理环境及目标是否命中 NO_PROXY'},
         {'id': 'kernel-artifact-download', 'name': '内核制品下载', 'restart': False,
-         'method': 'HTTPX 使用 trust_env=True 下载固定版本制品并跟随重定向，可能继承 AstrBot 进程环境代理',
-         'verification': '下载及重定向请求的入口、规则、内核连接和出口记录；当前无请求级证据',
-         'bypass_risk': '是否经过插件稳定入口取决于进程代理环境及目标是否命中 NO_PROXY'},
+         'method': '固定内核制品显式使用稳定入口；无可用内核时仅经用户选择使用受限直连引导通道',
+         'verification': '受信 HTTPS 目标逐跳校验、固定 SHA-256；稳定入口下载仍需请求级证据',
+         'bypass_risk': '首次安装仅固定制品允许受限直连；普通下载入口失败不回退直连'},
         {'id': 'recent-verification', 'name': '最近一次受控验证请求', 'restart': False,
          'method': '通过请求级内核连接记录核对规则与出口链路',
          'verification': '同次请求的入口、规则、代理链、节点与出口 IP',
@@ -147,7 +147,12 @@ class TrafficRegistry:
                     'mode': 'explicit-entry',
                     'message': '每跳重定向校验公网目标；入口故障不回退直连',
                 }
-            elif identifier in {'kernel-update-check', 'kernel-artifact-download'}:
+            elif identifier == 'kernel-artifact-download':
+                item.update({'status':'unknown','evidence_status':'unverified',
+                             'message':'固定制品使用显式入口或受限首次安装通道；不据此宣称业务流量已接管，稳定入口下载仍需请求级证据',
+                             'integration':{'state':'configured','mode':'explicit-entry-or-bootstrap',
+                                            'message':'不读取环境代理；首次安装由用户触发受限直连，已有可用内核时入口故障不回退'}})
+            elif identifier == 'kernel-update-check':
                 may_inherit_entry = bool(entry and (entry in configured or astrbot.get('effective')))
                 item.update({
                     'status': 'unknown',
