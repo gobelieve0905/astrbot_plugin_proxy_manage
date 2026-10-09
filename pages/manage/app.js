@@ -7,8 +7,8 @@ if (!api || typeof api.ready !== 'function') {
   return
 }
 const groupHelpReadHint = '打开页面时静默读取';
-const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',components:'插件与 MCP',control:'内核管理',logs:'审计历史'}
-const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名、模板和目标出口',components:'组件出站策略与接入状态',control:'管理插件自有内核、制品与运行配置',logs:'查看配置修改、订阅、内核和连接验证事件'}
+const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',control:'内核管理',logs:'审计历史'}
+const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名、模板和目标出口',control:'管理插件自有内核、制品与运行配置',logs:'查看配置修改、订阅、内核和连接验证事件'}
   let state, original, tab='overview', controlResult=null, groupStatusFetchedAt=0, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set(), ruleEditorMode='rows', subscriptionDialogReturnFocus=null, subscriptionDialogId='', subscriptionDialogEditing=false, subscriptionDialogDraft=null, auditDialogReturnFocus=null, auditDialogEventIndex=-1
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
@@ -24,26 +24,6 @@ function note(text,error=false){
   noticeTimer=setTimeout(()=>{notice.hidePopover?.();notice.hidden=true;notice.textContent=''},error?8000:3200)
 }
 function groupOptions(selected){ return state.groups.map(group=>`<option value="${esc(group.id)}" ${group.id===selected?'selected':''}>${esc(group.name)}</option>`).join('') }
-function componentPolicy(item){return state.component_routes?.find(route=>route.id===item.id)}
-function componentName(item){return item.display_name||item.name||item.id}
-function componentRow(item){
-  const name=componentName(item)
-  const policy=componentPolicy(item),previous=original?.component_routes?.find(route=>route.id===item.id),dirty=JSON.stringify(policy)!==JSON.stringify(previous)
-  const disabled=!item.supported,target=policy?.target||'direct',missing=!state.groups.some(group=>group.id===target)
-  const status=dirty?'待保存':missing?'代理组已失效':{configured:'策略已应用 · 未验证',disabled:'已停用',pending_apply:'待应用',not_connected:'未接入'}[item.status]||'无法判定'
-  const bindingRequired=item.kind==='mcp'&&!item.protocol_connected
-  const canBind=!disabled&&!dirty&&policy?.enabled&&item.status==='configured'&&item.locality==='stdio'
-  return `<article class="component-row" data-component-id="${esc(item.id)}" aria-label="${esc(name)}">
-    <div class="component-identity"><b title="${esc(item.name)}">${esc(name)}</b></div>
-    <label class="component-toggle"><input type="checkbox" role="switch" data-component-enable="${esc(item.id)}" aria-label="管理${esc(name)}的流量" ${policy?.enabled?'checked':''} ${disabled&&!policy?.enabled?'disabled':''}><span>管理流量</span></label>
-    <label class="component-target"><span>目标代理组</span><select data-component-target="${esc(item.id)}" aria-label="${esc(name)}的目标代理组" ${disabled?'disabled':''}>${missing?`<option value="${esc(target)}" selected>已失效的代理组</option>`:''}${groupOptions(target)}</select></label>
-    <div class="component-state"><span title="${esc(bindingRequired&&policy?.enabled?'MCP 尚未使用专用入口':item.message)}" class="component-status ${dirty||missing||disabled?'pending':policy?.enabled&&item.status==='configured'?'ok':''}">${esc(disabled?'需适配':status)}</span>${item.locality==='stdio'?`<button type="button" data-component-bind="${esc(item.id)}" ${canBind?'':'disabled'}>${bindingRequired?'接入 MCP':'重新接入 MCP'}</button>`:''}</div>
-  </article>`
-}
-function componentSection(kind,components){
-  const items=components.filter(item=>item.kind===kind),title=kind==='plugin'?'AstrBot 插件':'MCP'
-  return `<section class="component-section" aria-labelledby="component-${kind}-title"><div class="component-section-head"><h3 id="component-${kind}-title">${title}</h3><span>${items.length} 个组件</span></div>${items.length?`<div class="component-columns" aria-hidden="true"><span>组件名称</span><span>流量管理</span><span>目标代理组</span><span>接入状态</span></div><div class="component-list">${items.map(componentRow).join('')}</div>`:`<div class="component-empty">尚未发现符合协议的${kind==='plugin'?' AstrBot 插件':' MCP'}。</div>`}</section>`
-}
 const ruleTypeOptions=[
   ['DOMAIN','匹配完整域名'],['DOMAIN-SUFFIX','匹配域名后缀'],['DOMAIN-KEYWORD','匹配域名关键字'],['DOMAIN-WILDCARD','匹配域名通配符'],['DOMAIN-REGEX','匹配域名正则表达式'],
   ['GEOSITE','匹配 GeoSite 内的域名'],['GEOIP','匹配 IP 所属国家代码'],['SRC-GEOIP','匹配来源 IP 所属国家代码'],['IP-ASN','匹配 IP 所属 ASN'],['SRC-IP-ASN','匹配来源 IP 所属 ASN'],
@@ -168,11 +148,11 @@ const auditEventLabels={
   kernel_update_check:'检查内核更新',core_enable:'内核启用状态',adapter_select:'切换内核',runtime_apply:'应用代理配置',
   verify_outbound:'出口验证',verify_astrbot_egress:'核心出口验证',probe:'连通性检测',group_probe:'代理组选优核对',
   control_select:'切换代理组节点',astrbot_proxy_enable:'接入全局代理',astrbot_proxy_restore:'恢复全局代理',
-  integration_check:'接入范围检查',plugin_terminate:'插件生命周期'
+  traffic_audit:'流量审计',plugin_terminate:'插件生命周期'
 }
-const auditCategories={save:'配置',rollback:'配置',subscription_import:'订阅',subscription_refresh:'订阅',kernel_install:'内核',kernel_uninstall:'内核',kernel_start:'内核',kernel_stop:'内核',kernel_update_check:'内核',core_enable:'内核',adapter_select:'内核',runtime_apply:'运行',verify_outbound:'验证',verify_astrbot_egress:'验证',probe:'验证',group_probe:'验证',control_select:'运行',astrbot_proxy_enable:'接入',astrbot_proxy_restore:'接入',integration_check:'接入',plugin_terminate:'生命周期'}
+const auditCategories={save:'配置',rollback:'配置',subscription_import:'订阅',subscription_refresh:'订阅',kernel_install:'内核',kernel_uninstall:'内核',kernel_start:'内核',kernel_stop:'内核',kernel_update_check:'内核',core_enable:'内核',adapter_select:'内核',runtime_apply:'运行',verify_outbound:'验证',verify_astrbot_egress:'验证',probe:'验证',group_probe:'验证',control_select:'运行',astrbot_proxy_enable:'接入',astrbot_proxy_restore:'接入',traffic_audit:'审计',plugin_terminate:'生命周期'}
 const auditResultLabels={ok:'成功',confirmed:'已确认',completed:'完成',installed:'已安装',pending_restart:'待重启',pending_apply:'待应用',proxy_configuration_retained:'配置已保留',fail_closed:'失败关闭',restore_failed:'恢复失败',failed:'失败',check_failed:'检查失败'}
-const auditChangeLabels={subscriptions:'订阅',nodes:'节点',groups:'代理组',routes:'分流规则',rule_groups:'规则组',component_routes:'插件与 MCP 流量'}
+const auditChangeLabels={subscriptions:'订阅',nodes:'节点',groups:'代理组',routes:'分流规则',rule_groups:'规则组'}
 function auditResultClass(result){return ['failed','restore_failed','check_failed'].includes(result)?'invalid':['pending_restart','pending_apply','fail_closed'].includes(result)?'pending':['ok','confirmed','completed','installed','proxy_configuration_retained'].includes(result)?'ok':''}
 function auditResultLabel(result){return auditResultLabels[result]||result||'已记录'}
 function auditEventSummary(event){
@@ -287,7 +267,7 @@ function render(){
     html=`<div class="hero"><div><small>当前配置</small><strong>${esc(state.name)}</strong></div><div class="runtime-state"><span class="${kernelClass}">内核：${kernelText}</span><small>${esc(kernelStatus.message||'')}</small>${recoveryHint?`<small class="recovery-hint">${esc(recoveryHint)}</small>`:''}</div></div>
       <div class="cards metric-row metric-row-primary">${[['subscriptions','订阅'],['nodes','节点'],['groups','代理组'],['routes','规则']].map(([key,label])=>`<article><b>${key==='groups'?state.groups.filter(group=>group.id!=='direct').length:state[key].length}</b><span>${label}</span></article>`).join('')}</div>
       <div class="cards metric-row metric-row-secondary"><article><b>${ok}</b><span>可用节点</span></article><article><b>${bad}</b><span>异常节点</span></article><article><b>${state.subscriptions.filter(item=>item.enabled&&item.interval).length}</b><span>自动订阅</span></article><article><b>${state.events.length}</b><span>最近事件</span></article></div>
-      <section class="panel"><div class="section-head"><div><small>真实接入范围</small><h2>AstrBot 流量清单</h2><p class="muted panel-lede">只显示当前状态；详细接入协议和诊断信息保留在审计记录中。</p></div><button id="integration-check" title="重新检查新增的插件和 MCP">重新检查</button></div><div class="traffic-inventory">${(state.traffic_inventory||[]).filter(item=>!['platform-sdk','provider-proxy'].includes(item.id)).map(item=>`<article><div><b>${esc(item.name)}</b><small>${esc(item.message||'')}</small></div><span class="traffic-state ${esc(item.status)}">${esc({managed:'已接管',direct:'明确直连',not_connected:'未接入',unknown:'无法判定'}[item.status]||'无法判定')}</span></article>`).join('')}</div></section>
+      <section class="panel"><div class="section-head"><div><small>真实接入范围</small><h2>AstrBot 流量清单</h2><p class="muted panel-lede">只显示当前状态；详细接入诊断信息保留在审计记录中。</p></div></div><div class="traffic-inventory">${(state.traffic_inventory||[]).filter(item=>!['platform-sdk','provider-proxy'].includes(item.id)).map(item=>`<article><div><b>${esc(item.name)}</b><small>${esc(item.message||'')}</small></div><span class="traffic-state ${esc(item.status)}">${esc({managed:'已接管',direct:'明确直连',not_connected:'未接入',unknown:'无法判定'}[item.status]||'无法判定')}</span></article>`).join('')}</div></section>
       <section class="panel"><div class="bar"><div><small>AstrBot 核心流量</small><h2>全局代理接入</h2></div><div class="actions"><button id="astrbot-proxy-enable" ${state.astrbot_proxy?.effective?'disabled':''}>接入稳定入口</button><button id="astrbot-proxy-restore" ${state.astrbot_proxy?.backup_available?'':'disabled'}>恢复旧配置</button></div></div><div class="proxy-status"><b>${esc(state.astrbot_proxy?.status||'not_connected')}</b><span>${esc(state.astrbot_proxy?.message||'AstrBot 全局代理状态待检查')}</span><code>${esc((state.astrbot_proxy?.no_proxy||[]).join(', ')||'--')}</code></div>${state.astrbot_proxy?.restart_required?'<p class="muted">AstrBot 需要重启后才会使用新的全局代理配置。</p>':''}</section>
       <section class="panel"><div class="section-head"><div><small>规则诊断</small><h2>分流预览</h2></div></div><div class="inline"><input id="host" placeholder="api.telegram.org"><button id="preview">查询</button></div><pre id="result">输入域名查看命中的代理组和节点。</pre></section>`
     html+=`<section class="panel"><h2>实际出站验证</h2><p class="muted">核心验证使用 AstrBot 当前进程的全局代理环境；只有目标返回出口 IP 且内核记录可关联规则与链路时才确认。</p><div class="inline"><input id="verify-url" value="https://api.ipify.org?format=json"><button id="verify-astrbot-egress">验证 AstrBot 核心出口</button><button id="verify-outbound">验证稳定入口</button></div>${verificationPanel(state.application?.verification)}<pre id="verify-result">${esc(state.application?.verification?JSON.stringify(state.application.verification,null,2):'尚未验证。')}</pre></section>`
@@ -314,9 +294,6 @@ function render(){
   } else if(tab==='routes'){
     const orderedRules=orderedRuleGroups()
     html=`<section class="panel routes-panel"><div class="bar"><div><h2>规则组</h2><p class="muted panel-lede">拖动规则组调整优先顺序；也可使用上移、下移按钮。目标代理组可直接在标题行修改。</p></div><button id="add" class="primary" type="button">新增规则组</button></div><div class="rule-list">${orderedRules.map((rule,index)=>`<article class="rule-card" data-rule-id="${esc(rule.id)}"><div class="rule-card-head"><button type="button" class="rule-drag-handle" draggable="true" data-rule-drag-handle="${esc(rule.id)}" aria-label="拖动调整 ${esc(rule.name)} 的优先级" title="拖动调整优先级">⠿</button><div class="rule-card-title"><b>${esc(rule.name)}</b><small>优先顺序 ${index+1} · 优先级 ${esc(rule.priority)} · ${rule.domains.length} 条规则</small></div><label class="rule-target-inline" for="rule-target-${esc(rule.id)}"><span>目标代理组</span><select id="rule-target-${esc(rule.id)}" data-rule-target="${esc(rule.id)}">${groupOptions(rule.target)}</select></label><span class="chip ${rule.enabled?'ok':'pending'}">${rule.enabled?'已启用':'已停用'}</span><div class="rule-card-actions"><button type="button" data-rule-move="up" data-rule-id="${esc(rule.id)}" aria-label="上移 ${esc(rule.name)}" title="上移" ${index===0?'disabled':''}>↑</button><button type="button" data-rule-move="down" data-rule-id="${esc(rule.id)}" aria-label="下移 ${esc(rule.name)}" title="下移" ${index===orderedRules.length-1?'disabled':''}>↓</button><button type="button" data-edit-rule="${esc(rule.id)}">编辑</button><button type="button" data-del="rule_groups" data-id="${esc(rule.id)}" class="danger">删除</button></div></div></article>`).join('')||'<div class="group-empty"><b>还没有规则组</b><span>新增规则组后，可在弹窗中配置规则。</span></div>'}</div></section>`
-  } else if(tab==='components'){
-    const components=state.components||[]
-    html=`<section class="components-panel"><div class="bar component-toolbar"><div><h2>组件流量</h2><span class="muted">${components.length} 个符合协议的组件</span></div><button id="component-refresh" type="button">重新检查</button></div>${['plugin','mcp'].map(kind=>componentSection(kind,components)).join('')}</section>`
   } else if(tab==='control'){
     const artifact=kernelStatus.artifact||state.kernel?.artifact||{}, process=kernelStatus.process||state.kernel?.process||{}
     const adapters=state.adapters||[]
@@ -662,18 +639,6 @@ function deleteConfigItem(kind,itemId){
 }
 
 function bind(){
-  const updateComponent=(id,values)=>{
-    const item=state.components?.find(component=>component.id===id);if(!item)return
-    state.component_routes ||= [];let policy=componentPolicy(item)
-    if(!policy){policy={id,kind:item.kind,target:'direct',enabled:false,scope:item.scope};state.component_routes.push(policy)}
-    Object.assign(policy,values)
-    const focus=document.activeElement?.dataset.componentEnable?'enable':'target';render()
-    requestAnimationFrame(()=>document.querySelector(`[data-component-${focus}="${CSS.escape(id)}"]`)?.focus())
-  }
-  document.querySelectorAll('[data-component-enable]').forEach(input=>input.addEventListener('change',()=>updateComponent(input.dataset.componentEnable,{enabled:input.checked})))
-  document.querySelectorAll('[data-component-target]').forEach(select=>select.addEventListener('change',()=>updateComponent(select.dataset.componentTarget,{target:select.value})))
-  $('component-refresh')?.addEventListener('click',async()=>{const button=$('component-refresh');button.disabled=true;try{const result=await api.apiPost('integration-check',{});state.components=result.snapshot.components;state.traffic_audit=result.audit;render();note('组件清单已更新')}catch(error){button.disabled=false;note(error.message,true)}})
-  document.querySelectorAll('[data-component-bind]').forEach(button=>button.addEventListener('click',()=>openConfirmDialog({title:'接入 MCP',message:'将为该 MCP 保存专用代理环境，并将 no_proxy 限定为回环地址。已有配置会备份；完成后需重启该 MCP 进程。',confirmLabel:'保存 MCP 环境',onConfirm:async()=>{button.disabled=true;try{const result=await api.apiPost('component-bind',{id:button.dataset.componentBind});state.components=result.snapshot.components;state.traffic_audit=result.snapshot.traffic_audit;render();note(result.message)}catch(error){button.disabled=false;note(error.message,true)}}})))
   document.querySelectorAll('[data-k]').forEach(input=>input.addEventListener('change',()=>{
     const row=input.closest('[data-i]'); if(!row)return
     if(tab==='subscriptions'){ const item=state.subscriptions[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value }
@@ -731,7 +696,6 @@ function bind(){
   $('preview')?.addEventListener('click',async()=>{$('result').textContent=JSON.stringify(await api.apiPost('preview',{host:$('host').value}),null,2)})
   $('verify-outbound')?.addEventListener('click',async()=>{try{const result=await api.apiPost('verify-outbound',{url:$('verify-url').value});state.application={...(state.application||{}),verification:result};render();note(result.verified?'出口已确认':'验证未能确认实际出口，请查看三个层级的证据',!result.verified)}catch(error){note(error.message,true)}})
   $('verify-astrbot-egress')?.addEventListener('click',async()=>{try{const result=await api.apiPost('verify-astrbot-egress',{url:$('verify-url').value});state.application={...(state.application||{}),verification:result};await load();note(result.verified?'AstrBot 核心出口已确认':'AstrBot 核心出口未能确认',!result.verified)}catch(error){note(error.message,true)}})
-  $('integration-check')?.addEventListener('click',async()=>{try{const result=await api.apiPost('integration-check',{});state=result.snapshot;original=structuredClone(state);render();note('统一接入协议检查已完成')}catch(error){note(error.message,true)}})
   $('astrbot-proxy-enable')?.addEventListener('click',async()=>{try{const result=await api.apiPost('astrbot-proxy-enable',{});await load();note(result.message)}catch(error){note(error.message,true)}})
   $('astrbot-proxy-restore')?.addEventListener('click',async()=>{try{const result=await api.apiPost('astrbot-proxy-restore',{});await load();note(result.message)}catch(error){note(error.message,true)}})
   $('control-status')?.addEventListener('click',checkControl)
@@ -759,7 +723,6 @@ const changeSectionDefinitions=[
   {type:'groups',label:'代理组'},
   {type:'routes',label:'分流规则'},
   {type:'rule_groups',label:'规则组'},
-  {type:'component_routes',label:'插件与 MCP 流量'},
 ]
 const changeFieldsByType={
   subscriptions:['id','name','url','enabled','interval','node_ids','ignored_node_ids'],
@@ -767,7 +730,6 @@ const changeFieldsByType={
   groups:['id','name','mode','node_ids','selected','enabled','test_url','test_interval','tolerance','failure_policy'],
   routes:['id','host','match','target','priority','enabled'],
   rule_groups:['id','name','domains','priority','target','enabled'],
-  component_routes:['id','kind','target','enabled'],
 }
 const changeFieldLabels={
   id:'标识',name:'名称',url:'订阅链接',enabled:'启用状态',interval:'刷新间隔',node_ids:'节点成员',ignored_node_ids:'已排除节点',
@@ -789,7 +751,6 @@ function changeSignature(type,item){return JSON.stringify(changeComparable(type,
 function snapshotSubscriptionName(snapshot,id){return snapshot?.subscriptions?.find(item=>item.id===id)?.name||'未命名订阅'}
 function snapshotGroupName(snapshot,id){return snapshot?.groups?.find(item=>item.id===id)?.name||'未命名代理组'}
 function changeTitle(type,item,snapshot){
-  if(type==='component_routes'){const component=snapshot?.components?.find(component=>component.id===item.id);return component?componentName(component):item.id}
   if(type==='nodes')return `${snapshotSubscriptionName(snapshot,item.subscription_id)} · ${item.display_name||item.name||item.id}`
   if(type==='subscriptions')return item.name||'未命名订阅'
   if(type==='groups')return item.name||'未命名代理组'
@@ -803,7 +764,6 @@ function changeMeta(type,item,snapshot){
   if(type==='groups')return `${groupModeLabels[item.mode]||item.mode||'手动选择'} · ${Array.isArray(item.node_ids)?item.node_ids.length:0} 个节点`
   if(type==='routes')return `${item.match==='suffix'?'后缀匹配':'精确匹配'} · ${snapshotGroupName(snapshot,item.target)} · 优先级 ${item.priority??'--'}`
   if(type==='rule_groups')return `${Array.isArray(item.domains)?item.domains.length:0} 个域名 · ${snapshotGroupName(snapshot,item.target)} · 优先级 ${item.priority??'--'}`
-  if(type==='component_routes')return `${item.kind==='plugin'?'AstrBot 插件':'MCP'} · ${snapshotGroupName(snapshot,item.target)} · ${item.enabled?'已启用':'已停用'}`
   return `${snapshotGroupName(snapshot,item.group_id)} · ${item.enabled===false?'已停用':'已启用'}`
 }
 function changeDisplayValue(type,key,value,snapshot){

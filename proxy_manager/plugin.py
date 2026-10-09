@@ -12,7 +12,6 @@ import os
 import secrets
 import time
 import uuid
-from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse, urlsplit
 
@@ -138,231 +137,17 @@ class ProxyManager(Star):
         http_url,socks_url=self._entry_urls()
         return self.astrbot_proxy.status(http_url,socks_url)
 
-    def get_proxy_manager_lease(self, plugin_id: str, *, enabled: bool,
-                                protocols: tuple[str, ...] | list[str] = ('http', 'https')) -> dict:
-        """Return a public, credential-free lease for an opt-in market plugin.
-
-        Market plugins call this through AstrBot's registered plugin instance;
-        they do not import this plugin's private modules. The plugin's
-        ``proxy_manager_integration.json`` remains the compatibility contract.
-        """
-        if not isinstance(enabled, bool) or not enabled:
-            raise ValueError('请先在插件设置中开启代理管理中心接入')
-        plugin_name = str(plugin_id or '').strip()
-        if not plugin_name or plugin_name == 'astrbot_plugin_proxy_manage':
-            raise ValueError('市场插件标识无效')
-        metadata = self.context.get_registered_star(plugin_name)
-        if not metadata or not metadata.activated or not metadata.star_cls:
-            raise ValueError('请求接入的市场插件未加载或已停用')
-        directory_name = str(metadata.root_dir_name or '')
-        audit = self._refresh_integration_audit(record=False)
-        item = next((value for value in audit.get('plugin_integrations', [])
-                     if value.get('id') == 'plugin-'+directory_name or value.get('name') == directory_name), None)
-        declared = (item or {}).get('declaration') or {}
-        if declared.get('state') != 'compatible':
-            raise ValueError('插件未声明有效的 astrbot.proxy-manager/v1 接入协议')
-        if declared.get('mode') != 'astrbot-environment':
-            raise ValueError('当前插件声明的接入模式不支持 AstrBot 市场插件 lease')
-        if not isinstance(protocols, (tuple, list)) or any(not isinstance(value, str) for value in protocols):
-            raise ValueError('请求的代理协议必须是字符串数组')
-        requested = tuple(dict.fromkeys(value.lower() for value in protocols))
-        allowed = {'http', 'https', 'websocket'}
-        if not requested or any(value not in allowed for value in requested):
-            raise ValueError('请求的代理协议无效')
-        if any(value not in declared.get('protocols', []) for value in requested):
-            raise ValueError('插件声明未覆盖请求的代理协议')
-        status = self._astrbot_status()
-        if not status.get('effective') or not self.supervisor.status().get('ready'):
-            raise RuntimeError('代理管理中心稳定入口当前不可用，插件请求已失败关闭')
-        http_url, _ = self._entry_urls()
-        if http_url != 'http://127.0.0.1:17890':
-            raise RuntimeError('代理管理中心稳定入口不匹配')
-        component_id = (item or {}).get('id') or 'plugin-'+directory_name
-        policy = next((route for route in self.state.get('component_routes', []) if route['id'] == component_id), None)
-        if policy:
-            http_url = self._component_proxy(policy)
-        return {
-            'protocol': 'astrbot.proxy-manager/v1',
-            'plugin_id': plugin_name,
-            'mode': 'astrbot-environment',
-            'protocols': list(requested),
-            'http_proxy': http_url if 'http' in requested or 'https' in requested or 'websocket' in requested else '',
-            'https_proxy': http_url if 'https' in requested or 'websocket' in requested else '',
-            'no_proxy': list(status.get('no_proxy') or []),
-            'restart': declared.get('restart', 'process'),
-            'revision': str(self.runtime_application.get('applied_revision') or ''),
-            'status': 'configured',
-            'component_id': component_id,
-            'target': policy['target'] if policy else '',
-        }
-
-    @asynccontextmanager
-    async def open_managed_http_client(self, plugin_id: str, *, enabled: bool, **options):
-        """Create a request-scoped public HTTP client using the current lease."""
-        if {'proxy', 'trust_env', 'transport', 'mounts'} & options.keys():
-            raise ValueError('受管理客户端不允许覆盖代理、环境或传输路由')
-        lease = self.get_proxy_manager_lease(plugin_id, enabled=enabled, protocols=['http', 'https'])
-        async with httpx.AsyncClient(proxy=lease['http_proxy'], trust_env=False, **options) as client:
-            yield client
-
-    @staticmethod
-    def _component_support(item: dict) -> tuple[str, str]:
-        declared = item.get('declaration', {})
-        if not set(declared.get('protocols', [])) <= {'http', 'https', 'websocket'}:
-            return '', 'TCP/UDP 需要专用适配，当前无法执行完整组件策略'
-        mode = declared.get('mode')
-        if item.get('kind') == 'plugin' and mode == 'astrbot-environment':
-            return 'local', ''
-        if item.get('kind') == 'mcp':
-            if item.get('locality') == 'stdio' and mode == 'astrbot-environment':
-                return 'local', ''
-            if item.get('locality') == 'container' and mode == 'private-network':
-                return 'private', ''
-        return '', '当前运行边界需要专用适配，不能自动接入组件入口'
-
-    def _component_proxy(self, policy: dict) -> str:
-        from .domain.components import component_entries
-        if not policy['enabled']:
-            raise ValueError('该组件已在代理管理中心停用，受管理请求已拒绝')
-        entry = next(item for item in component_entries(self.state) if item['id'] == policy['id'])
-        if entry['outbound'] == 'REJECT':
-            raise ValueError('组件代理组已失效，受管理请求已拒绝')
-        application = getattr(self, 'runtime_application', {})
-        if (not self.supervisor.status().get('ready') or
-                application.get('status') not in {'applied', 'running_unverified'} or
-                application.get('applied_revision') != self._runtime_revision(self._runtime_document())):
-            raise RuntimeError('组件策略尚未应用或内核不可用，受管理请求已失败关闭')
-        return 'http://127.0.0.1:'+str(policy['port'])
-
-    def _component_inventory(self, audit: dict) -> list[dict]:
-        routes = {item['id']: item for item in self.state.get('component_routes', [])}
-        display_names = {}
-        context = getattr(self, 'context', None)
-        stars = context.get_all_stars() if callable(getattr(context, 'get_all_stars', None)) else []
-        if isinstance(stars, (list, tuple)):
-            for star in stars:
-                directory = getattr(star, 'root_dir_name', None)
-                display_name = getattr(star, 'display_name', None)
-                if directory and isinstance(display_name, str) and display_name.strip():
-                    display_names['plugin-'+str(directory)] = display_name.strip()[:120]
-        result = []
-        for item in [*audit.get('plugin_integrations', []), *audit.get('mcps', [])]:
-            if item.get('declaration', {}).get('state') != 'compatible':
-                continue
-            item = {**item, 'kind': item.get('kind', 'mcp')}
-            if item['kind'] == 'plugin':
-                item['display_name'] = display_names.get(item['id']) or item.get('display_name') or item['name']
-            scope, reason = self._component_support(item)
-            policy = routes.get(item['id'])
-            status, message = 'not_connected', reason or '尚未分配组件策略'
-            if policy:
-                try:
-                    self._component_proxy(policy)
-                    status, message = 'configured', '入口策略已应用，实际组件请求尚未验证'
-                except (ValueError, RuntimeError) as exc:
-                    status, message = ('disabled' if not policy['enabled'] else 'pending_apply'), str(exc)
-            if reason:
-                message = reason
-            result.append({**item, 'supported': bool(scope), 'scope': scope,
-                           'status': status, 'message': message,
-                           'port': policy['port'] if policy else None})
-        return result
-
-    def _prepare_component_routes(self, payload: dict):
-        from .domain.components import normalize_component_routes
-        previous = {item['id']: item for item in self.state.get('component_routes', [])}
-        if not previous and payload.get('component_routes', []) == []:
-            payload['component_routes'] = []
-            return
-        audit = self._refresh_integration_audit(record=False)
-        available = {item['id']: {**item, 'kind': item.get('kind', 'mcp')}
-                     for item in [*audit.get('plugin_integrations', []), *audit.get('mcps', [])]
-                     if item.get('declaration', {}).get('state') == 'compatible'}
-        values = payload.get('component_routes', list(previous.values()))
-        if not isinstance(values, list):
-            raise ValueError('component_routes 必须是数组')
-        candidate, seen = [], set()
-        for value in values:
-            if not isinstance(value, dict) or not isinstance(value.get('id'), str) or value['id'] in seen:
-                raise ValueError('组件策略格式无效或标识重复')
-            component_id = value['id']; seen.add(component_id)
-            old = previous.get(component_id)
-            discovered = available.get(component_id)
-            if not discovered and old:
-                candidate.append({**old, 'enabled': False})
-                continue
-            scope, reason = self._component_support(discovered) if discovered else ('', '组件声明缺失或无效')
-            if value.get('enabled') and not scope:
-                raise ValueError(reason)
-            if value.get('enabled') and old and scope and scope != old['scope']:
-                raise ValueError('组件运行边界已改变，请由管理员迁移入口')
-            if not discovered and not old:
-                raise ValueError('组件未声明有效接入协议')
-            if (value.get('enabled') and not any(group.get('id') == value.get('target') and group.get('enabled', True)
-                                                  for group in payload.get('groups', self.state['groups'])) and
-                    (not old or old.get('target') != value.get('target'))):
-                raise ValueError('请选择存在且启用的组件代理组')
-            candidate.append({**value, 'kind': discovered['kind'] if discovered else old['kind'],
-                              'port': old['port'] if old else None,
-                              'scope': old['scope'] if old else (scope or 'local')})
-        # Removing a row must never recycle its port into another component.
-        candidate.extend({**item, 'enabled': False} for key, item in previous.items() if key not in seen)
-        payload['component_routes'] = normalize_component_routes(candidate)
-
-    async def component_bind(self):
-        try:
-            payload = await request.json()
-            async with self.operation_lock:
-                component_id = str(payload.get('id', ''))
-                policy = next((item for item in self.state.get('component_routes', []) if item['id'] == component_id), None)
-                if not policy or policy['kind'] != 'mcp' or policy['scope'] != 'local':
-                    raise ValueError('仅支持接入已分配策略的 stdio MCP')
-                proxy = self._component_proxy(policy)
-                path = self.traffic_audit.mcp_path
-                original = path.read_text(encoding='utf-8-sig')
-                config = json.loads(original)
-                servers = config.get('mcpServers', {})
-                if not isinstance(servers, dict):
-                    raise ValueError('MCP 配置需要 mcpServers 对象')
-                server = servers.get(component_id.removeprefix('mcp-'))
-                from .traffic.integration import declaration
-                declared = declaration(server.get('proxy_manager')) if isinstance(server, dict) else {}
-                if (not server or not server.get('command') or declared.get('state') != 'compatible' or
-                        self._component_support({'kind':'mcp','locality':'stdio','declaration':declared})[0] != 'local'):
-                    raise ValueError('MCP 配置或协议已改变，请重新检查')
-                env = server.get('env', {})
-                if not isinstance(env, dict):
-                    raise ValueError('MCP env 必须是对象')
-                server['env'] = {**env, **{key: proxy for key in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy','ALL_PROXY','all_proxy')},
-                                 'NO_PROXY':'localhost,127.0.0.1,::1','no_proxy':'localhost,127.0.0.1,::1'}
-                backup = path.with_name('mcp_server.proxy-manager-backup.json')
-                backup_temp = backup.with_suffix('.tmp')
-                backup_temp.write_text(original, encoding='utf-8'); backup_temp.chmod(0o600); backup_temp.replace(backup)
-                temp = path.with_suffix('.proxy-manager.tmp')
-                temp.write_text(json.dumps(config,ensure_ascii=False,indent=2),encoding='utf-8')
-                temp.chmod(0o600)
-                if path.read_text(encoding='utf-8-sig') != original:
-                    temp.unlink()
-                    raise ValueError('MCP 配置已被其他操作修改，请重新检查后接入')
-                temp.replace(path)
-                self._refresh_integration_audit(record=False)
-                self.event({'action':'component_bind','result':'configured','component_id':component_id})
-                return json_response({'snapshot':self.snapshot(), 'message':'MCP 环境已保存，请重启该 MCP 进程；实际请求尚未验证'})
-        except (ValueError, TypeError, RuntimeError, OSError) as exc:
-            return error_response(safe_error(exc))
-
     def _refresh_integration_audit(self, *, record: bool=True) -> dict:
         http_url,_=self._entry_urls()
-        audit=self.traffic_audit.snapshot(http_url,self.state.get('proxy_entry',{}).get('private'), self.state.get('component_routes', []))
+        audit=self.traffic_audit.snapshot(http_url,self.state.get('proxy_entry',{}).get('private'))
         if self.compatibility:
             audit['compatibility']=self.compatibility.as_public_dict()
-        fingerprint=hashlib.sha256(json.dumps({key:audit.get(key) for key in ('providers','platforms','mcps','plugin_integrations')},
+        fingerprint=hashlib.sha256(json.dumps({key:audit.get(key) for key in ('providers','platforms')},
                                               ensure_ascii=False,sort_keys=True).encode()).hexdigest()
         changed=bool(self.integration_fingerprint and self.integration_fingerprint!=fingerprint)
         self.integration_audit=audit; self.integration_fingerprint=fingerprint
         if record and changed:
-            self.event({'action':'integration_check','result':'changed','plugins':len(audit.get('plugin_integrations',[])),
-                        'mcps':len(audit.get('mcps',[]))})
+            self.event({'action':'traffic_audit','result':'changed'})
         return audit
 
     async def _kernel_health_check(self):
@@ -499,6 +284,10 @@ class ProxyManager(Star):
                 return value if isinstance(value,dict) else {}
             except (OSError,ValueError): return {}
         current=load(self.runtime_path)
+        if self._has_legacy_component_routes(current.get('document')):
+            logger.warning('运行修订记录包含已删除的组件入口，已切换为失败关闭配置')
+            return {'status':'fail_closed','adapter':self._adapter().id,
+                    'message':'旧组件入口已删除，请重新应用网址分流配置'}
         if current.get('status') in {'fail_closed','restore_failed','saved','running_unverified'}:
             return current
         if self._verified_recovery_document(current):
@@ -508,6 +297,21 @@ class ProxyManager(Star):
             logger.warning('运行修订记录不完整，已读取最近一份已验证备份')
             return {**recovered,'message':'主运行修订记录不完整，已恢复最近一份已验证备份'}
         return current if isinstance(current,dict) else {}
+
+    @staticmethod
+    def _has_legacy_component_routes(document: object) -> bool:
+        if not isinstance(document, dict):
+            return False
+        for key in ('listeners', 'inbounds'):
+            values=document.get(key)
+            if not isinstance(values, list): continue
+            for value in values:
+                if not isinstance(value, dict): continue
+                tag=str(value.get('name') or value.get('tag') or '')
+                suffix=tag.removeprefix('component-')
+                if tag.startswith('component-') and len(suffix)==24 and all(char in '0123456789abcdef' for char in suffix):
+                    return True
+        return False
 
     def _persist_runtime_application(self,value:dict):
         value={**value,'adapter':value.get('adapter') or self._adapter().id}
@@ -575,7 +379,6 @@ class ProxyManager(Star):
         base='/astrbot_plugin_proxy_manage'
         routes=(
             ('state',self.state_page,['GET']), ('save',self.save,['POST']),
-            ('component-bind',self.component_bind,['POST']),
             ('preview',self.preview,['POST']), ('probe',self.probe,['POST']),
             ('events',self.events_page,['GET']), ('templates',self.templates,['GET']),
             ('rollback',self.rollback,['POST']), ('subscription-preview',self.subscription_preview,['POST']),
@@ -598,7 +401,6 @@ class ProxyManager(Star):
             ('astrbot-proxy-enable',self.astrbot_proxy_enable,['POST']),
             ('astrbot-proxy-restore',self.astrbot_proxy_restore,['POST']),
             ('verify-astrbot-egress',self.verify_astrbot_egress,['POST']),
-            ('integration-check',self.integration_check,['POST']),
         )
         for name,handler,methods in routes:
             self.context.register_web_api(base+'/'+name,handler,methods,'代理管理中心')
@@ -641,7 +443,6 @@ class ProxyManager(Star):
         result['astrbot_proxy']=astrbot
         audit=getattr(self,'integration_audit',{}) if hasattr(self,'traffic_audit') else {}
         result['traffic_audit']=audit
-        result['components']=self._component_inventory(audit)
         compatibility=getattr(self,'compatibility',None)
         result['compatibility']=compatibility.as_public_dict() if compatibility else {
             'state':'not_installed','message':'官方兼容层尚未安装','platforms':{},'providers':{}
@@ -746,7 +547,7 @@ class ProxyManager(Star):
     @staticmethod
     def _audit_change_counts(previous:dict,candidate:dict) -> dict:
         result={}
-        for key in ('subscriptions','nodes','groups','routes','rule_groups','component_routes'):
+        for key in ('subscriptions','nodes','groups','routes','rule_groups'):
             old={str(item.get('id')):item for item in previous.get(key,[]) if isinstance(item,dict)}
             new={str(item.get('id')):item for item in candidate.get(key,[]) if isinstance(item,dict)}
             added=set(new)-set(old); deleted=set(old)-set(new)
@@ -761,18 +562,12 @@ class ProxyManager(Star):
     async def events_page(self): return json_response({'events':redact_diagnostics(self.events[-100:])})
     async def templates(self): return json_response({'templates':TEMPLATES})
 
-    async def integration_check(self):
-        async with self.operation_lock:
-            audit=self._refresh_integration_audit(record=True)
-        return json_response({'audit':audit,'snapshot':self.snapshot()})
-
     async def save(self):
         try:
             payload=await request.json()
             if not isinstance(payload,dict): raise ValueError('配置格式无效')
+            self._restore_redacted(payload); self._validate_subscription_save(payload); candidate=self._validate(payload)
             async with self.operation_lock:
-                self._restore_redacted(payload); self._validate_subscription_save(payload)
-                self._prepare_component_routes(payload); candidate=self._validate(payload)
                 previous=self.state
                 try: await self.persist(candidate)
                 except Exception:
@@ -1595,6 +1390,8 @@ class ProxyManager(Star):
         return self._adapter().fail_closed_document(control, entry)
 
     def _verified_recovery_document(self, application: object):
+        if isinstance(application, dict) and self._has_legacy_component_routes(application.get('document')):
+            return None
         return verified_recovery_document(application, self._adapter())
 
     def _adapter_apply_runtime(self, config_path: Path) -> dict:

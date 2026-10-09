@@ -82,9 +82,7 @@ class SingBoxAdapter(CoreAdapter):
                 outbounds.append({'type':'selector','tag':tag,'outbounds':members,
                                   'default':runnable[group['selected']]['kernel_name'] if group.get('selected') in runnable else members[0]})
         names={group['id']:('DIRECT' if group['id']=='direct' else group.get('kernel_name','group-'+group['id'])) for group in state['groups']}
-        from ..domain.components import component_entries
-        components=component_entries(state)
-        rules=[{'inbound':[item['tag']],'action':'route','outbound':item['outbound']} for item in components]
+        rules=[]
         for route in compiled:
             target=names.get(route['target'])
             if not target: continue
@@ -95,13 +93,7 @@ class SingBoxAdapter(CoreAdapter):
             payload=str(route.get('payload') or route.get('host','')).removeprefix('*.')
             rules.append({key:[payload],'action':'route','outbound':target})
         control=state['control']; entry=state['proxy_entry']
-        inbounds=self._inbounds(entry)
-        for item in components:
-            inbound={'type':'http','tag':item['tag'],'listen':item['listen'],'listen_port':item['port']}
-            if item.get('username'):
-                inbound['users']=[{'username':item['username'],'password':item['password']}]
-            inbounds.append(inbound)
-        return {'log':{'level':'warn'},'inbounds':inbounds,
+        return {'log':{'level':'warn'},'inbounds':self._inbounds(entry),
                 'outbounds':outbounds,'route':{'rules':rules,'final':'DIRECT','auto_detect_interface':True},
                 'experimental':{'clash_api':{'external_controller':control.get('listen','127.0.0.1:19090'),
                                                'secret':control.get('secret','')}}}
@@ -123,8 +115,7 @@ class SingBoxAdapter(CoreAdapter):
     def expected_rules(self, document: dict) -> list[tuple[str,str,str]]:
         result=[]
         for rule in document.get('route',{}).get('rules',[]):
-            if rule.get('inbound'): kind,payload='IN-NAME',rule['inbound'][0]
-            elif rule.get('domain'): kind,payload='DOMAIN',rule['domain'][0]
+            if rule.get('domain'): kind,payload='DOMAIN',rule['domain'][0]
             elif rule.get('domain_suffix'): kind,payload='DOMAIN-SUFFIX',rule['domain_suffix'][0]
             else: kind,payload='',''
             result.append((kind,payload,rule.get('outbound','')))
@@ -135,11 +126,7 @@ class SingBoxAdapter(CoreAdapter):
     def _runtime_rule(value: object) -> tuple[str,str,str] | None:
         if not isinstance(value,dict):
             return None
-        if value.get('inbound'):
-            kind,payload='IN-NAME',value['inbound'][0]
-        elif str(value.get('type','')).upper() in {'IN-NAME','INBOUND'}:
-            kind,payload='IN-NAME',str(value.get('payload',''))
-        elif value.get('domain'):
+        if value.get('domain'):
             kind,payload='DOMAIN',value['domain'][0]
         elif value.get('domain_suffix'):
             kind,payload='DOMAIN-SUFFIX',value['domain_suffix'][0]

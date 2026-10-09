@@ -21,14 +21,6 @@ class TrafficRegistry:
          'method': '平台专用 proxy 字段或 SDK 代理能力',
          'verification': '重启适配器后对 HTTP、WebSocket、媒体分别关联内核连接记录',
          'bypass_risk': 'SDK 长连接、媒体客户端或 webhook 可能不继承环境'},
-        {'id': 'plugin-http', 'name': '插件公共 HTTP 客户端', 'restart': False,
-         'method': '继承核心代理或显式配置',
-         'verification': '插件声明接入点并提供无凭据请求级验证',
-         'bypass_risk': '第三方插件可使用 trust_env=false、裸 socket 或自建客户端'},
-        {'id': 'mcp-egress', 'name': 'MCP 外部请求', 'restart': True,
-         'method': 'stdio 注入回环代理；独立容器使用带随机认证的私网入口；同机进程需受控回环转发',
-         'verification': '每个 MCP 的无业务凭据出站请求与内核记录',
-         'bypass_risk': 'MCP 可显式禁用环境代理、使用裸 socket，或从独立网络直接出站'},
         {'id': 'updates', 'name': '插件市场与依赖下载', 'restart': False,
          'method': '更新组件显式使用稳定入口',
          'verification': '下载请求的内核记录和制品摘要校验',
@@ -131,17 +123,13 @@ class TrafficRegistry:
                 self._provider_status(item, audit, astrbot, policy)
             elif identifier == 'platform-sdk':
                 self._platform_status(item, audit, astrbot, policy)
-            elif identifier == 'plugin-http':
-                self._plugin_status(item, audit, astrbot)
-            elif identifier == 'mcp-egress':
-                self._mcp_status(item, audit)
             elif identifier == 'updates':
                 item.update({'status': 'not_connected', 'message': '插件市场、GitHub、PyPI 和依赖安装器尚未统一接入稳定入口'})
             else:
                 item.update({'status': 'not_connected', 'message': '当前版本尚未实现该接入点的配置与验证'})
             if 'integration' not in item:
                 item['integration'] = {
-                    'state': policy if identifier in {'astrbot-http-proxy', 'updates', 'recent-verification'} else 'needs_protocol',
+                    'state': policy,
                     'mode': 'astrbot-environment' if identifier == 'astrbot-http-proxy' else '',
                     'message': '默认未命中规则由统一内核选择 DIRECT',
                 }
@@ -210,51 +198,6 @@ class TrafficRegistry:
             },
         })
 
-    @staticmethod
-    def _plugin_status(item: dict, audit: dict, astrbot: dict) -> None:
-        count = int(audit.get('plugin_count', 0) or 0)
-        declarations = audit.get('plugin_integrations', [])
-        compatible = [value for value in declarations if (value.get('declaration') or {}).get('state') == 'compatible']
-        environment = [value for value in compatible if value['declaration'].get('mode') == 'astrbot-environment']
-        if environment:
-            integration = 'configured' if astrbot.get('effective') else 'pending'
-            message = '发现 ' + str(len(environment)) + ' 个插件声明遵守 AstrBot 代理环境；尚无请求级证据'
-        elif compatible:
-            integration = 'declared'
-            message = '发现 ' + str(len(compatible)) + ' 个插件已声明协议，但未声明使用 AstrBot 代理环境'
-        else:
-            integration = 'needs_protocol'
-            message = '发现 ' + str(count) + ' 个插件配置项；尚无有效统一接入协议声明'
-        item.update({
-            'status': 'unknown' if environment and astrbot.get('effective') else 'not_connected',
-            'message': message,
-            'discovered': declarations,
-            'integration': {
-                'state': integration,
-                'mode': 'astrbot-environment',
-                'message': '第三方插件通过 astrbot.proxy-manager/v1 声明出站兼容性',
-            },
-        })
-
-    @staticmethod
-    def _mcp_status(item: dict, audit: dict) -> None:
-        mcps = audit.get('mcps', [])
-        configured = [value for value in mcps if value.get('proxy') == 'configured']
-        observed = [value for value in mcps if value.get('proxy') in {'configured', 'other_proxy'}]
-        compatible = [value for value in mcps if (value.get('declaration') or {}).get('state') == 'compatible']
-        supported_configured = [value for value in configured if value.get('protocol_connected')]
-        item.update({
-            'status': 'unknown' if observed else 'not_connected',
-            'message': '发现 ' + str(len(configured)) + ' 个 MCP 已配置入口，但尚无请求级出口证据' if configured else
-                       ('发现 MCP 使用其他或不完整代理入口，尚无请求级出口证据' if observed else
-                        ('发现 ' + str(len(mcps)) + ' 个 MCP，尚未配置或无法安全接入其外部出口' if mcps else '未发现 MCP 配置')),
-            'discovered': mcps,
-            'integration': {
-                'state': 'configured' if supported_configured else ('declared' if compatible else 'needs_protocol'),
-                'mode': 'protocol',
-                'message': 'MCP 通过 astrbot.proxy-manager/v1 声明 stdio 或私网入口兼容性',
-            },
-        })
 
 
 TRAFFIC_REGISTRY = TrafficRegistry()

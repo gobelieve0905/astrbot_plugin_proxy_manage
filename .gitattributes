@@ -1,7 +1,5 @@
 AGENTS.md export-ignore
 /docs export-ignore
-# 插件间接入协议为开发资料，README/使用指南使用 GitHub 链接
-docs/INTEGRATION_PROTOCOL.md export-ignore
 # UI 开发规范只保留在 GitHub 仓库，不进入插件市场安装包
 docs/UI_CHECKLIST.md export-ignore
 docs/UI_ISSUE_SUMMARY.md export-ignore

@@ -10,7 +10,6 @@
 | --- | --- |
 | [使用指南](USER_GUIDE.md) | 安装、首次接入、日常操作、支持矩阵和故障处理 |
 | [更新日志](CHANGELOG.md) | 按版本和日期记录用户可见变化 |
-| [插件与 MCP 接入协议](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/develop/docs/INTEGRATION_PROTOCOL.md) | AstrBot 市场插件与 MCP 的用户选择接入、客户端实现、失败关闭和验收要求 |
 | [产品定义与架构约束](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/PRODUCT_DEFINITION.md) | 产品边界、内核抽象、流量范围、安全模型和最终验收标准 |
 | [UI 开发与验收规范](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/UI_CHECKLIST.md) | 页面生命周期、脱敏、响应式和验收清单 |
 | [UI 问题复盘](https://github.com/gobelieve0905/astrbot_plugin_proxy_manage/blob/main/docs/UI_ISSUE_SUMMARY.md) | 已知页面故障模式和修复流程 |
@@ -20,11 +19,10 @@
 - 自管 Mihomo、sing-box 和 Xray 内核：固定官方制品、SHA-256 校验、安装、启停、切换、更新、卸载和失败恢复。
 - 订阅导入与刷新：支持单条或批量导入、节点差异、流量/到期信息、失效引用和订阅级忽略记录。
 - 节点、代理组和分流规则管理：支持筛选、测速、`select`、`url-test`、`fallback`、规则优先级和配置预览。
-- AstrBot 出站接入：维护全局代理入口、已验证的官方兼容层和 AstrBot 市场插件/MCP 的 `astrbot.proxy-manager/v1` 协议；第三方组件按用户选择接入，声明与请求级验证分别记录。
-- 插件与 MCP 流量面板：发现兼容声明，逐组件指定代理组和管理开关；三种内核通过专用入口执行来源路由，市场插件使用 lease，stdio MCP 可显式保存代理环境，私网 MCP 由管理员注入认证入口。尚未完成组件请求级验证的项目保持未验证。
+- AstrBot 出站接入：维护全局代理入口、已验证的官方兼容层和第三方插件/MCP 的统一入口流量边界说明。
 - 机器人平台兼容层：已适配 AstrBot 4.28.1/4.28.2 下的飞书/Lark 与 Telegram；两者的兼容层范围和真实传输验证状态见下表，其他平台 SDK 不作兼容承诺。
 - 运行核对与安全边界：区分已接管、明确直连、未接入和无法判定；配置失败时使用失败关闭和可信回滚，不静默回落直连。
-- 真实流量回归矩阵：覆盖 AstrBot 全局 HTTP、Provider、飞书/Telegram 的 HTTP、WebSocket、媒体和轮询，以及第三方插件、stdio MCP、私网 MCP；每个用例记录入口、规则、节点链路和出口证据。
+- 真实流量回归矩阵：覆盖 AstrBot 全局 HTTP、Provider、飞书/Telegram 的 HTTP、WebSocket、媒体和轮询，以及 AstrBot 核心、Provider 和平台 SDK；第三方插件/MCP 只按统一入口和网址规则处理。
 
 ## 首次使用
 
@@ -115,7 +113,7 @@ AstrBot 4.28.2 内置 44 类 Provider 的逐项适配范围如下。表中的“
 | 制品来源 | 固定官方 URL、SHA-256 校验和离线上传；不使用 `latest` 或未经验证的镜像 |
 | 机器人平台 SDK | 已适配飞书/Lark（`lark-oapi` 1.7.3）和 Telegram（`python-telegram-bot` 22.8）；各传输验证状态见上表，其他平台 SDK 不作兼容承诺 |
 | 模型 Provider | 44 类全部进入显式注册表；30 类已验证流量受稳定入口控制，14 类及未知类型保持“未验证”，逐项名单见上表 |
-| 不自动接入 | 裸 socket、显式 `trust_env=false`、未声明的第三方插件和未受信的独立容器 |
+| 不自动接入 | 裸 socket、显式 `trust_env=false`、自带代理和未受信的独立容器；这些流量不会自动进入统一入口 |
 
 未知或暂未验证的协议会保留原始信息并明确标记，不会静默写入运行配置。Xray 的代理组控制能力有限，页面会按实际能力提示。没有内核时仍可整理订阅、节点、代理组和规则，但原生协议测速、配置应用和出口验证会显示缺少的运行条件。
 

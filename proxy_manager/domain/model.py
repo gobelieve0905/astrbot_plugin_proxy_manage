@@ -7,7 +7,6 @@ import re
 from .constants import DIRECT, HTTP_PROTOCOLS, KINDS, MATCHES, MODES, RULE_TYPE_ALIASES, RULE_TYPE_SET
 from .identity import canonical_connection, infer_protocol, parameter_version, protocol_support, region_of, stable_node_id, suspected_notice
 from .security import ident, safe_proxy_endpoint, safe_url
-from .components import normalize_component_routes
 
 
 def executor_for(protocol: str, item: dict|None=None) -> tuple[str,list[str]]:
@@ -294,10 +293,9 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
     entry=source.get('proxy_entry') if isinstance(source.get('proxy_entry'),dict) else {}
     private=entry.get('private') if isinstance(entry.get('private'),dict) else {}
     return {
-        'version':6, 'migration':{'stable_identity':2,'core_adapter':2,'private_entry':1,'core_preferences':1,'component_routes':1}, 'name':str(source.get('name','默认配置'))[:80],
+        'version':6, 'migration':{'stable_identity':2,'core_adapter':2,'private_entry':1,'core_preferences':1}, 'name':str(source.get('name','默认配置'))[:80],
         'nodes':nodes, 'groups':groups, 'routes':routes, 'rule_groups':rule_groups, 'platforms':platforms,
         'subscriptions':subscriptions,
-        'component_routes':normalize_component_routes(source.get('component_routes', [])),
         'control':{'enabled':bool(control.get('enabled',False)),'url':str(control.get('url','')).rstrip('/')[:300],
                    'secret':str(control.get('secret',''))[:500],'timeout':max(3,min(timeout,30)),
                    'deployment':control.get('deployment') if control.get('deployment') in {'existing','dedicated'} else 'existing',

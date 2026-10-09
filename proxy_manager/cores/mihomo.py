@@ -109,9 +109,7 @@ class MihomoAdapter(CoreAdapter):
                 if group.get('failure_policy','fail-closed')=='fail-closed': item['lazy']=False
             groups.append(item)
         names={item['id']:('DIRECT' if item['id']=='direct' else item.get('kernel_name','group-'+item['id'])) for item in state['groups']}
-        from ..domain.components import component_entries
-        components=component_entries(state)
-        rules=['IN-NAME,'+item['tag']+','+item['outbound'] for item in components]
+        rules=[]
         for route in compiled:
             if route['target'] not in names: continue
             rule_type=str(route.get('type') or ('DOMAIN' if route.get('match')=='exact' else 'DOMAIN-SUFFIX')).upper()
@@ -129,13 +127,6 @@ class MihomoAdapter(CoreAdapter):
             port=urlsplit(entry.get('http_url','')).port if entry.get('http_url') else None
             if port: document.update({'mixed-port':port,'allow-lan':False,'bind-address':'127.0.0.1'})
             document['listeners']=self._private_listener(entry)
-            for item in components:
-                listener={'name':item['tag'],'type':'http','port':item['port'],'listen':item['listen']}
-                if item.get('username'):
-                    listener['users']=[{'username':item['username'],'password':item['password']}]
-                document['listeners'].append(listener)
-        elif components:
-            raise ValueError('组件策略需要插件专用内核')
         yaml.safe_load(yaml.safe_dump(document,allow_unicode=True,sort_keys=False))
         return document
 
@@ -171,8 +162,6 @@ class MihomoAdapter(CoreAdapter):
             return None
         kind=str(value.get('type','')).strip().upper()
         kind={
-            'INNAME':'IN-NAME',
-            'IN_NAME':'IN-NAME',
             'DOMAINSUFFIX':'DOMAIN-SUFFIX',
             'DOMAIN_SUFFIX':'DOMAIN-SUFFIX',
         }.get(kind,kind)

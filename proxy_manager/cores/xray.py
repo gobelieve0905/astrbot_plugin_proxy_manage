@@ -198,9 +198,7 @@ class XrayAdapter(CoreAdapter):
             outbounds.append({'protocol': 'freedom', 'tag': names[group['id']],
                               'proxySettings': {'tag': selected['kernel_name']} if selected else None})
         outbounds = [item for item in outbounds if item.get('proxySettings') is not None or item.get('protocol') != 'freedom' or item.get('tag') in {'DIRECT'}]
-        from ..domain.components import component_entries
-        components = component_entries(state)
-        rules = [{'type':'field','inboundTag':[item['tag']],'outboundTag':item['outbound']} for item in components]
+        rules = []
         for route in compiled:
             target = names.get(route['target'])
             if not target:
@@ -222,12 +220,6 @@ class XrayAdapter(CoreAdapter):
             {'tag': 'proxy-entry-socks', 'listen': '127.0.0.1', 'port': socks_port, 'protocol': 'socks',
              'settings': {'auth': 'noauth', 'udp': True}},
         ]
-        for item in components:
-            settings={'accounts':[]}
-            if item.get('username'):
-                settings['accounts']=[{'user':item['username'],'pass':item['password']}]
-            inbounds.append({'tag':item['tag'],'listen':item['listen'],'port':item['port'],
-                             'protocol':'http','settings':settings})
         if private.get('enabled'):
             inbounds.append({'tag': 'private-proxy-entry', 'listen': private.get('listen', '0.0.0.0'),
                              'port': int(private.get('port', 17891)), 'protocol': 'http',
@@ -252,8 +244,6 @@ class XrayAdapter(CoreAdapter):
     def expected_rules(self, document: dict) -> list[tuple[str, str, str]]:
         result = []
         for rule in document.get('routing', {}).get('rules', []):
-            if rule.get('inboundTag'):
-                result.append(('IN-NAME',rule['inboundTag'][0],str(rule.get('outboundTag',''))))
             domains = rule.get('domain') or []
             for domain in domains:
                 kind = 'DOMAIN' if str(domain).startswith('full:') else 'DOMAIN-SUFFIX'
