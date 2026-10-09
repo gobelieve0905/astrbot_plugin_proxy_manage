@@ -29,10 +29,6 @@ else:
     from proxy_manager.plugin import ProxyManager as _ProxyManager
 
 
-@register('astrbot_plugin_proxy_manage','gobelieve','AstrBot 统一出站流量控制面','0.4.2')
+@register('astrbot_plugin_proxy_manage','gobelieve','AstrBot 统一出站流量控制面','0.4.3')
 class ProxyManager(_ProxyManager):
-    async def initialize(self):
-        await super().initialize()
-
-    async def terminate(self):
-        await super().terminate()
+    pass

@@ -8,11 +8,11 @@ if (!api || typeof api.ready !== 'function') {
 }
 const groupHelpReadHint = '打开页面时静默读取';
 const titles = {overview:'概览',subscriptions:'订阅管理',nodes:'代理节点',groups:'代理组',routes:'分流规则',control:'内核管理',logs:'审计历史'}
-const subtitles = {overview:'运行状态、节点健康和真实流量接入范围',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名、模板和目标出口',control:'管理插件自有内核、制品与运行配置',logs:'查看配置修改、订阅、内核和连接验证事件'}
+const subtitles = {overview:'配置状态、全局代理与实际出口',subscriptions:'导入、刷新并维护订阅来源',nodes:'筛选节点、核对支持状态并执行测速',groups:'组织出口节点与故障处理策略',routes:'按优先级管理域名、模板和目标出口',control:'管理插件自有内核、制品与运行配置',logs:'查看配置修改、订阅、内核和连接验证事件'}
   let state, original, tab='overview', controlResult=null, groupStatusFetchedAt=0, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set(), ruleEditorMode='rows', subscriptionDialogReturnFocus=null, subscriptionDialogId='', subscriptionDialogEditing=false, subscriptionDialogDraft=null, auditDialogReturnFocus=null, auditDialogEventIndex=-1
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
-let noticeTimer=null
+let noticeTimer=null, previewResult=null, previewHost='', verificationUrl='https://api.ipify.org?format=json'
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 function note(text,error=false){
@@ -248,10 +248,26 @@ function kernelCard(item,current){
 }
 function nextRun(item){ if(!item.enabled||!item.interval)return '手动'; return item.next_refresh_at<=Date.now()/1000?'即将刷新':time(item.next_refresh_at) }
 function verificationPanel(value){
-  const verification=value||{entry:{state:'not_started',message:'尚未验证'},rule:{state:'not_started',message:'尚未验证'},exit:{state:'unconfirmed',message:'尚未验证'}}
+  if(!value)return '<p class="overview-empty">尚未验证实际出口。</p>'
   const labels={passed:'入口请求成功',failed:'入口请求失败',matched:'规则已命中',default:'默认 MATCH 规则',confirmed:'出口已确认',unconfirmed:'无法判定',not_started:'尚未验证'}
-  const levels=[['入口',verification.entry],['规则',verification.rule],['出口',verification.exit]]
-  return `<div class="verification-levels">${levels.map(([label,item])=>`<article class="verification ${esc(item?.state||'not_started')}"><small>${label}</small><b>${esc(labels[item?.state]||'无法判定')}</b><span>${esc(item?.message||'')}</span>${item?.ip?`<code>${esc(item.ip)}</code>`:''}</article>`).join('')}</div>`
+  const levels=[['入口',value.entry],['规则',value.rule],['出口',value.exit]]
+  return `<div class="verification-levels">${levels.map(([label,item])=>`<article class="verification ${esc(item?.state||'not_started')}"><small>${label}</small><b>${esc(labels[item?.state]||'无法判定')}</b>${item?.ip?`<code>${esc(item.ip)}</code>`:''}</article>`).join('')}</div><details class="overview-details"><summary>查看验证证据${value.at?` · ${time(value.at)}`:''}</summary><dl class="overview-evidence"><div><dt>验证入口</dt><dd>${value.scope==='astrbot-core'?'AstrBot 核心全局代理':'稳定代理入口'}</dd></div>${levels.map(([label,item])=>`<div><dt>${label}</dt><dd>${esc(item?.message||'尚未取得证据')}</dd></div>`).join('')}${value.runtime_revision&&value.runtime_revision!==state.application?.applied_revision?'<div><dt>配置状态</dt><dd>验证结果属于旧配置，请重新验证。</dd></div>':''}</dl></details>`
+}
+function previewPanel(value){
+  if(!value)return '<p class="overview-empty">输入域名查看配置中命中的代理组和节点。</p>'
+  const rule=value.matched,group=value.group,node=value.node
+  return `<dl class="overview-evidence"><div><dt>域名</dt><dd>${esc(value.host)}</dd></div><div><dt>规则</dt><dd>${esc(rule?state.rule_groups.find(item=>item.id===rule.rule_group_id)?.name||rule.type||rule.match||'匹配规则':'默认 MATCH')}</dd></div><div><dt>代理组</dt><dd>${esc(group?.name||'DIRECT')}</dd></div><div><dt>节点</dt><dd>${esc(node?nodeLabel(state.nodes.find(item=>item.id===node.id)||node):'直连或暂无可用节点')}</dd></div></dl>`
+}
+async function verifyEgress(endpoint){
+  const buttons=[$('verify-astrbot-egress'),$('verify-outbound')].filter(Boolean)
+  buttons.forEach(button=>button.disabled=true)
+  note('正在验证实际出口…')
+  try{
+    const result=await api.apiPost(endpoint,{url:verificationUrl})
+    state.application={...(state.application||{}),verification:result}
+    if(endpoint==='verify-astrbot-egress')await load();else render()
+    note(result.verified?'出口已确认':'验证未能确认实际出口，请展开查看证据',!result.verified)
+  }catch(error){note(error.message,true)}finally{buttons.forEach(button=>button.disabled=false)}
 }
 
 function render(){
@@ -259,18 +275,16 @@ function render(){
   document.querySelectorAll('[data-tab]').forEach(button=>{button.classList.toggle('active',button.dataset.tab===tab);button.setAttribute('aria-current',button.dataset.tab===tab?'page':'false')})
   $('content').dataset.view=tab; let html=''
   if(tab==='overview'){
-    const values=Object.values(state.health||{})
-    const ok=values.filter(item=>item.status==='ok').length, bad=values.filter(item=>['error','timeout'].includes(item.status)).length
     const kernelText={not_installed:'未安装',invalid:'校验失败',unsupported:'平台不支持',stopped:'已停止',failed:'运行失败',connection_failed:'连接失败',version_unsupported:'版本不支持',saved:'已保存',pending_apply:'待应用',applied:'已应用',running_unverified:'运行中但无法判定',running_limited:'运行中但无法判定',runtime_inconsistent:'运行配置不一致',restore_failed:'恢复失败',fail_closed:'失败关闭'}[kernelStatus.state]||'未检查'
-    const kernelClass=kernelStatus.state==='applied'?'online':(['failed','connection_failed','runtime_inconsistent','restore_failed'].includes(kernelStatus.state)?'error':'neutral')
-    const recoveryHint=kernelStatus.recovery_hint||''
-    html=`<div class="hero"><div><small>当前配置</small><strong>${esc(state.name)}</strong></div><div class="runtime-state"><span class="${kernelClass}">内核：${kernelText}</span><small>${esc(kernelStatus.message||'')}</small>${recoveryHint?`<small class="recovery-hint">${esc(recoveryHint)}</small>`:''}</div></div>
-      <div class="cards metric-row metric-row-primary">${[['subscriptions','订阅'],['nodes','节点'],['groups','代理组'],['routes','规则']].map(([key,label])=>`<article><b>${key==='groups'?state.groups.filter(group=>group.id!=='direct').length:state[key].length}</b><span>${label}</span></article>`).join('')}</div>
-      <div class="cards metric-row metric-row-secondary"><article><b>${ok}</b><span>可用节点</span></article><article><b>${bad}</b><span>异常节点</span></article><article><b>${state.subscriptions.filter(item=>item.enabled&&item.interval).length}</b><span>自动订阅</span></article><article><b>${state.events.length}</b><span>最近事件</span></article></div>
-      <section class="panel"><div class="section-head"><div><small>真实接入范围</small><h2>AstrBot 流量清单</h2><p class="muted panel-lede">只显示当前状态；详细接入诊断信息保留在审计记录中。</p></div></div><div class="traffic-inventory">${(state.traffic_inventory||[]).filter(item=>!['platform-sdk','provider-proxy'].includes(item.id)).map(item=>`<article><div><b>${esc(item.name)}</b><small>${esc(item.message||'')}</small></div><span class="traffic-state ${esc(item.status)}">${esc({managed:'已接管',direct:'明确直连',not_connected:'未接入',unknown:'无法判定'}[item.status]||'无法判定')}</span></article>`).join('')}</div></section>
-      <section class="panel"><div class="bar"><div><small>AstrBot 核心流量</small><h2>全局代理接入</h2></div><div class="actions"><button id="astrbot-proxy-enable" ${state.astrbot_proxy?.effective?'disabled':''}>接入稳定入口</button><button id="astrbot-proxy-restore" ${state.astrbot_proxy?.backup_available?'':'disabled'}>恢复旧配置</button></div></div><div class="proxy-status"><b>${esc(state.astrbot_proxy?.status||'not_connected')}</b><span>${esc(state.astrbot_proxy?.message||'AstrBot 全局代理状态待检查')}</span><code>${esc((state.astrbot_proxy?.no_proxy||[]).join(', ')||'--')}</code></div>${state.astrbot_proxy?.restart_required?'<p class="muted">AstrBot 需要重启后才会使用新的全局代理配置。</p>':''}</section>
-      <section class="panel"><div class="section-head"><div><small>规则诊断</small><h2>分流预览</h2></div></div><div class="inline"><input id="host" placeholder="api.telegram.org"><button id="preview">查询</button></div><pre id="result">输入域名查看命中的代理组和节点。</pre></section>`
-    html+=`<section class="panel"><h2>实际出站验证</h2><p class="muted">核心验证使用 AstrBot 当前进程的全局代理环境；只有目标返回出口 IP 且内核记录可关联规则与链路时才确认。</p><div class="inline"><input id="verify-url" value="https://api.ipify.org?format=json"><button id="verify-astrbot-egress">验证 AstrBot 核心出口</button><button id="verify-outbound">验证稳定入口</button></div>${verificationPanel(state.application?.verification)}<pre id="verify-result">${esc(state.application?.verification?JSON.stringify(state.application.verification,null,2):'尚未验证。')}</pre></section>`
+    const kernelClass=kernelStatus.state==='applied'?'online':(['failed','connection_failed','runtime_inconsistent','restore_failed','fail_closed'].includes(kernelStatus.state)?'error':'neutral')
+    const recoveryHint=kernelStatus.recovery_hint||'',proxy=state.astrbot_proxy||{}
+    const proxyLabel={active:'入口已生效',pending_restart:'等待重启',restore_pending_restart:'恢复后待重启',restart_required:'等待重启',drifted:'配置不一致',restored:'已恢复旧配置',not_connected:'未接入'}[proxy.status]||'待检查'
+    const trafficState=(state.traffic_inventory||[]).find(item=>item.id==='astrbot-http-proxy')
+    html=`<div class="hero"><div><small>当前配置</small><strong>${esc(state.name)}</strong></div><div class="runtime-state"><span class="${kernelClass}">内核：${kernelText}</span>${kernelStatus.state!=='applied'?`<small>${esc(kernelStatus.message||'')}</small>`:''}${recoveryHint?`<small class="recovery-hint">${esc(recoveryHint)}</small>`:''}</div></div>
+      <div class="cards">${[['订阅',state.subscriptions.length],['节点',state.nodes.length],['代理组',editableGroups().length],['规则组',(state.rule_groups||[]).length]].map(([label,count])=>`<article><b>${count}</b><span>${label}</span></article>`).join('')}</div>
+      <section class="panel overview-proxy"><div class="bar"><div><h2>全局代理接入</h2><span class="chip ${proxy.effective?'ok':'pending'}">${proxyLabel}</span></div><div class="actions"><button id="astrbot-proxy-enable" ${proxy.effective?'disabled':''}>接入稳定入口</button><button id="astrbot-proxy-restore" ${proxy.backup_available?'':'disabled'}>恢复旧配置</button></div></div><p class="proxy-evidence">${esc(trafficState?.message||proxy.message||'AstrBot 全局代理状态待检查')}</p>${proxy.restart_required?'<p class="overview-warning" role="status">需要重启 AstrBot 后核对代理接入状态。</p>':''}</section>
+      <section class="panel overview-verification"><h2>实际出站验证</h2>${verificationPanel(state.application?.verification)}<details class="overview-details"><summary>发起验证</summary><label class="overview-field" for="verify-url">验证地址<input id="verify-url" type="url" value="${esc(verificationUrl)}"></label><div class="actions"><button id="verify-astrbot-egress">验证 AstrBot 核心出口</button><button id="verify-outbound">验证稳定入口</button></div></details></section>
+      <details class="panel overview-preview"><summary>分流预览</summary><label class="overview-field" for="host">目标域名</label><div class="inline"><input id="host" value="${esc(previewHost)}" placeholder="api.telegram.org"><button id="preview">查询</button></div><div id="result" aria-live="polite">${previewPanel(previewResult)}</div></details>`
   } else if(tab==='subscriptions'){
     const shown=state.subscriptions
     html=`<section class="panel import-entry-panel"><div class="bar"><div><small>来源接入</small><h2>导入订阅</h2><p class="muted">先预览节点、协议和地区，再确认写入配置。</p></div><div class="actions"><button id="open-single-import" class="primary">导入订阅</button><button id="open-batch-import">批量导入</button></div></div></section>
@@ -639,14 +653,6 @@ function deleteConfigItem(kind,itemId){
 }
 
 function bind(){
-  document.querySelectorAll('[data-k]').forEach(input=>input.addEventListener('change',()=>{
-    const row=input.closest('[data-i]'); if(!row)return
-    if(tab==='subscriptions'){ const item=state.subscriptions[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value }
-    else if(tab==='nodes'){ const item=state.nodes[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.value; if(input.dataset.k==='name'){item.display_name=input.value;item.user_alias=input.value} }
-    else if(tab==='groups'){ const item=state.groups[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='number'?Number(input.value):input.value }
-    else { const item=state.rule_groups[Number(row.dataset.i)]; item[input.dataset.k]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value }
-  }))
-  document.querySelectorAll('[data-domains]').forEach(input=>input.addEventListener('change',()=>{const item=state.rule_groups[Number(input.closest('[data-i]').dataset.i)];item.domains=input.value.split('\n').map(line=>line.trim().split(/\s+/,2)).filter(parts=>parts.length===2).map(([match,host])=>({match:match==='suffix'?'suffix':'exact',host}))}))
   document.querySelectorAll('[data-node-details]').forEach(button=>button.addEventListener('click',()=>openNodeDialog(button.dataset.nodeDetails)))
   document.querySelectorAll('[data-sub-details]').forEach(button=>button.addEventListener('click',()=>openSubscriptionDialog(button.dataset.subDetails)))
   document.querySelectorAll('[data-audit-details]').forEach(button=>button.addEventListener('click',()=>openAuditDialog(button.dataset.auditDetails)))
@@ -693,9 +699,14 @@ function bind(){
   $('test-all')?.addEventListener('click',()=>startProbe(state.nodes.map(node=>node.id),'全部节点测速'))
   $('cancel-probe')?.addEventListener('click',async()=>{await api.apiPost('probe-task-cancel',{task_id:probeTask.id});note('正在取消测速任务')})
   ;['node-source','node-protocol','node-region','node-status'].forEach(id=>$(id)?.addEventListener('change',render))
-  $('preview')?.addEventListener('click',async()=>{$('result').textContent=JSON.stringify(await api.apiPost('preview',{host:$('host').value}),null,2)})
-  $('verify-outbound')?.addEventListener('click',async()=>{try{const result=await api.apiPost('verify-outbound',{url:$('verify-url').value});state.application={...(state.application||{}),verification:result};render();note(result.verified?'出口已确认':'验证未能确认实际出口，请查看三个层级的证据',!result.verified)}catch(error){note(error.message,true)}})
-  $('verify-astrbot-egress')?.addEventListener('click',async()=>{try{const result=await api.apiPost('verify-astrbot-egress',{url:$('verify-url').value});state.application={...(state.application||{}),verification:result};await load();note(result.verified?'AstrBot 核心出口已确认':'AstrBot 核心出口未能确认',!result.verified)}catch(error){note(error.message,true)}})
+  $('host')?.addEventListener('input',event=>{previewHost=event.target.value})
+  $('verify-url')?.addEventListener('input',event=>{verificationUrl=event.target.value})
+  $('preview')?.addEventListener('click',async()=>{
+    const button=$('preview'),result=$('result');button.disabled=true;note('正在查询分流规则…')
+    try{const value=await api.apiPost('preview',{host:previewHost});previewResult=value;result.innerHTML=previewPanel(value);note('分流预览已更新')}catch(error){note(error.message,true)}finally{button.disabled=false}
+  })
+  $('verify-outbound')?.addEventListener('click',()=>verifyEgress('verify-outbound'))
+  $('verify-astrbot-egress')?.addEventListener('click',()=>verifyEgress('verify-astrbot-egress'))
   $('astrbot-proxy-enable')?.addEventListener('click',async()=>{try{const result=await api.apiPost('astrbot-proxy-enable',{});await load();note(result.message)}catch(error){note(error.message,true)}})
   $('astrbot-proxy-restore')?.addEventListener('click',async()=>{try{const result=await api.apiPost('astrbot-proxy-restore',{});await load();note(result.message)}catch(error){note(error.message,true)}})
   $('control-status')?.addEventListener('click',checkControl)
