@@ -1445,8 +1445,10 @@ class TestConfigurationRules(unittest.TestCase):
 
         self.assertNotIn('hk-1', {node['id'] for node in normalized['nodes']})
         self.assertEqual(normalized['subscriptions'][0]['node_ids'], [])
-        self.assertEqual([group['id'] for group in normalized['groups']], ['direct', 'sg'])
-        self.assertEqual(normalized['routes'], [])
+        self.assertEqual([group['id'] for group in normalized['groups']], ['direct', 'hk', 'sg'])
+        self.assertEqual(normalized['groups'][1]['node_ids'], [])
+        self.assertEqual(normalized['routes'][0]['target'], 'hk')
+        self.assertEqual(normalized['rule_groups'][0]['target'], 'hk')
 
     def test_subscription_refresh_skips_ignored_nodes(self):
         manager = self._manager_for_runtime()
@@ -1490,13 +1492,98 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertEqual(len(normalized['nodes']), 1)
         sg_id = normalized['nodes'][0]['id']
         self.assertEqual([item['id'] for item in normalized['subscriptions']], ['sub-sg'])
-        self.assertEqual([group['id'] for group in normalized['groups']], ['direct', 'sg'])
-        self.assertEqual(normalized['groups'][1]['node_ids'], [sg_id])
-        self.assertEqual(normalized['routes'], [])
+        self.assertEqual([group['id'] for group in normalized['groups']], ['direct', 'hk', 'sg'])
+        self.assertEqual(normalized['groups'][1]['node_ids'], [])
+        self.assertEqual(normalized['groups'][2]['node_ids'], [sg_id])
+        self.assertEqual(normalized['routes'][0]['target'], 'hk')
+        self.assertEqual(normalized['rule_groups'][0]['target'], 'hk')
         manager.state = normalized
         probe = asyncio.run(manager._probe_one({'node_id': 'hk-1'}))
         self.assertEqual(probe['status'], 'skipped')
         self.assertEqual(probe['reason'], '节点不存在')
+
+    def test_last_node_delete_retains_rules_across_save_reload_and_all_core_renderers(self):
+        from proxy_manager.cores.registry import all_adapters
+        from proxy_manager.domain.model import compiled_rules, match_rule, routing_issues
+        manager=self._manager_for_runtime()
+        previous_document=manager._runtime_document()
+        previous_revision=manager._runtime_revision(previous_document)
+        manager.runtime_application={'status':'applied','document':previous_document,
+                                     'applied_revision':previous_revision}
+        raw=copy.deepcopy(manager.state)
+        raw['proxy_entry']['private']={'enabled':False}
+        raw['nodes']=[node for node in raw['nodes'] if node['id']!='hk-1']
+        draft=manager._validate(raw)
+        group=next(group for group in draft['groups'] if group['id']=='hk')
+        self.assertEqual(group['node_ids'],[]);self.assertEqual(group['selected'],'')
+        self.assertEqual(match_rule(draft,'meta.example')['target'],'hk')
+        self.assertEqual(compiled_rules(draft)[0]['target'],'hk')
+        asyncio.run(manager.persist(draft))
+        self.assertEqual(manager.runtime_application['status'],'pending_apply')
+        self.assertEqual(manager.runtime_application['applied_revision'],previous_revision)
+        self.assertEqual(manager.runtime_application['document'],previous_document)
+        self.assertEqual(manager._verified_recovery_document(manager.runtime_application),previous_document)
+        loaded=manager._validate(json.loads(manager.path.read_text()))
+        self.assertEqual(match_rule(loaded,'meta.example')['target'],'hk')
+        self.assertTrue(routing_issues(loaded))
+        for adapter in all_adapters().values():
+            with self.subTest(adapter=adapter.id),self.assertRaisesRegex(ValueError,'没有节点'):
+                adapter.render(loaded)
+        # Repair is an explicit change to membership, not an implicit DIRECT.
+        group=next(group for group in loaded['groups'] if group['id']=='hk')
+        group['node_ids']=[loaded['nodes'][0]['id']]
+        self.assertFalse(routing_issues(loaded))
+        document=all_adapters()['mihomo'].render(loaded)
+        self.assertEqual(document['rules'][0],'DOMAIN-SUFFIX,meta.example,group-hk')
+
+    def test_missing_rule_target_survives_normalization_and_blocks_all_core_renderers(self):
+        from proxy_manager.cores.registry import all_adapters
+        from proxy_manager.domain.model import compiled_rules,match_rule
+        manager=self._manager_for_runtime()
+        for modern in (False,True):
+            raw=copy.deepcopy(manager.state)
+            raw['proxy_entry']['private']={'enabled':False}
+            raw['nodes']=[];raw['groups']=[raw['groups'][0]]
+            if modern:
+                raw['rule_groups']=[{'id':'policy','name':'出口策略','domains':[{'host':'meta.example','match':'suffix'}],
+                                    'priority':10,'target':'hk','enabled':True}]
+            draft=manager._validate(raw)
+            self.assertEqual(match_rule(draft,'meta.example')['target'],'hk')
+            for adapter in all_adapters().values():
+                with self.subTest(adapter=adapter.id,modern=modern),self.assertRaisesRegex(ValueError,'目标代理组不存在'):
+                    adapter.render(draft)
+            # A user can explicitly choose DIRECT; it is never chosen by cleanup.
+            draft['rule_groups'][0]['target']='direct'
+            for adapter in all_adapters().values():adapter.render(draft,compiled_rules(draft))
+
+    def test_blocked_apply_does_not_write_config_or_replace_runtime_evidence(self):
+        manager=self._manager_for_runtime()
+        document=manager._runtime_document()
+        previous={'status':'applied','document':document,'applied_revision':manager._runtime_revision(document)}
+        manager.runtime_application=copy.deepcopy(previous)
+        manager.state['nodes']=[node for node in manager.state['nodes'] if node['id']!='hk-1']
+        manager.state=manager._validate(manager.state)
+        with patch.object(manager,'_kernel_status',new=AsyncMock()) as status, \
+             patch.object(manager,'_write_kernel_config') as write, \
+             patch.object(manager,'_persist_runtime_application') as persist:
+            asyncio.run(manager.runtime_apply())
+        status.assert_not_awaited();write.assert_not_called();persist.assert_not_called()
+        self.assertEqual(manager.runtime_application,previous)
+        self.assertEqual(manager._match_rule('meta.example')['target'],'hk')
+        self.assertEqual(manager.events[-1]['result'],'failed')
+
+    def test_disabled_or_missing_compiled_target_cannot_be_silently_skipped(self):
+        from proxy_manager.cores.registry import all_adapters
+        manager=self._manager_for_runtime()
+        state=manager._normalize({'groups':[],'nodes':[],'routes':[],'subscriptions':[]})
+        compiled=[{'id':'policy','type':'DOMAIN','payload':'meta.example','target':'missing'}]
+        for adapter in all_adapters().values():
+            with self.subTest(adapter=adapter.id),self.assertRaisesRegex(ValueError,'目标代理组不存在'):
+                adapter.render(state,compiled)
+        state['groups'][0]['enabled']=False;compiled[0]['target']='direct'
+        for adapter in all_adapters().values():
+            with self.subTest(adapter=adapter.id),self.assertRaisesRegex(ValueError,'未启用'):
+                adapter.render(state,compiled)
 
     def test_persist_removes_health_for_nodes_owned_by_deleted_subscription(self):
         manager = self._manager_for_runtime()

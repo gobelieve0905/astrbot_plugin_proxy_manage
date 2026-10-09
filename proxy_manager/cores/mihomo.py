@@ -11,7 +11,7 @@ import httpx
 
 from .base import CoreAdapter
 from ..domain.constants import RULE_TYPE_SET
-from ..domain.model import compiled_rules
+from ..domain.model import compiled_rules, require_routing_targets
 
 
 class MihomoAdapter(CoreAdapter):
@@ -92,6 +92,7 @@ class MihomoAdapter(CoreAdapter):
         except ImportError as exc:
             raise ValueError('缺少 PyYAML，无法生成 Mihomo 配置') from exc
         compiled=compiled if compiled is not None else compiled_rules(state)
+        require_routing_targets(state,compiled)
         runnable={node['id']:node for node in state['nodes'] if node['enabled'] and not node.get('excluded')
                   and not node.get('invalid_reference') and self.id in node.get('adapters', [self.id])
                   and node.get('support',{}).get('status','supported')=='supported'}

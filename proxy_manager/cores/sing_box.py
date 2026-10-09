@@ -10,7 +10,7 @@ import httpx
 
 from .base import CoreAdapter
 from ..domain.constants import RULE_TYPE_SET
-from ..domain.model import compiled_rules
+from ..domain.model import compiled_rules, require_routing_targets
 
 
 class SingBoxAdapter(CoreAdapter):
@@ -64,6 +64,7 @@ class SingBoxAdapter(CoreAdapter):
 
     def render(self, state: dict, compiled: list[dict]|None=None) -> dict:
         compiled=compiled if compiled is not None else compiled_rules(state)
+        require_routing_targets(state,compiled)
         runnable={node['id']:node for node in state['nodes'] if node['enabled'] and not node.get('excluded')
                   and self.id in node.get('adapters',[]) and not node.get('invalid_reference')}
         outbounds=[self._node(node) for node in sorted(runnable.values(),key=lambda value:value['id'])]

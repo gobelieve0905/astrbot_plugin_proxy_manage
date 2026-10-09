@@ -25,7 +25,7 @@ from .cores.registry import all_adapters, current_adapter
 from .compat import CompatibilityManager, ComponentLease
 from .domain.constants import CONFIGURED, TEMPLATES
 from .domain.identity import stable_node_id
-from .domain.model import compiled_rules, ident, match_rule, normalize_state, validate_state
+from .domain.model import compiled_rules, ident, match_rule, normalize_state, routing_issues, require_routing_targets, validate_state
 from .domain.security import redact_config, redact_diagnostics, restore_config, safe_error, safe_host, safe_url
 from .importers.subscription import parse_subscription, summary, traffic_header, traffic_metadata
 from .runtime.transaction import verified_recovery_document
@@ -470,6 +470,7 @@ class ProxyManager(Star):
         if hasattr(self,'artifacts') and hasattr(self,'supervisor'):
             result['kernel_setup']=self._kernel_setup_status(result['adapters'])
         application=getattr(self,'runtime_application',{})
+        result['routing_issues']=routing_issues(self.state)
         result['application']={key:application.get(key) for key in (
             'status','saved_revision','applied_revision','updated_at','message','verification'
         )}
@@ -1464,6 +1465,7 @@ class ProxyManager(Star):
     async def runtime_apply(self):
         async with self.operation_lock:
             try:
+                require_routing_targets(self.state)
                 kernel=await self._kernel_status()
                 if kernel['state'] in {'not_configured','connection_failed','auth_failed','version_unsupported','disabled','not_installed','invalid','unsupported'}:
                     raise ValueError('无法应用配置：'+kernel['message'])

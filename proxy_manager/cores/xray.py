@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-from ..domain.model import compiled_rules
+from ..domain.model import compiled_rules, require_routing_targets
 from .base import CoreAdapter
 
 
@@ -177,6 +177,7 @@ class XrayAdapter(CoreAdapter):
 
     def render(self, state: dict, compiled: list[dict] | None = None) -> dict:
         compiled = compiled if compiled is not None else compiled_rules(state)
+        require_routing_targets(state,compiled)
         runnable = {
             node['id']: node for node in state['nodes']
             if node.get('enabled') and not node.get('excluded') and not node.get('invalid_reference')

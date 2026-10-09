@@ -162,14 +162,12 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
             'failure_policy':item.get('failure_policy') if item.get('failure_policy') in {'fail-closed','keep-last'} else 'fail-closed',
         })
     if not any(group['id']=='direct' for group in groups): groups.insert(0,dict(DIRECT))
-    group_ids={group['id'] for group in groups}
 
     routes=[]
     route_values=source.get('routes',[]) if isinstance(source.get('routes',[]),list) else []
     for index,item in enumerate(route_values):
         if not isinstance(item,dict): continue
         target=ident(item.get('target') or item.get('profile_id'))
-        if target not in group_ids: continue
         try:
             from .security import safe_host
             host=safe_host(item.get('host'))
@@ -187,7 +185,6 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
     for index,item in enumerate(values):
         if not isinstance(item,dict): continue
         target=ident(item.get('target'))
-        if target not in group_ids: continue
         domains=[]
         raw_rules=item.get('rules') if isinstance(item.get('rules'),list) else item.get('domains',[])
         if not isinstance(raw_rules,list): raw_rules=[]
@@ -267,24 +264,13 @@ def normalize_state(raw: object) -> tuple[dict,dict[str,str]]:
         ignored=set(subscription.get('ignored_node_ids',[]))
         subscription['node_ids']=[node_id for node_id in subscription['node_ids'] if node_id in live_node_ids and node_id not in ignored]
 
-    # Remove deleted nodes from groups.  A non-direct group with no remaining
-    # members cannot be rendered by any supported core, so remove the now
-    # unusable group and its dependent route mappings instead of leaving an
-    # invalid reference that can block the entire configuration save.
-    removed_group_ids=set()
+    # Membership follows node ownership, but removing a resource never grants
+    # permission to remove its routing policy. Keep empty groups and dangling
+    # rule targets as repairable drafts; every core rejects them before apply.
     for group in groups:
         group['node_ids']=[node_id for node_id in group['node_ids'] if node_id in live_node_ids]
         if group.get('selected') not in group['node_ids']:
             group['selected']=''
-        if group['id']!='direct' and not group['node_ids']:
-            removed_group_ids.add(group['id'])
-    if removed_group_ids:
-        groups=[group for group in groups if group['id'] not in removed_group_ids]
-        routes=[route for route in routes if route['target'] not in removed_group_ids]
-        rule_groups=[rule for rule in rule_groups if rule['target'] not in removed_group_ids]
-
-    group_ids={group['id'] for group in groups}
-    platforms={key:item for key,item in platforms.items() if item['group_id'] in group_ids}
 
     control=source.get('control') if isinstance(source.get('control'),dict) else {}
     raw_preferences=source.get('core_preferences') if isinstance(source.get('core_preferences'),dict) else {}
@@ -343,22 +329,17 @@ def validate_state(value: object) -> dict:
         group_names[group_key]=group['id']
         missing=set(group['node_ids'])-node_ids
         if missing: raise ValueError('代理组引用不存在节点：'+next(iter(missing)))
-        if group['mode']!='direct' and not group['node_ids']: raise ValueError('代理组至少需要一个节点：'+group['id'])
         if group['selected'] and group['selected'] not in group['node_ids']:
             raise ValueError('代理组当前节点无效：'+group['id'])
         if group['mode'] in {'url-test','fallback'} and not safe_url(group['test_url']):
             raise ValueError('代理组测速目标无效：'+group['id'])
     seen=set()
     for route in state['routes']:
-        if route['target'] not in group_ids: raise ValueError('规则引用不存在代理组：'+route['target'])
         key=(route['host'],route['match'],route['priority'])
         if key in seen: raise ValueError('相同优先级存在重复规则：'+route['host'])
         seen.add(key)
-    for key,platform in state['platforms'].items():
-        if platform['group_id'] not in group_ids: raise ValueError('平台引用不存在代理组：'+key)
     seen_domains={}
     for rule_group in state['rule_groups']:
-        if rule_group['target'] not in group_ids: raise ValueError('规则组引用不存在代理组：'+rule_group['id'])
         if not rule_group['enabled']: continue
         for domain in rule_group.get('domains',[]):
             rule_type=str(domain.get('type') or ('DOMAIN' if domain.get('match')=='exact' else 'DOMAIN-SUFFIX')).upper()
@@ -389,6 +370,25 @@ def validate_state(value: object) -> dict:
     if state['control']['listen'] and not re.fullmatch(r'(?:\[[0-9a-fA-F:]+\]|[^:\s]+):\d{1,5}',state['control']['listen']):
         raise ValueError('内核控制监听地址格式无效')
     return state
+
+
+def routing_issues(state:dict, compiled:list[dict]|None=None) -> list[str]:
+    """Drafts retain user policy; unresolved exits cannot become runtime rules."""
+    groups={group['id']:group for group in state.get('groups',[])}
+    issues=['代理组“'+group['name']+'”没有节点，请补充节点或明确调整关联规则后删除该组'
+            for group in groups.values() if group['id']!='direct' and not group.get('node_ids')]
+    rules=compiled if compiled is not None else compiled_rules(state)
+    for rule in rules:
+        target=groups.get(rule['target'])
+        if target is None or not target.get('enabled',True):
+            issues.append('规则“'+str(rule.get('rule_group') or rule.get('rule_group_id') or rule.get('id') or rule.get('host') or '未命名')+
+                          '”的目标代理组不存在或未启用，请明确选择出口或删除该规则')
+    return list(dict.fromkeys(issues))
+
+
+def require_routing_targets(state:dict, compiled:list[dict]|None=None):
+    issues=routing_issues(state,compiled)
+    if issues: raise ValueError('无法应用配置：'+ '；'.join(issues))
 
 
 def compiled_rules(state:dict) -> list[dict]:
