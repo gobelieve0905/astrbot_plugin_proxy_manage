@@ -397,8 +397,8 @@ class TestConfigurationRules(unittest.TestCase):
                 self.values["proxy"] = value
                 return self
 
-            def get_updates_proxy(self, value):
-                self.values["get_updates_proxy"] = value
+            def get_updates_request(self, value):
+                self.values["get_updates_request"] = value
                 return self
 
             def build(self):
@@ -418,15 +418,19 @@ class TestConfigurationRules(unittest.TestCase):
                     self.base_url = "https://api.telegram.org/bot"
                     self.file_base_url = "https://api.telegram.org/file/bot"
                     self.message_handler = lambda *_: None
+                    self._on_polling_error = Mock()
                     self._build_application()
 
             adapter_class = build_proxy_adapter(
                 Base,
                 ComponentLease(component_id="telegram", http_proxy="http://127.0.0.1:17890"),
             )
-            adapter = adapter_class({}, {}, None)
+            polling_request = object()
+            with patch("proxy_manager.compat.telegram.build_polling_request", return_value=polling_request) as factory:
+                adapter = adapter_class({}, {}, None)
+            factory.assert_called_once_with("http://127.0.0.1:17890", adapter._on_polling_error)
             self.assertEqual(Builder.last.values["proxy"], "http://127.0.0.1:17890")
-            self.assertEqual(Builder.last.values["get_updates_proxy"], "http://127.0.0.1:17890")
+            self.assertIs(Builder.last.values["get_updates_request"], polling_request)
         finally:
             sys.modules.pop(module_name, None)
 
@@ -475,6 +479,7 @@ class TestConfigurationRules(unittest.TestCase):
 
         class ManagedTelegram:
             _proxy_manager_lease = lease.for_component("platform:telegram")
+            _proxy_manager_polling_recovery_version = 1
 
         instance = ManagedTelegram()
         platform_manager = types.SimpleNamespace(
@@ -489,6 +494,54 @@ class TestConfigurationRules(unittest.TestCase):
         asyncio.run(manager._reload_live_components())
 
         platform_manager.reload.assert_not_awaited()
+
+    def test_compatibility_updates_old_telegram_client_even_with_same_proxy(self):
+        from proxy_manager.compat.lease import ComponentLease
+        from proxy_manager.compat.registry import CompatibilityManager
+
+        lease = ComponentLease(component_id="astrbot", http_proxy="http://127.0.0.1:17890")
+        instance = types.SimpleNamespace(_proxy_manager_lease=lease.for_component("platform:telegram"))
+        config = {"id": "telegram", "type": "telegram", "enable": True}
+        platform_manager = types.SimpleNamespace(
+            platform_insts=[instance], platforms_config=[config],
+            _inst_map={"telegram": {"inst": instance}}, reload=AsyncMock(),
+        )
+        manager = CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager), lease)
+        manager.report.platforms["telegram"] = {"state": "installed"}
+        asyncio.run(manager._reload_live_components())
+        platform_manager.reload.assert_awaited_once_with(config)
+
+    def test_telegram_sdk_timeout_retries_reach_recovery_callback(self):
+        import httpx
+        from telegram.error import TimedOut
+        from telegram.ext._utils.networkloop import network_retry_loop
+        from proxy_manager.compat.telegram import build_polling_request
+
+        async def exercise():
+            recovery = Mock()
+            sdk_error_callback = Mock()
+            request = build_polling_request("http://127.0.0.1:17890", recovery)
+            try:
+                async def action():
+                    await request.do_request(url="https://api.telegram.org/bot-test/getUpdates", method="POST")
+
+                with patch.object(request._client, "request", new=AsyncMock(side_effect=httpx.PoolTimeout("pool unavailable"))):
+                    with self.assertRaises(TimedOut):
+                        await network_retry_loop(
+                            action_cb=action, on_err_cb=sdk_error_callback,
+                            description="test polling", interval=0, max_retries=2,
+                        )
+                sdk_error_callback.assert_not_called()
+                self.assertEqual(recovery.call_count, 3)
+                self.assertTrue(all(isinstance(call.args[0], TimedOut) for call in recovery.call_args_list))
+                recovery.reset_mock()
+                with patch.object(request._client, "request", new=AsyncMock(return_value=httpx.Response(200, content=b"{}"))):
+                    self.assertEqual(await request.do_request(url="https://api.telegram.org/bot-test/getUpdates", method="POST"), (200, b"{}"))
+                recovery.assert_not_called()
+            finally:
+                await request.shutdown()
+
+        asyncio.run(exercise())
 
     def test_entry_imports_inside_astrbot_namespace_package(self):
         root=Path(__file__).resolve().parents[1]

@@ -11,6 +11,7 @@ from .lark import build_proxy_adapter as build_lark_adapter
 from .lark import install_sdk_patch as install_lark_sdk_patch
 from .lease import ComponentLease
 from .telegram import build_proxy_adapter as build_telegram_adapter
+from .telegram import POLLING_RECOVERY_VERSION
 from .provider_registry import PROVIDER_ADAPTER_MAP, PROVIDER_ADAPTERS, request_sample
 from .provider_transport import build_transport_provider
 
@@ -144,7 +145,7 @@ class CompatibilityManager:
                 self.report.patched_paths.extend([
                     "lark_oapi.ws.client._ws_connect_kwargs", "lark_oapi.core.http.transport.Transport",
                 ] if platform_type == "lark" else [
-                    "telegram.ext.ApplicationBuilder.proxy", "telegram.ext.ApplicationBuilder.get_updates_proxy",
+                    "telegram.ext.ApplicationBuilder.proxy", "telegram.ext.ApplicationBuilder.get_updates_request",
                 ])
             except Exception as exc:
                 if restore_sdk:
@@ -316,6 +317,9 @@ class CompatibilityManager:
                     if current_lease and (
                         current_lease.http_proxy == desired_lease.http_proxy
                         and current_lease.socks_proxy == desired_lease.socks_proxy
+                        and (config["type"] != "telegram" or getattr(
+                            instance, "_proxy_manager_polling_recovery_version", 0
+                        ) == POLLING_RECOVERY_VERSION)
                     ):
                         continue
                     try:
