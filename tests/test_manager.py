@@ -509,7 +509,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.4.4',html)
+        self.assertIn('流量控制 · 0.4.5',html)
         self.assertNotIn('data-tab="platforms"',html)
         self.assertNotIn("else if(tab==='platforms')",script)
         self.assertIn('astrbot-http-proxy',script)
@@ -595,7 +595,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('DOMAIN-SUFFIX',script)
         self.assertNotIn('id="rule-domains"',script)
         self.assertNotIn("state.groups.push({id,name:template.name",script)
-        self.assertIn('流量控制 · 0.4.4',html)
+        self.assertIn('流量控制 · 0.4.5',html)
         self.assertIn('.compact-node-subline .chip',styles)
         self.assertIn('.rule-enabled { display: flex; align-items: center;',styles)
         self.assertIn('event.stopPropagation()',script)
@@ -690,6 +690,43 @@ class TestConfigurationRules(unittest.TestCase):
             self.assertFalse(manager.previous_metadata.exists())
             self.assertEqual(json.loads(manager.update_check_path.read_text(encoding='utf-8'))['state'],'up_to_date')
             self.assertEqual(manager.uninstall()['state'],'not_installed')
+
+    def test_uninstalling_current_kernel_stops_it_before_removing_artifact(self):
+        from proxy_manager import plugin as plugin_module
+        from proxy_manager.runtime.artifacts import ArtifactInstallTask
+
+        async def scenario():
+            manager=self._manager_for_runtime()
+            manager.data_dir=Path(manager._test_dir.name)
+            manager.state['control']['adapter']='mihomo'
+            manager.state['core_preferences']={'mihomo':{'enabled':True}}
+            running={'value':True}
+            manager.supervisor=types.SimpleNamespace(status=lambda:{'ready':running['value']})
+            manager.install_tasks={}
+            manager.install_task=None
+            manager.persist=AsyncMock()
+            adapter=manager._adapter()
+            async def stop(_supervisor):
+                running['value']=False
+                return {'ready':False,'state':'stopped'}
+            artifact=Mock()
+            artifact.uninstall.return_value={'state':'uninstalled','message':'内核资源已卸载'}
+            request=types.SimpleNamespace(json=AsyncMock(return_value={'adapter':'mihomo'}))
+            with patch.object(plugin_module,'request',request):
+                with patch.object(plugin_module,'ArtifactManager',return_value=artifact):
+                    with patch.object(plugin_module,'ArtifactInstallTask',ArtifactInstallTask):
+                        with patch.object(adapter,'stop',side_effect=stop) as stop_core:
+                            result=await manager.kernel_uninstall()
+                            task=manager.install_tasks['mihomo']
+                            await task.task
+            self.assertEqual(result['operation'],'uninstall')
+            stop_core.assert_awaited_once_with(manager.supervisor)
+            artifact.uninstall.assert_called_once_with()
+            self.assertFalse(manager._core_enabled('mihomo'))
+            manager.persist.assert_awaited_once_with(manager.state)
+            self.assertEqual(task.status()['state'],'completed')
+
+        asyncio.run(scenario())
 
     def test_artifact_resource_task_exposes_operation_and_progress(self):
         from proxy_manager.runtime.artifacts import ArtifactInstallTask
