@@ -14,6 +14,10 @@ from ..domain.model import compiled_rules, require_routing_targets
 
 
 class SingBoxAdapter(CoreAdapter):
+    def recovery_compatible(self, document: dict, state: dict) -> bool:
+        control=document.get('experimental',{}).get('clash_api',{})
+        return control.get('secret','')==state.get('control',{}).get('secret','')
+
     id='sing-box'
 
     def capabilities(self) -> dict:

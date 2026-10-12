@@ -36,6 +36,10 @@ class MihomoAdapter(CoreAdapter):
 
     def config_filename(self) -> str: return 'config.yaml'
 
+    def recovery_compatible(self, document: dict, state: dict) -> bool:
+        control=state.get('control',{})
+        return document.get('secret','')==control.get('secret','')
+
     @staticmethod
     def _private_listener(entry: dict) -> list[dict]:
         private=entry.get('private') if isinstance(entry.get('private'),dict) else {}

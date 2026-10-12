@@ -397,8 +397,8 @@ class TestConfigurationRules(unittest.TestCase):
                 self.values["proxy"] = value
                 return self
 
-            def get_updates_proxy(self, value):
-                self.values["get_updates_proxy"] = value
+            def get_updates_request(self, value):
+                self.values["get_updates_request"] = value
                 return self
 
             def build(self):
@@ -418,15 +418,19 @@ class TestConfigurationRules(unittest.TestCase):
                     self.base_url = "https://api.telegram.org/bot"
                     self.file_base_url = "https://api.telegram.org/file/bot"
                     self.message_handler = lambda *_: None
+                    self._on_polling_error = Mock()
                     self._build_application()
 
             adapter_class = build_proxy_adapter(
                 Base,
                 ComponentLease(component_id="telegram", http_proxy="http://127.0.0.1:17890"),
             )
-            adapter = adapter_class({}, {}, None)
+            polling_request = object()
+            with patch("proxy_manager.compat.telegram.build_polling_request", return_value=polling_request) as factory:
+                adapter = adapter_class({}, {}, None)
+            factory.assert_called_once_with("http://127.0.0.1:17890", adapter._on_polling_error)
             self.assertEqual(Builder.last.values["proxy"], "http://127.0.0.1:17890")
-            self.assertEqual(Builder.last.values["get_updates_proxy"], "http://127.0.0.1:17890")
+            self.assertIs(Builder.last.values["get_updates_request"], polling_request)
         finally:
             sys.modules.pop(module_name, None)
 
@@ -467,7 +471,7 @@ class TestConfigurationRules(unittest.TestCase):
         finally:
             sys.modules.pop(module_name, None)
 
-    def test_compatibility_does_not_restart_platform_with_matching_proxy_lease(self):
+    def test_compatibility_skips_platform_reload_with_same_generation_and_proxy(self):
         from proxy_manager.compat.lease import ComponentLease
         from proxy_manager.compat.registry import CompatibilityManager
 
@@ -475,6 +479,7 @@ class TestConfigurationRules(unittest.TestCase):
 
         class ManagedTelegram:
             _proxy_manager_lease = lease.for_component("platform:telegram")
+            _proxy_manager_polling_recovery_version = 1
 
         instance = ManagedTelegram()
         platform_manager = types.SimpleNamespace(
@@ -484,11 +489,89 @@ class TestConfigurationRules(unittest.TestCase):
             reload=AsyncMock(),
         )
         manager = CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager), lease)
+        ManagedTelegram._proxy_manager_generation = manager.generation
         manager.report.platforms['telegram'] = {'state': 'installed'}
 
         asyncio.run(manager._reload_live_components())
 
         platform_manager.reload.assert_not_awaited()
+
+    def test_compatibility_restarts_matching_proxy_lease_after_plugin_reinstall(self):
+        from proxy_manager.compat.lease import ComponentLease
+        from proxy_manager.compat.registry import CompatibilityManager
+        lease=ComponentLease(component_id='astrbot',http_proxy='http://127.0.0.1:17890')
+        instance=types.SimpleNamespace(_proxy_manager_lease=lease.for_component('platform:telegram'),
+                                       _proxy_manager_polling_recovery_version=1)
+        config={'id':'telegram','type':'telegram','enable':True}
+        platform_manager=types.SimpleNamespace(platforms_config=[config],_inst_map={'telegram':{'inst':instance}},
+                                               reload=AsyncMock())
+        manager=CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager),lease)
+        manager.report.platforms['telegram']={'state':'installed'}
+        asyncio.run(manager._reload_live_components())
+        platform_manager.reload.assert_awaited_once_with(config)
+
+    def test_compatibility_stops_only_its_wrapped_live_platforms(self):
+        from proxy_manager.compat.lease import ComponentLease
+        from proxy_manager.compat.registry import CompatibilityManager
+        lease=ComponentLease(component_id='astrbot',http_proxy='http://127.0.0.1:17890')
+        managed=types.SimpleNamespace(_proxy_manager_lease=lease.for_component('platform:telegram'))
+        unmanaged=object()
+        platform_manager=types.SimpleNamespace(
+            platforms_config=[{'id':'telegram','type':'telegram'},
+                              {'id':'unmanaged','type':'lark'}],
+            _inst_map={'telegram':{'inst':managed},'unmanaged':{'inst':unmanaged}},
+            terminate_platform=AsyncMock())
+        manager=CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager),lease)
+        asyncio.run(manager.terminate_live_platforms())
+        platform_manager.terminate_platform.assert_awaited_once_with('telegram')
+
+    def test_compatibility_updates_old_telegram_client_even_with_same_proxy(self):
+        from proxy_manager.compat.lease import ComponentLease
+        from proxy_manager.compat.registry import CompatibilityManager
+
+        lease = ComponentLease(component_id="astrbot", http_proxy="http://127.0.0.1:17890")
+        instance = types.SimpleNamespace(_proxy_manager_lease=lease.for_component("platform:telegram"))
+        config = {"id": "telegram", "type": "telegram", "enable": True}
+        platform_manager = types.SimpleNamespace(
+            platform_insts=[instance], platforms_config=[config],
+            _inst_map={"telegram": {"inst": instance}}, reload=AsyncMock(),
+        )
+        manager = CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager), lease)
+        manager.report.platforms["telegram"] = {"state": "installed"}
+        asyncio.run(manager._reload_live_components())
+        platform_manager.reload.assert_awaited_once_with(config)
+
+    def test_telegram_sdk_timeout_retries_reach_recovery_callback(self):
+        import httpx
+        from telegram.error import TimedOut
+        from telegram.ext._utils.networkloop import network_retry_loop
+        from proxy_manager.compat.telegram import build_polling_request
+
+        async def exercise():
+            recovery = Mock()
+            sdk_error_callback = Mock()
+            request = build_polling_request("http://127.0.0.1:17890", recovery)
+            try:
+                async def action():
+                    await request.do_request(url="https://api.telegram.org/bot-test/getUpdates", method="POST")
+
+                with patch.object(request._client, "request", new=AsyncMock(side_effect=httpx.PoolTimeout("pool unavailable"))):
+                    with self.assertRaises(TimedOut):
+                        await network_retry_loop(
+                            action_cb=action, on_err_cb=sdk_error_callback,
+                            description="test polling", interval=0, max_retries=2,
+                        )
+                sdk_error_callback.assert_not_called()
+                self.assertEqual(recovery.call_count, 3)
+                self.assertTrue(all(isinstance(call.args[0], TimedOut) for call in recovery.call_args_list))
+                recovery.reset_mock()
+                with patch.object(request._client, "request", new=AsyncMock(return_value=httpx.Response(200, content=b"{}"))):
+                    self.assertEqual(await request.do_request(url="https://api.telegram.org/bot-test/getUpdates", method="POST"), (200, b"{}"))
+                recovery.assert_not_called()
+            finally:
+                await request.shutdown()
+
+        asyncio.run(exercise())
 
     def test_entry_imports_inside_astrbot_namespace_package(self):
         root=Path(__file__).resolve().parents[1]
@@ -509,7 +592,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.4.5',html)
+        self.assertIn('流量控制 · 0.4.6',html)
         self.assertNotIn('data-tab="platforms"',html)
         self.assertNotIn("else if(tab==='platforms')",script)
         self.assertIn('astrbot-http-proxy',script)
@@ -595,7 +678,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('DOMAIN-SUFFIX',script)
         self.assertNotIn('id="rule-domains"',script)
         self.assertNotIn("state.groups.push({id,name:template.name",script)
-        self.assertIn('流量控制 · 0.4.5',html)
+        self.assertIn('流量控制 · 0.4.6',html)
         self.assertIn('.compact-node-subline .chip',styles)
         self.assertIn('.rule-enabled { display: flex; align-items: center;',styles)
         self.assertIn('event.stopPropagation()',script)
@@ -1416,6 +1499,60 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertNotIn("hk-1",manager.health)
         self.assertIn("内核未就绪",result["reason"])
 
+    def test_terminate_drains_all_resource_tasks_and_probe_children(self):
+        from proxy_manager.runtime.artifacts import ArtifactInstallTask
+        manager=self._manager_for_runtime(); manager.auto_task=None
+        async def scenario():
+            started=[asyncio.Event() for _ in range(3)]
+            stopped=[asyncio.Event() for _ in range(3)]
+            async def blocked(index,*args):
+                started[index].set()
+                try: await asyncio.Event().wait()
+                finally: stopped[index].set()
+            resources=[]
+            for index in range(2):
+                async def download(*args,index=index): return await blocked(index,*args)
+                artifact=types.SimpleNamespace(download=download,commit=Mock())
+                resources.append(ArtifactInstallTask(artifact,AsyncMock()))
+            manager.install_task=resources[0]
+            manager.install_tasks={'mihomo':resources[0],'sing-box':resources[1]}
+            for resource in resources: resource.start()
+            async def probe(*args,**kwargs): return await blocked(2,*args)
+            async def stop_core():
+                self.assertTrue(all(event.is_set() for event in stopped))
+            manager.supervisor=types.SimpleNamespace(stop=AsyncMock(side_effect=stop_core))
+            fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'node_ids':['hk-1'],'concurrency':1}))
+            with patch('proxy_manager.plugin.request',fake_request), \
+                 patch.object(manager,'_probe_kernel_status',new=AsyncMock(return_value={'ready':True})), \
+                 patch.object(manager,'_probe_one',new=probe):
+                await manager.probe_task()
+                await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started)),1)
+                handles=list(manager._probe_task_handles)
+                await manager.terminate()
+            self.assertTrue(all(resource.task.done() for resource in resources))
+            self.assertTrue(all(handle.done() for handle in handles))
+            self.assertTrue(all(record['status']=='cancelled' for record in manager.probe_tasks.values()))
+            for resource in resources:
+                resource.on_installed.assert_not_awaited()
+                resource.manager.commit.assert_not_called()
+            manager.supervisor.stop.assert_awaited_once()
+        asyncio.run(scenario())
+
+    def test_probe_cancel_during_kernel_preflight_records_cancellation(self):
+        manager=self._manager_for_runtime()
+        async def scenario():
+            started=asyncio.Event()
+            async def preflight():
+                started.set(); await asyncio.Event().wait()
+            manager.probe_tasks['test']={'status':'running','results':[],'completed':0,'cancelled':False}
+            with patch.object(manager,'_probe_kernel_status',new=preflight):
+                handle=asyncio.create_task(manager._run_probe_task('test',['hk-1'],'https://example.com',5,1))
+                await asyncio.wait_for(started.wait(),1)
+                handle.cancel(); await asyncio.gather(handle,return_exceptions=True)
+            self.assertEqual(manager.probe_tasks['test']['status'],'cancelled')
+            self.assertEqual(manager.probe_tasks['test']['results'][0]['status'],'cancelled')
+        asyncio.run(scenario())
+
     def test_kernel_status_distinguishes_version_and_runtime_states(self):
         manager = self._manager_for_runtime()
         request = self.module.httpx.Request("GET", "http://mihomo:9090/version")
@@ -2133,6 +2270,42 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIsNone(manager._verified_recovery_document(manager.runtime_application))
         manager.runtime_application={'status':'saved','applied_revision':manager._runtime_revision(document),'document':document}
         self.assertIsNone(manager._verified_recovery_document(manager.runtime_application))
+
+    def test_verified_recovery_document_with_stale_control_secret_is_rejected(self):
+        manager=self._manager_for_runtime(); document=manager._runtime_document()
+        manager.state['control']['secret']='current-control-secret'
+        document['secret']='previous-control-secret'
+        manager.runtime_application={'status':'applied','adapter':'mihomo',
+                                     'applied_revision':manager._adapter().revision(document),
+                                     'document':document}
+        self.assertIsNone(manager._verified_recovery_document(manager.runtime_application))
+        document['secret']='current-control-secret'
+        manager.runtime_application['applied_revision']=manager._adapter().revision(document)
+        manager.runtime_application['document']=document
+        self.assertEqual(manager._verified_recovery_document(manager.runtime_application),document)
+
+    def test_stale_control_secret_starts_only_fail_closed_configuration(self):
+        manager=self._manager_for_runtime(); document=manager._runtime_document()
+        manager.state['control']['secret']='new-control-secret'
+        document['secret']='old-control-secret'
+        manager.runtime_application={'status':'applied','adapter':'mihomo',
+                                     'applied_revision':manager._adapter().revision(document),'document':document}
+        manager.state['core_preferences']={'mihomo':{'enabled':True}}
+        manager.artifacts=types.SimpleNamespace(status=lambda:{'ready':True},binary=Path('/verified/core'))
+        manager.supervisor=object(); manager.data_dir=Path('/private/plugin')
+        adapter=manager._adapter()
+        with patch.object(adapter,'write_config',return_value=Path('/private/config.yaml')) as write, \
+             patch.object(adapter,'start',new=AsyncMock(return_value={'ready':True})):
+            asyncio.run(manager._start_owned_kernel())
+        restored=write.call_args.args[1]
+        self.assertEqual(restored['secret'],'new-control-secret')
+        self.assertEqual(restored['rules'],['MATCH,REJECT'])
+
+    def test_sing_box_recovery_checks_its_own_control_secret(self):
+        from proxy_manager.cores.sing_box import SingBoxAdapter
+        adapter=SingBoxAdapter(); state={'control':{'secret':'current'}}
+        self.assertFalse(adapter.recovery_compatible({'experimental':{'clash_api':{'secret':'old'}}},state))
+        self.assertTrue(adapter.recovery_compatible({'experimental':{'clash_api':{'secret':'current'}}},state))
 
     def test_recovery_document_is_bound_to_recorded_adapter(self):
         from proxy_manager.cores.mihomo import MihomoAdapter

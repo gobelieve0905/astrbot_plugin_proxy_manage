@@ -4,6 +4,25 @@ import asyncio
 from typing import Type
 
 TERMINATION_COMMAND_TIMEOUT = 3.0
+POLLING_RECOVERY_VERSION = 1
+
+
+def build_polling_request(proxy: str, on_timeout):
+    from telegram.error import TimedOut
+    from telegram.request import HTTPXRequest
+
+    class RecoverablePollingRequest(HTTPXRequest):
+        async def do_request(self, *args, **kwargs):
+            try:
+                return await super().do_request(*args, **kwargs)
+            except TimedOut as exc:
+                # PTB 22.8 retries TimedOut without invoking error_callback.
+                # Include pool/connect/read timeouts in AstrBot's existing
+                # recovery counter so an unusable client can be rebuilt.
+                on_timeout(exc)
+                raise
+
+    return RecoverablePollingRequest(connection_pool_size=1, proxy=proxy or None)
 
 
 def build_proxy_adapter(base: Type, lease):
@@ -15,6 +34,7 @@ def build_proxy_adapter(base: Type, lease):
     class ProxyTelegramPlatformAdapter(base):
         _proxy_manager_lease = lease
         _proxy_manager_base = base
+        _proxy_manager_polling_recovery_version = POLLING_RECOVERY_VERSION
 
         def __init__(self, platform_config, platform_settings, event_queue):
             self._proxy_manager_http_proxy = lease.http_proxy
@@ -29,7 +49,10 @@ def build_proxy_adapter(base: Type, lease):
             )
             proxy = self._proxy_manager_http_proxy
             if proxy:
-                builder = builder.proxy(proxy).get_updates_proxy(proxy)
+                builder = builder.proxy(proxy)
+            builder = builder.get_updates_request(
+                build_polling_request(proxy, self._on_polling_error)
+            )
             self.application = builder.build()
             message_handler = module.TelegramMessageHandler(
                 filters=module.filters.ALL,
