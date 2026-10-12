@@ -80,7 +80,7 @@ class ProxyManager(Star):
         self.events=self._load_events(); self.integration_audit={}; self.integration_fingerprint=''
         self.compatibility=None
         self._refresh_integration_audit(record=False)
-        self.previews={}; self.probe_tasks={}; self._probe_kernel_lock=asyncio.Lock(); self.auto_task=None
+        self.previews={}; self.probe_tasks={}; self._probe_task_handles=set(); self._probe_kernel_lock=asyncio.Lock(); self.auto_task=None
         self._register_routes()
 
     def _bind_owned_runtime(self):
@@ -748,7 +748,7 @@ class ProxyManager(Star):
             trace_task=asyncio.create_task(capture_connection()) if kernel_ready else None
             try:
                 async with httpx.AsyncClient(**client_options) as client:
-                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.4.5'})
+                    response=await client.get(url,headers={'User-Agent':'astrbot-proxy-route-verifier/0.4.6'})
             finally:
                 request_finished.set()
                 if trace_task: trace=await trace_task
@@ -926,7 +926,7 @@ class ProxyManager(Star):
                 url=str(url).strip()
                 if not safe_url(url): raise ValueError('订阅地址无效：第 '+str(index+1)+' 行')
                 response=await fetch_public_url(url,proxy=self._entry_urls()[0],
-                                                headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.5'})
+                                                headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.6'})
                 if response.status_code>=400 or len(response.content)>10*1024*1024:
                     raise ValueError('订阅请求失败或响应过大：'+str(index+1))
                 nodes,discovered=self._parse_subscription(response.text,'preview-'+str(index+1))
@@ -1005,7 +1005,7 @@ class ProxyManager(Star):
             subscription=next((item for item in self.state['subscriptions'] if item['id']==subscription_id),None)
             if not subscription: raise ValueError('订阅不存在')
             response=await fetch_public_url(subscription['url'],proxy=self._entry_urls()[0],
-                                            headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.5'})
+                                            headers={'User-Agent':'astrbot-plugin-proxy-manage/0.4.6'})
             if response.status_code>=400 or len(response.content)>10*1024*1024:
                 raise ValueError('订阅请求失败或响应过大')
             nodes,discovered=self._parse_subscription(response.text,subscription['id'])
@@ -1623,26 +1623,31 @@ class ProxyManager(Star):
 
     async def _run_probe_task(self,task_id:str,node_ids:list[str],target:str,timeout:int,concurrency:int):
         task=self.probe_tasks[task_id]; semaphore=asyncio.Semaphore(concurrency)
-        kernel_status=None
-        if any(self._probe_uses_kernel(node) and self._probe_node_is_eligible(node)
-               for node in self.state['nodes'] if node.get('id') in node_ids):
-            kernel_status=await self._probe_kernel_status()
-        async def run(node_id):
-            async with semaphore:
-                if task['cancelled']: return {'node_id':node_id,'status':'cancelled','reason':'任务已取消'}
-                payload={'node_id':node_id,'url':target,'timeout':timeout}
-                if kernel_status is None:
-                    return await self._probe_one(payload)
-                return await self._probe_one(payload,kernel_status=kernel_status)
-        pending=[asyncio.create_task(run(node_id)) for node_id in node_ids]
+        pending=[]
         try:
+            kernel_status=None
+            if any(self._probe_uses_kernel(node) and self._probe_node_is_eligible(node)
+                   for node in self.state['nodes'] if node.get('id') in node_ids):
+                kernel_status=await self._probe_kernel_status()
+            async def run(node_id):
+                async with semaphore:
+                    if task['cancelled']: return {'node_id':node_id,'status':'cancelled','reason':'任务已取消'}
+                    payload={'node_id':node_id,'url':target,'timeout':timeout}
+                    if kernel_status is None:
+                        return await self._probe_one(payload)
+                    return await self._probe_one(payload,kernel_status=kernel_status)
+            pending=[asyncio.create_task(run(node_id)) for node_id in node_ids]
             for future in asyncio.as_completed(pending):
                 result=await future; task['results'].append(result); task['completed']+=1
                 if task['cancelled']:
-                    for item in pending:
-                        if not item.done(): item.cancel()
                     break
+        except asyncio.CancelledError:
+            task['cancelled']=True
+            raise
         finally:
+            for item in pending:
+                if not item.done(): item.cancel()
+            await asyncio.gather(*pending,return_exceptions=True)
             if task['cancelled']:
                 finished={item['node_id'] for item in task['results']}
                 task['results'].extend({'node_id':node_id,'status':'cancelled','reason':'任务已取消'} for node_id in node_ids if node_id not in finished)
@@ -1657,7 +1662,10 @@ class ProxyManager(Star):
             target=str(payload.get('url','https://www.gstatic.com/generate_204')); timeout=max(1,min(int(payload.get('timeout',5)),15)); concurrency=max(1,min(int(payload.get('concurrency',5)),20))
             if not safe_url(target): raise ValueError('测速目标只允许 HTTP 或 HTTPS 地址')
             task_id=uuid.uuid4().hex; self.probe_tasks[task_id]={'id':task_id,'status':'running','total':len(node_ids),'completed':0,'results':[],'cancelled':False,'started_at':int(time.time())}
-            asyncio.create_task(self._run_probe_task(task_id,node_ids,target,timeout,concurrency))
+            if not hasattr(self,'_probe_task_handles'): self._probe_task_handles=set()
+            handle=asyncio.create_task(self._run_probe_task(task_id,node_ids,target,timeout,concurrency))
+            self._probe_task_handles.add(handle)
+            handle.add_done_callback(self._probe_task_handles.discard)
             return json_response({'task_id':task_id,'total':len(node_ids)})
         except (ValueError,TypeError) as exc: return error_response(str(exc))
 
@@ -1887,7 +1895,7 @@ class ProxyManager(Star):
         http_url,socks_url=self._entry_urls(); status=self.astrbot_proxy.mark_started(http_url,socks_url)
         if status.get('status') in {'pending_restart','restart_required','drifted'}:
             logger.warning('AstrBot 全局代理接入等待重启或存在配置漂移：'+status['message'])
-        logger.info('代理管理中心 0.4.5 已加载')
+        logger.info('代理管理中心 0.4.6 已加载')
 
     async def terminate(self):
         if self.auto_task:
@@ -1902,6 +1910,20 @@ class ProxyManager(Star):
         # AstrBot process. The proxy configuration is intentionally retained;
         # stopping the owned kernel then fails closed instead of allowing an
         # SDK reconnect to silently fall back to direct I/O.
-        await self.install_task.stop(); await self.supervisor.stop()
+        # Every adapter can have its own resource task. Drain them all before
+        # AstrBot removes data so a late download cannot recreate the files.
+        resource_tasks={id(task):task for task in getattr(self,'install_tasks',{}).values()}
+        resource_tasks[id(self.install_task)]=self.install_task
+        probes=list(getattr(self,'_probe_task_handles',set()))
+        for record in self.probe_tasks.values():
+            if record.get('status')=='running': record['cancelled']=True
+        for handle in probes: handle.cancel()
+        try:
+            results=await asyncio.gather(*(task.stop() for task in resource_tasks.values()),
+                                         *probes,return_exceptions=True)
+            if any(isinstance(result,BaseException) for result in results[:len(resource_tasks)]):
+                raise RuntimeError('内核资源任务未能全部停止，请检查卸载清理状态')
+        finally:
+            await self.supervisor.stop()
 
     async def on_message(self,event:AstrMessageEvent): return

@@ -562,7 +562,7 @@ class TestConfigurationRules(unittest.TestCase):
         html=(root/'index.html').read_text(encoding='utf-8')
         script=(root/'app.js').read_text(encoding='utf-8')
         styles='\n'.join((root/name).read_text(encoding='utf-8') for name in ('style.css','health.css','download.css'))
-        self.assertIn('流量控制 · 0.4.5',html)
+        self.assertIn('流量控制 · 0.4.6',html)
         self.assertNotIn('data-tab="platforms"',html)
         self.assertNotIn("else if(tab==='platforms')",script)
         self.assertIn('astrbot-http-proxy',script)
@@ -648,7 +648,7 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertIn('DOMAIN-SUFFIX',script)
         self.assertNotIn('id="rule-domains"',script)
         self.assertNotIn("state.groups.push({id,name:template.name",script)
-        self.assertIn('流量控制 · 0.4.5',html)
+        self.assertIn('流量控制 · 0.4.6',html)
         self.assertIn('.compact-node-subline .chip',styles)
         self.assertIn('.rule-enabled { display: flex; align-items: center;',styles)
         self.assertIn('event.stopPropagation()',script)
@@ -1468,6 +1468,60 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertTrue(result["skipped"])
         self.assertNotIn("hk-1",manager.health)
         self.assertIn("内核未就绪",result["reason"])
+
+    def test_terminate_drains_all_resource_tasks_and_probe_children(self):
+        from proxy_manager.runtime.artifacts import ArtifactInstallTask
+        manager=self._manager_for_runtime(); manager.auto_task=None
+        async def scenario():
+            started=[asyncio.Event() for _ in range(3)]
+            stopped=[asyncio.Event() for _ in range(3)]
+            async def blocked(index,*args):
+                started[index].set()
+                try: await asyncio.Event().wait()
+                finally: stopped[index].set()
+            resources=[]
+            for index in range(2):
+                async def download(*args,index=index): return await blocked(index,*args)
+                artifact=types.SimpleNamespace(download=download,commit=Mock())
+                resources.append(ArtifactInstallTask(artifact,AsyncMock()))
+            manager.install_task=resources[0]
+            manager.install_tasks={'mihomo':resources[0],'sing-box':resources[1]}
+            for resource in resources: resource.start()
+            async def probe(*args,**kwargs): return await blocked(2,*args)
+            async def stop_core():
+                self.assertTrue(all(event.is_set() for event in stopped))
+            manager.supervisor=types.SimpleNamespace(stop=AsyncMock(side_effect=stop_core))
+            fake_request=types.SimpleNamespace(json=AsyncMock(return_value={'node_ids':['hk-1'],'concurrency':1}))
+            with patch('proxy_manager.plugin.request',fake_request), \
+                 patch.object(manager,'_probe_kernel_status',new=AsyncMock(return_value={'ready':True})), \
+                 patch.object(manager,'_probe_one',new=probe):
+                await manager.probe_task()
+                await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started)),1)
+                handles=list(manager._probe_task_handles)
+                await manager.terminate()
+            self.assertTrue(all(resource.task.done() for resource in resources))
+            self.assertTrue(all(handle.done() for handle in handles))
+            self.assertTrue(all(record['status']=='cancelled' for record in manager.probe_tasks.values()))
+            for resource in resources:
+                resource.on_installed.assert_not_awaited()
+                resource.manager.commit.assert_not_called()
+            manager.supervisor.stop.assert_awaited_once()
+        asyncio.run(scenario())
+
+    def test_probe_cancel_during_kernel_preflight_records_cancellation(self):
+        manager=self._manager_for_runtime()
+        async def scenario():
+            started=asyncio.Event()
+            async def preflight():
+                started.set(); await asyncio.Event().wait()
+            manager.probe_tasks['test']={'status':'running','results':[],'completed':0,'cancelled':False}
+            with patch.object(manager,'_probe_kernel_status',new=preflight):
+                handle=asyncio.create_task(manager._run_probe_task('test',['hk-1'],'https://example.com',5,1))
+                await asyncio.wait_for(started.wait(),1)
+                handle.cancel(); await asyncio.gather(handle,return_exceptions=True)
+            self.assertEqual(manager.probe_tasks['test']['status'],'cancelled')
+            self.assertEqual(manager.probe_tasks['test']['results'][0]['status'],'cancelled')
+        asyncio.run(scenario())
 
     def test_kernel_status_distinguishes_version_and_runtime_states(self):
         manager = self._manager_for_runtime()
