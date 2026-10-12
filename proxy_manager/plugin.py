@@ -1442,7 +1442,10 @@ class ProxyManager(Star):
     def _verified_recovery_document(self, application: object):
         if isinstance(application, dict) and self._has_legacy_component_routes(application.get('document')):
             return None
-        return verified_recovery_document(application, self._adapter())
+        document=verified_recovery_document(application, self._adapter())
+        if document is not None and not self._adapter().recovery_compatible(document,self.state):
+            return None
+        return document
 
     def _adapter_apply_runtime(self, config_path: Path) -> dict:
         if not hasattr(self,'supervisor') or not hasattr(self,'artifacts'):

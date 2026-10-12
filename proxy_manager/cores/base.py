@@ -79,6 +79,10 @@ class CoreAdapter(ABC):
         value=json.dumps(document,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()
         return hashlib.sha256(value).hexdigest()[:16]
 
+    def recovery_compatible(self, document: dict, state: dict) -> bool:
+        """Check whether a verified document can use the current local control plane."""
+        return True
+
     def redact(self, document: dict) -> dict:
         from ..domain.security import redact_config
         return redact_config(copy.deepcopy(document))

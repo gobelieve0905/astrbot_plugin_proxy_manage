@@ -2187,6 +2187,42 @@ class TestConfigurationRules(unittest.TestCase):
         manager.runtime_application={'status':'saved','applied_revision':manager._runtime_revision(document),'document':document}
         self.assertIsNone(manager._verified_recovery_document(manager.runtime_application))
 
+    def test_verified_recovery_document_with_stale_control_secret_is_rejected(self):
+        manager=self._manager_for_runtime(); document=manager._runtime_document()
+        manager.state['control']['secret']='current-control-secret'
+        document['secret']='previous-control-secret'
+        manager.runtime_application={'status':'applied','adapter':'mihomo',
+                                     'applied_revision':manager._adapter().revision(document),
+                                     'document':document}
+        self.assertIsNone(manager._verified_recovery_document(manager.runtime_application))
+        document['secret']='current-control-secret'
+        manager.runtime_application['applied_revision']=manager._adapter().revision(document)
+        manager.runtime_application['document']=document
+        self.assertEqual(manager._verified_recovery_document(manager.runtime_application),document)
+
+    def test_stale_control_secret_starts_only_fail_closed_configuration(self):
+        manager=self._manager_for_runtime(); document=manager._runtime_document()
+        manager.state['control']['secret']='new-control-secret'
+        document['secret']='old-control-secret'
+        manager.runtime_application={'status':'applied','adapter':'mihomo',
+                                     'applied_revision':manager._adapter().revision(document),'document':document}
+        manager.state['core_preferences']={'mihomo':{'enabled':True}}
+        manager.artifacts=types.SimpleNamespace(status=lambda:{'ready':True},binary=Path('/verified/core'))
+        manager.supervisor=object(); manager.data_dir=Path('/private/plugin')
+        adapter=manager._adapter()
+        with patch.object(adapter,'write_config',return_value=Path('/private/config.yaml')) as write, \
+             patch.object(adapter,'start',new=AsyncMock(return_value={'ready':True})):
+            asyncio.run(manager._start_owned_kernel())
+        restored=write.call_args.args[1]
+        self.assertEqual(restored['secret'],'new-control-secret')
+        self.assertEqual(restored['rules'],['MATCH,REJECT'])
+
+    def test_sing_box_recovery_checks_its_own_control_secret(self):
+        from proxy_manager.cores.sing_box import SingBoxAdapter
+        adapter=SingBoxAdapter(); state={'control':{'secret':'current'}}
+        self.assertFalse(adapter.recovery_compatible({'experimental':{'clash_api':{'secret':'old'}}},state))
+        self.assertTrue(adapter.recovery_compatible({'experimental':{'clash_api':{'secret':'current'}}},state))
+
     def test_recovery_document_is_bound_to_recorded_adapter(self):
         from proxy_manager.cores.mihomo import MihomoAdapter
         from proxy_manager.cores.sing_box import SingBoxAdapter
