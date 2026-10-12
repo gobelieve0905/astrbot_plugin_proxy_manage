@@ -49,7 +49,7 @@ function updateConfigStatus(){
   const pendingApply=['saved','pending_apply'].includes(application.status)||Boolean(savedRevision&&savedRevision!==appliedRevision)
   if(totals.changed){
     status.className='config-status pending-save'
-    status.innerHTML=`<b>${totals.changed} 项配置待保存</b><span>“待核对”表示尚未写入内核。点击“预览并保存”并确认后保存；之后还需应用配置才会生效。</span>`
+    status.innerHTML=`<b>${totals.changed} 项待保存，保存并应用后生效</b>`
     status.hidden=false
   }else if(pendingApply){
     status.className='config-status pending-apply'
