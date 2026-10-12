@@ -614,6 +614,10 @@ class TestConfigurationRules(unittest.TestCase):
         self.assertNotIn('代理组状态',control_view)
         self.assertIn('runtime-control',script + styles)
         self.assertIn('runtime-facts',script + styles)
+        self.assertIn('插件运行环境',script)
+        self.assertIn('浏览器设备或宿主机信息',script)
+        self.assertIn('首次下载不设总时限',script)
+        self.assertIn('预计剩余',script)
         self.assertIn('data-kernel-install',script)
         self.assertIn('core-enable',script)
         self.assertIn('kernel-update-check',script)
@@ -649,6 +653,27 @@ class TestConfigurationRules(unittest.TestCase):
                 manager.install(archive+b'tampered','offline')
             self.assertEqual(manager.binary.read_bytes(),before)
             self.assertEqual(manager.binary.stat().st_mode & 0o777,0o700)
+
+    def test_platform_detection_uses_plugin_runtime_and_rejects_32_bit_abi(self):
+        from proxy_manager.runtime import artifacts
+        cases=[('Linux','x86_64','linux','amd64'),
+               ('Darwin','arm64','darwin','arm64'),
+               ('Windows','AMD64','windows','amd64'),
+               ('FreeBSD','x86_64','unsupported','amd64'),
+               ('Linux','armv7l','linux','unsupported')]
+        for system,machine,expected_os,expected_arch in cases:
+            with self.subTest(system=system,machine=machine), \
+                 patch.object(artifacts.platform,'system',return_value=system), \
+                 patch.object(artifacts.platform,'machine',return_value=machine), \
+                 patch.object(artifacts.platform,'libc_ver',return_value=('glibc','2.36')), \
+                 patch.object(artifacts.struct,'calcsize',return_value=8):
+                detected=artifacts.detect_platform()
+                self.assertEqual((detected['os'],detected['arch']),(expected_os,expected_arch))
+        with patch.object(artifacts.platform,'system',return_value='Linux'), \
+             patch.object(artifacts.platform,'machine',return_value='x86_64'), \
+             patch.object(artifacts.platform,'libc_ver',return_value=('glibc','2.36')), \
+             patch.object(artifacts.struct,'calcsize',return_value=4):
+            self.assertEqual(artifacts.detect_platform()['arch'],'unsupported')
 
     def test_artifact_catalog_exposes_installed_version_and_fixed_updates(self):
         from proxy_manager.runtime.artifacts import ArtifactManager
@@ -850,8 +875,25 @@ class TestConfigurationRules(unittest.TestCase):
     def test_artifact_download_uses_extended_xray_friendly_timeouts(self):
         from proxy_manager.runtime import artifacts
         self.assertEqual(artifacts.DOWNLOAD_TOTAL_TIMEOUT,600)
-        self.assertEqual(artifacts.DOWNLOAD_IDLE_TIMEOUT,60)
+        self.assertEqual(artifacts.DOWNLOAD_IDLE_TIMEOUT,300)
+        self.assertEqual(artifacts.DOWNLOAD_CONNECT_TIMEOUT,30)
         self.assertIn('600 秒总时限',artifacts.ArtifactManager._download_error(asyncio.TimeoutError()))
+
+    def test_first_install_download_has_no_total_timeout(self):
+        from proxy_manager.runtime.artifacts import ArtifactManager
+        from proxy_manager.cores.registry import current_adapter
+        async def scenario():
+            with tempfile.TemporaryDirectory() as directory:
+                manager=ArtifactManager(Path(directory),current_adapter().artifact())
+                manager.bootstrap_download=True
+                manager._download_source=AsyncMock(return_value=b'fixed archive')
+                manager.install=Mock(return_value={'ready':True})
+                with patch('proxy_manager.runtime.artifacts.asyncio.wait_for',
+                           new=AsyncMock(side_effect=AssertionError('first install must not have a total timeout'))):
+                    result=await manager.download()
+                self.assertTrue(result['ready'])
+                manager._download_source.assert_awaited_once()
+        asyncio.run(scenario())
 
     def test_xray_download_idle_timeout_is_passed_to_http_client(self):
         from proxy_manager.runtime.artifacts import ArtifactManager
@@ -865,11 +907,14 @@ class TestConfigurationRules(unittest.TestCase):
             client=AsyncMock(); client.stream=Mock(return_value=stream)
             context=AsyncMock(); context.__aenter__.return_value=client
             manager=ArtifactManager.__new__(ArtifactManager)
+            progress=[]
             with patch('proxy_manager.runtime.artifacts.httpx.AsyncClient',return_value=context) as make_client, patch('proxy_manager.runtime.artifacts.validate_public_url',new=AsyncMock()):
                 await manager._download_source({'sources':[{}],'size':4},{'id':'github','name':'GitHub','url':'https://example.invalid/xray.zip'},
-                                               None,None,0,1)
-            self.assertEqual(make_client.call_args.kwargs['timeout'].read,60)
-            self.assertEqual(make_client.call_args.kwargs['timeout'].connect,10)
+                                               progress.append,None,0,1)
+            self.assertEqual(make_client.call_args.kwargs['timeout'].read,300)
+            self.assertEqual(make_client.call_args.kwargs['timeout'].connect,30)
+            self.assertGreater(progress[-1]['speed_bytes_per_second'],0)
+            self.assertEqual(progress[-1]['eta_seconds'],0)
         asyncio.run(scenario())
 
     def test_bootstrap_download_ignores_dead_proxy_and_allows_only_official_redirects(self):

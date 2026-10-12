@@ -9,6 +9,7 @@ import os
 import platform
 import re
 import stat
+import struct
 import tarfile
 import time
 import zipfile
@@ -24,7 +25,8 @@ MAX_ARCHIVE_SIZE=64*1024*1024
 MAX_BINARY_SIZE=128*1024*1024
 DOWNLOAD_ATTEMPTS=2
 DOWNLOAD_TOTAL_TIMEOUT=600
-DOWNLOAD_IDLE_TIMEOUT=60
+DOWNLOAD_IDLE_TIMEOUT=300
+DOWNLOAD_CONNECT_TIMEOUT=30
 MANAGED_DOWNLOAD_PROXY='http://127.0.0.1:17890'
 GITHUB_ASSET_HOSTS=frozenset({'release-assets.githubusercontent.com','objects.githubusercontent.com'})
 
@@ -44,11 +46,14 @@ def detect_platform() -> dict:
     system={'linux':'linux','darwin':'darwin','windows':'windows'}.get(platform.system().lower(),'unsupported')
     machine=platform.machine().lower()
     arch={'x86_64':'amd64','amd64':'amd64','aarch64':'arm64','arm64':'arm64'}.get(machine,'unsupported')
+    bits=struct.calcsize('P')*8
+    if arch in {'amd64','arm64'} and bits!=64:
+        arch='unsupported'
     libc='none'
     if system=='linux':
         name,_version=platform.libc_ver()
         libc='musl' if name.lower()=='musl' or Path('/etc/alpine-release').exists() else 'glibc'
-    return {'os':system,'arch':arch,'libc':libc,'machine':machine}
+    return {'os':system,'arch':arch,'libc':libc,'machine':machine,'bits':bits}
 
 
 class ArtifactManager:
@@ -300,7 +305,8 @@ class ArtifactManager:
                                        'attempt':attempt,'attempts':DOWNLOAD_ATTEMPTS,
                                        'message':'下载失败，'+('准备重试' if attempt<DOWNLOAD_ATTEMPTS else '准备切换下载源')})
                 if attempt<DOWNLOAD_ATTEMPTS: await asyncio.sleep(min(4,2**(attempt-1)))
-        raise RuntimeError('所有受信下载源均不可用；请使用页面提供的官方地址下载后离线上传。'+('；'.join(errors[-3:])))
+        unique_errors=list(dict.fromkeys(errors))
+        raise RuntimeError('所有受信下载源均不可用；请使用页面提供的官方地址下载后离线上传。'+('；'.join(unique_errors[-3:])))
 
     @staticmethod
     def _check_cancel(cancel_event):
@@ -310,14 +316,15 @@ class ArtifactManager:
     def _download_error(exc:Exception) -> str:
         if isinstance(exc,asyncio.TimeoutError): return '超过 600 秒总时限'
         if isinstance(exc,httpx.ConnectTimeout): return '连接超时'
-        if isinstance(exc,httpx.ReadTimeout): return '连续 60 秒未收到数据'
+        if isinstance(exc,httpx.ReadTimeout): return f'连续 {DOWNLOAD_IDLE_TIMEOUT} 秒未收到数据'
         if isinstance(exc,RuntimeError): return str(exc)
         return type(exc).__name__
 
     async def _download_source(self,item,source,progress,cancel_event,source_index,attempt) -> bytes:
         async def fetch() -> bytes:
             chunks=[]; size=0
-            timeout=httpx.Timeout(DOWNLOAD_IDLE_TIMEOUT,connect=10,write=DOWNLOAD_IDLE_TIMEOUT,pool=10)
+            timeout=httpx.Timeout(DOWNLOAD_IDLE_TIMEOUT,connect=DOWNLOAD_CONNECT_TIMEOUT,
+                                  write=DOWNLOAD_IDLE_TIMEOUT,pool=DOWNLOAD_CONNECT_TIMEOUT)
             bootstrap=getattr(self,'bootstrap_download',False)
             allowed=getattr(self,'bootstrap_allowed',lambda: False)
             if bootstrap and not allowed(): raise ValueError('首次安装通道已关闭，请通过稳定入口下载')
@@ -344,16 +351,24 @@ class ArtifactManager:
                         response.raise_for_status()
                         length=int(response.headers.get('content-length','0') or 0)
                         if length>MAX_ARCHIVE_SIZE: raise ValueError('内核制品超过 64 MiB 限制')
+                        started=time.monotonic()
                         async for chunk in response.aiter_bytes():
                             self._check_cancel(cancel_event); size+=len(chunk)
                             if size>MAX_ARCHIVE_SIZE: raise ValueError('内核制品超过 64 MiB 限制')
                             chunks.append(chunk)
+                            total=length or item.get('size',0)
+                            elapsed=max(time.monotonic()-started,0.001)
+                            speed=size/elapsed
+                            eta_seconds=max(0,int((total-size)/speed)) if total and speed>0 else None
                             if progress: progress({'phase':'downloading','source':source.get('name',source['id']),
                                                    'source_id':source['id'],'source_index':source_index+1,
                                                    'source_count':len(item['sources']),'attempt':attempt,
                                                    'attempts':DOWNLOAD_ATTEMPTS,'downloaded':size,
-                                                   'total':length or item.get('size',0),'message':'正在下载固定版本内核'})
+                                                   'total':total,'speed_bytes_per_second':int(speed),
+                                                   'eta_seconds':eta_seconds,'message':'正在下载固定版本内核'})
                         return b''.join(chunks)
+        if getattr(self,'bootstrap_download',False):
+            return await fetch()
         try: return await asyncio.wait_for(fetch(),DOWNLOAD_TOTAL_TIMEOUT)
         except asyncio.TimeoutError as exc: raise RuntimeError('下载超过 600 秒总时限') from exc
 
