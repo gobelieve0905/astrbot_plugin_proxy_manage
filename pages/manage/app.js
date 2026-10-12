@@ -12,7 +12,7 @@ const subtitles = {overview:'配置状态、全局代理与分流预览',subscri
   let state, original, tab='overview', controlResult=null, groupStatusFetchedAt=0, kernelStatus={state:'not_configured',ready:false,message:'尚未检查'}, importPreview=null, importMode='single', importDraft={url:'',urls:'',name:'',interval:60}, importing=false, probeTask=null, probeLabel='测速', selectedProbeNodeIds=new Set(), groupProbeRunning=new Set(), groupProbeErrors={}, importDialogReturnFocus=null, groupDialogReturnFocus=null, groupDraft=null, groupNodeQuery='', editingGroupId=null, nodeDialogReturnFocus=null, nodeDialogNodeId='', ruleDialogReturnFocus=null, ruleDraft=null, editingRuleId=null, confirmDialogReturnFocus=null, confirmAction=null, openGroupIds=new Set(), ruleEditorMode='rows', subscriptionDialogReturnFocus=null, subscriptionDialogId='', subscriptionDialogEditing=false, subscriptionDialogDraft=null, auditDialogReturnFocus=null, auditDialogEventIndex=-1
 const resourcePollTimers=new Map()
 const openKernelResources=new Set()
-let noticeTimer=null, previewResult=null, previewHost=''
+let noticeTimer=null, configProgressTimer=null, configOperationRunning=false, previewResult=null, previewHost=''
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 function note(text,error=false){
@@ -22,6 +22,43 @@ function note(text,error=false){
   notice.hidden=false
   if(typeof notice.showPopover==='function')notice.showPopover(); else notice.setAttribute('data-visible','true')
   noticeTimer=setTimeout(()=>{notice.hidePopover?.();notice.hidden=true;notice.textContent=''},error?8000:3200)
+}
+function setConfigProgress(title,message,status='running'){
+  const banner=$('config-progress'); if(!banner)return
+  clearTimeout(configProgressTimer)
+  configOperationRunning=status==='running'
+  const error=status==='error', complete=status==='complete'
+  document.body.classList.toggle('config-progress-active',status==='running'||status==='complete'||status==='error')
+  banner.className=`config-progress ${error?'error':complete?'complete':''}`
+  banner.innerHTML=`<div class="config-progress-inner"><b>${esc(title)}</b><span>${esc(message)}</span><div class="config-progress-track" role="progressbar" aria-label="${esc(title)}" aria-valuetext="${esc(message)}"><i></i></div></div>`
+  banner.hidden=false
+  if(typeof banner.showPopover==='function')banner.showPopover();else banner.setAttribute('data-visible','true')
+  if(status!=='running')configProgressTimer=setTimeout(()=>{banner.hidePopover?.();banner.hidden=true;document.body.classList.remove('config-progress-active')},error?8000:2800)
+  const diff=$('diff')
+  if(diff)diff.querySelectorAll('.dialog-actions button').forEach(button=>{button.disabled=configOperationRunning})
+  ;['save','rollback','runtime-apply'].forEach(id=>{const button=$(id);if(button)button.disabled=configOperationRunning})
+}
+function updateConfigStatus(){
+  const status=$('config-status'); if(!status||!state)return
+  const totals=changeSectionDefinitions.reduce((result,definition)=>{
+    const section=collectChangeSection(definition,original||{},state)
+    result.changed+=section.counts.added+section.counts.deleted+section.counts.changed
+    return result
+  },{changed:0})
+  const application=state.application||{}, savedRevision=application.saved_revision||'', appliedRevision=application.applied_revision||''
+  const pendingApply=['saved','pending_apply'].includes(application.status)||Boolean(savedRevision&&savedRevision!==appliedRevision)
+  if(totals.changed){
+    status.className='config-status pending-save'
+    status.innerHTML=`<b>${totals.changed} 项配置待保存</b><span>“待核对”表示尚未写入内核。点击“预览并保存”并确认后保存；之后还需应用配置才会生效。</span>`
+    status.hidden=false
+  }else if(pendingApply){
+    status.className='config-status pending-apply'
+    status.innerHTML='<b>配置已保存，尚未应用</b><span>前往“内核管理”点击“应用代理配置”，确认写入当前运行内核。</span>'
+    status.hidden=false
+  }else{
+    status.hidden=true
+    status.textContent=''
+  }
 }
 function groupOptions(selected){ return (!state.groups.some(group=>group.id===selected)?`<option value="${esc(selected)}" selected>目标已失效（${esc(selected||'未指定')}）</option>`:'')+state.groups.map(group=>`<option value="${esc(group.id)}" ${group.id===selected?'selected':''}>${esc(group.name)}</option>`).join('') }
 const ruleTypeOptions=[
@@ -277,6 +314,7 @@ function previewPanel(value){
   return `<dl class="overview-evidence"><div><dt>域名</dt><dd>${esc(value.host)}</dd></div><div><dt>规则</dt><dd>${esc(rule?state.rule_groups.find(item=>item.id===rule.rule_group_id)?.name||rule.type||rule.match||'匹配规则':'默认 MATCH')}</dd></div><div><dt>代理组</dt><dd>${esc(group?.name||'DIRECT')}</dd></div><div><dt>节点</dt><dd>${esc(node?nodeLabel(state.nodes.find(item=>item.id===node.id)||node):'直连或暂无可用节点')}</dd></div></dl>`
 }
 function render(){
+  updateConfigStatus()
   $('crumb').textContent=titles[tab]; $('page-subtitle').textContent=subtitles[tab]
   document.querySelectorAll('[data-tab]').forEach(button=>{button.classList.toggle('active',button.dataset.tab===tab);button.setAttribute('aria-current',button.dataset.tab===tab?'page':'false')})
   $('content').dataset.view=tab; let html=''
@@ -824,20 +862,25 @@ function renderChangePreview(before,after){
 function readControl(){}
 async function saveChanges(){ readControl(); state=await api.apiPost('save',state); original=structuredClone(state) }
 async function applyConfiguration(){
+  if(configOperationRunning)return
   let stage='保存'
+  setConfigProgress('正在保存配置','正在将本轮修改写入插件配置')
   try{
     await saveChanges()
     stage='应用'
+    setConfigProgress('正在应用代理配置','配置已保存，正在写入当前运行内核')
     await api.apiPost('runtime-apply',{})
     stage='刷新状态'
+    setConfigProgress('正在核对运行状态','内核已返回应用结果，正在刷新页面状态')
     await load()
+    if(state.application?.status!=='applied')throw new Error(state.application?.message||'内核未确认配置已应用')
     if(tab==='groups'){controlResult=await api.apiGet('control-status');groupStatusFetchedAt=Date.now()}
-    render(); note('配置已保存、应用并完成运行状态核对')
+    render(); setConfigProgress('配置已应用','配置已保存、应用并完成运行状态核对','complete')
   }catch(error){
     try{await load()}catch{}
     render()
     const message=stage==='保存'?`配置保存失败：${error.message}`:stage==='应用'?`配置已保存，但应用失败：${error.message}`:`配置已成功应用，但状态刷新失败：${error.message}`
-    note(message,true)
+    setConfigProgress('配置操作未完成',message,'error')
   }
 }
 async function previewImport(){
@@ -904,19 +947,29 @@ document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener(
   $('reload').addEventListener('click',load)
   $('rollback').addEventListener('click',async()=>{try{state=await api.apiPost('rollback',{});original=structuredClone(state);controlResult=null;groupStatusFetchedAt=0;importPreview=null;render();note('已恢复上一版配置')}catch(error){note(error.message,true)}})
   $('save').addEventListener('click',()=>{
+    if(configOperationRunning)return
     const dialog=$('diff'),content=$('diff-content')
+    setConfigProgress('配置预览','正在整理需要确认的配置变化')
+    requestAnimationFrame(()=>{
     try{
       readControl()
       content.innerHTML=renderChangePreview(original||{},state||{})
       if(!dialog.open)dialog.showModal()
+      setConfigProgress('配置预览已准备好','请核对变更摘要，再选择仅保存或保存并应用','complete')
     }catch(error){
       content.innerHTML='<div class="change-empty"><b>无法生成配置预览</b><span>请刷新页面后重试。</span></div>'
-      note(error?.message||'配置预览生成失败',true)
       if(!dialog.open)dialog.showModal()
+      setConfigProgress('配置预览失败',error?.message||'请刷新页面后重试。','error')
     }
+    })
   })
   $('cancel').addEventListener('click',()=>$('diff').close())
-  $('save-only').addEventListener('click',async()=>{try{await saveChanges();$('diff').close();render();note('配置已保存；当前内核未应用新配置')}catch(error){note(error.message,true)}})
+  $('save-only').addEventListener('click',async()=>{
+    if(configOperationRunning)return
+    setConfigProgress('正在保存配置','正在将本轮修改写入插件配置')
+    try{await saveChanges();$('diff').close();render();setConfigProgress('配置已保存','当前内核尚未应用这次修改，请前往“内核管理”应用代理配置','complete')}
+    catch(error){setConfigProgress('配置保存失败',error.message,'error')}
+  })
   $('subscription-import-close').addEventListener('click',closeImportDialog)
   $('subscription-detail-close')?.addEventListener('click',closeSubscriptionDialog)
   $('subscription-detail-dialog')?.addEventListener('cancel',event=>{event.preventDefault();closeSubscriptionDialog()})

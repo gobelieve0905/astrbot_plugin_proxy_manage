@@ -29,9 +29,11 @@
   <main id="main-content" tabindex="-1">
     <header>
       <div><span id="crumb">概览</span><h1>代理管理中心</h1><p class="muted" id="page-subtitle">运行状态、节点健康和流量策略总览</p></div>
+      <div id="config-status" class="config-status" role="status" aria-live="polite" hidden></div>
       <div class="actions"><button id="rollback">恢复上一版</button><button id="save" class="primary">预览并保存</button></div>
     </header>
     <div id="notice" popover="manual" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+    <div id="config-progress" popover="manual" role="status" aria-live="polite" aria-atomic="true" hidden></div>
     <div id="task-banner" popover="manual" role="status" aria-live="polite" aria-atomic="true" hidden></div>
     <section id="content"></section>
   </main>

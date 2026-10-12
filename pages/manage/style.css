@@ -631,6 +631,21 @@ main > header {
   background: var(--bg);
   backdrop-filter: none;
 }
+main > header .config-status {
+  display: grid;
+  flex: 1 1 240px;
+  gap: 3px;
+  min-width: 180px;
+  max-width: 470px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning-soft) 58%, var(--bg));
+  color: var(--text);
+}
+main > header .config-status[hidden] { display: none; }
+.config-status b { font-size: 12px; line-height: 1.35; }
+.config-status span { color: var(--muted-strong); font-size: 11px; line-height: 1.4; }
+.config-status.pending-apply { border-color: var(--accent); background: var(--accent-soft); }
 #crumb { margin-bottom: 4px; font-size: 11px; letter-spacing: 0; }
 h1 { font-size: clamp(24px, 2.1vw, 31px); font-weight: 720; letter-spacing: 0; }
 h1, h2, h3 { text-wrap: balance; }
@@ -948,6 +963,7 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   nav { gap: 6px; }
   main { padding: 0 16px 52px; }
   main > header { margin: 0 -16px 18px; padding: 16px; }
+  main > header .config-status { width: 100%; max-width: none; min-width: 0; }
   .hero { gap: 16px; padding: 19px; }
   .hero strong { font-size: 21px; }
   .runtime-state { min-width: 0; width: 100%; padding: 14px 0 0; border-top: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-left: 0; }
@@ -983,7 +999,39 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
   box-shadow: var(--shadow-md);
 }
 #notice.error { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+#config-progress {
+  position: fixed;
+  inset: 20px 24px auto auto;
+  z-index: 40;
+  width: min(480px, calc(100vw - 32px));
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+}
+.config-progress-inner {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+  pointer-events: auto;
+}
+.config-progress-inner b { font-size: 13px; line-height: 1.35; }
+.config-progress-inner span { color: var(--muted-strong); font-size: 12px; line-height: 1.45; }
+.config-progress-track { position: relative; height: 4px; overflow: hidden; border-radius: 99px; background: var(--line); }
+.config-progress-track i { position: absolute; inset: 0 auto 0 0; width: 34%; border-radius: inherit; background: var(--accent); animation: config-progress-slide 1.2s ease-in-out infinite; }
+.config-progress.complete .config-progress-track { display: none; }
+.config-progress.error .config-progress-inner { border-color: var(--danger); background: var(--danger-soft); }
+.config-progress.error .config-progress-track i { background: var(--danger); }
+@keyframes config-progress-slide { from { transform: translateX(-110%); } to { transform: translateX(310%); } }
 #task-banner { inset: 20px 24px auto auto; }
+body.config-progress-active #task-banner { inset: 160px 24px auto auto; }
 .task-banner-inner {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) auto auto;
@@ -1002,7 +1050,9 @@ pre { margin-top: 16px; padding: 14px 15px; border-radius: 8px; background: var(
 .task-banner-inner button { min-height: 32px; padding: 5px 10px; }
 @media (max-width: 700px) {
   #notice { inset: 92px 16px auto auto; width: calc(100vw - 32px); }
+  #config-progress { inset: 16px 16px auto auto; width: calc(100vw - 32px); }
   #task-banner { inset: 16px 16px auto auto; width: calc(100vw - 32px); }
+  body.config-progress-active #task-banner { inset: 160px 16px auto auto; }
   .task-banner-inner { grid-template-columns: minmax(80px, 1fr) auto; }
   .task-banner-inner progress { grid-column: 1 / -1; grid-row: 1; }
   .task-banner-inner span { grid-column: 1; grid-row: 2; }
