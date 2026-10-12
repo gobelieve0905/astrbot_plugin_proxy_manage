@@ -4,6 +4,7 @@ import asyncio
 import copy
 import importlib
 import importlib.metadata
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -109,6 +110,7 @@ class CompatibilityManager:
     def __init__(self, context, lease: ComponentLease):
         self.context = context
         self.lease = lease
+        self.generation = uuid.uuid4().hex
         self.report = inspect_runtime()
         self._original_platforms: dict[str, object] = {}
         self._original_provider_classes: dict[str, object] = {}
@@ -133,6 +135,7 @@ class CompatibilityManager:
                 base = getattr(base, "_proxy_manager_base", base)
                 lease = self.lease.for_component("platform:" + platform_type)
                 wrapped = (build_lark_adapter if platform_type == "lark" else build_telegram_adapter)(base, lease)
+                wrapped._proxy_manager_generation = self.generation
                 if platform_type == "lark":
                     restore_sdk = install_lark_sdk_patch(lease)
                 current = platform_cls_map.get(platform_type)
@@ -306,7 +309,7 @@ class CompatibilityManager:
 
     async def _reload_live_components(self):
         platform_manager = getattr(self.context, "platform_manager", None)
-        if platform_manager is not None and getattr(platform_manager, "platform_insts", None):
+        if platform_manager is not None:
             configs = getattr(platform_manager, "platforms_config", [])
             for config in configs:
                 if self.report.platforms.get(config.get("type"), {}).get("state") == "installed":
@@ -317,6 +320,7 @@ class CompatibilityManager:
                     if current_lease and (
                         current_lease.http_proxy == desired_lease.http_proxy
                         and current_lease.socks_proxy == desired_lease.socks_proxy
+                        and getattr(type(instance), "_proxy_manager_generation", "") == self.generation
                         and (config["type"] != "telegram" or getattr(
                             instance, "_proxy_manager_polling_recovery_version", 0
                         ) == POLLING_RECOVERY_VERSION)
@@ -349,6 +353,25 @@ class CompatibilityManager:
                     except Exception as exc:
                         self.report.providers[config["type"]].update(
                             reload_state="failed", message="Provider 兼容层已安装；实例重载失败：" + type(exc).__name__ + "，需检查 Provider 或重启 AstrBot")
+
+    async def terminate_live_platforms(self) -> None:
+        """Stop wrapped long-running platform clients before their kernel is stopped."""
+        platform_manager = getattr(self.context, "platform_manager", None)
+        terminate = getattr(platform_manager, "terminate_platform", None)
+        if not callable(terminate):
+            return
+        configs = getattr(platform_manager, "platforms_config", [])
+        instances = getattr(platform_manager, "_inst_map", {})
+        for config in configs:
+            if config.get("type") not in SUPPORTED_PLATFORM_TYPES:
+                continue
+            instance_info = instances.get(config.get("id"))
+            instance = instance_info.get("inst") if isinstance(instance_info, dict) else None
+            if instance is None or not getattr(instance, "_proxy_manager_lease", None):
+                continue
+            await asyncio.wait_for(
+                terminate(config.get("id")), timeout=LIVE_COMPONENT_RELOAD_TIMEOUT
+            )
 
     def restore(self) -> None:
         try:

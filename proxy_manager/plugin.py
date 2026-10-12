@@ -1910,6 +1910,14 @@ class ProxyManager(Star):
         # AstrBot process. The proxy configuration is intentionally retained;
         # stopping the owned kernel then fails closed instead of allowing an
         # SDK reconnect to silently fall back to direct I/O.
+        compatibility=getattr(self,'compatibility',None)
+        if compatibility:
+            try:
+                await compatibility.terminate_live_platforms()
+            except asyncio.TimeoutError:
+                logger.warning('代理管理中心退出时平台实例停止超时；AstrBot 已请求取消旧平台任务')
+            except Exception as exc:
+                logger.warning('代理管理中心退出时平台实例停止失败：'+type(exc).__name__)
         # Every adapter can have its own resource task. Drain them all before
         # AstrBot removes data so a late download cannot recreate the files.
         resource_tasks={id(task):task for task in getattr(self,'install_tasks',{}).values()}

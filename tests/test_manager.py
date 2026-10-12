@@ -471,7 +471,7 @@ class TestConfigurationRules(unittest.TestCase):
         finally:
             sys.modules.pop(module_name, None)
 
-    def test_compatibility_does_not_restart_platform_with_matching_proxy_lease(self):
+    def test_compatibility_skips_platform_reload_with_same_generation_and_proxy(self):
         from proxy_manager.compat.lease import ComponentLease
         from proxy_manager.compat.registry import CompatibilityManager
 
@@ -489,11 +489,41 @@ class TestConfigurationRules(unittest.TestCase):
             reload=AsyncMock(),
         )
         manager = CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager), lease)
+        ManagedTelegram._proxy_manager_generation = manager.generation
         manager.report.platforms['telegram'] = {'state': 'installed'}
 
         asyncio.run(manager._reload_live_components())
 
         platform_manager.reload.assert_not_awaited()
+
+    def test_compatibility_restarts_matching_proxy_lease_after_plugin_reinstall(self):
+        from proxy_manager.compat.lease import ComponentLease
+        from proxy_manager.compat.registry import CompatibilityManager
+        lease=ComponentLease(component_id='astrbot',http_proxy='http://127.0.0.1:17890')
+        instance=types.SimpleNamespace(_proxy_manager_lease=lease.for_component('platform:telegram'),
+                                       _proxy_manager_polling_recovery_version=1)
+        config={'id':'telegram','type':'telegram','enable':True}
+        platform_manager=types.SimpleNamespace(platforms_config=[config],_inst_map={'telegram':{'inst':instance}},
+                                               reload=AsyncMock())
+        manager=CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager),lease)
+        manager.report.platforms['telegram']={'state':'installed'}
+        asyncio.run(manager._reload_live_components())
+        platform_manager.reload.assert_awaited_once_with(config)
+
+    def test_compatibility_stops_only_its_wrapped_live_platforms(self):
+        from proxy_manager.compat.lease import ComponentLease
+        from proxy_manager.compat.registry import CompatibilityManager
+        lease=ComponentLease(component_id='astrbot',http_proxy='http://127.0.0.1:17890')
+        managed=types.SimpleNamespace(_proxy_manager_lease=lease.for_component('platform:telegram'))
+        unmanaged=object()
+        platform_manager=types.SimpleNamespace(
+            platforms_config=[{'id':'telegram','type':'telegram'},
+                              {'id':'unmanaged','type':'lark'}],
+            _inst_map={'telegram':{'inst':managed},'unmanaged':{'inst':unmanaged}},
+            terminate_platform=AsyncMock())
+        manager=CompatibilityManager(types.SimpleNamespace(platform_manager=platform_manager),lease)
+        asyncio.run(manager.terminate_live_platforms())
+        platform_manager.terminate_platform.assert_awaited_once_with('telegram')
 
     def test_compatibility_updates_old_telegram_client_even_with_same_proxy(self):
         from proxy_manager.compat.lease import ComponentLease
